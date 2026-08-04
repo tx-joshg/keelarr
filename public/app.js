@@ -252,6 +252,23 @@ function currentEffectiveSettings() {
   return state.settings;
 }
 
+function currentGeneratedArtifacts() {
+  const latest = latestResultData();
+  if (!latest) {
+    return null;
+  }
+
+  if (latest.generated && !Array.isArray(latest.generated)) {
+    return latest.generated;
+  }
+
+  if (Array.isArray(latest.generated) && latest.generated.length === 1) {
+    return latest.generated[0];
+  }
+
+  return null;
+}
+
 function resultToneClass(level = "info") {
   if (level === "error") {
     return "status-pill-danger";
@@ -317,6 +334,7 @@ function renderResultPanel() {
   }
 
   const validation = currentHostValidation();
+  const generated = currentGeneratedArtifacts();
   const errors = validation?.errors || [];
   const warnings = validation?.warnings || [];
   const summary = resultSummaryText();
@@ -343,6 +361,20 @@ function renderResultPanel() {
           <div class="result-list result-list-warning">
             <strong>Warnings</strong>
             <ul>${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+        `
+        : ""}
+      ${generated
+        ? `
+          <div class="result-list">
+            <strong>Generated Files</strong>
+            <ul>
+              ${generated.composePath ? `<li>${escapeHtml(generated.composePath)}</li>` : ""}
+              ${generated.envPath ? `<li>${escapeHtml(generated.envPath)}</li>` : ""}
+              ${generated.envExamplePath ? `<li>${escapeHtml(generated.envExamplePath)}</li>` : ""}
+              ${generated.reviewSummaryPath ? `<li>${escapeHtml(generated.reviewSummaryPath)}</li>` : ""}
+              ${generated.reviewNotesPath ? `<li>${escapeHtml(generated.reviewNotesPath)}</li>` : ""}
+            </ul>
           </div>
         `
         : ""}
@@ -677,6 +709,7 @@ function renderImportPreview() {
   }
 
   const preview = state.importPreview;
+  const generated = currentGeneratedArtifacts();
   const yaml = preview.draft?.composeYaml || "";
   const warnings = preview.warnings?.length
     ? preview.warnings
@@ -710,6 +743,28 @@ function renderImportPreview() {
       </div>
       <div class="preview-copy" style="margin-bottom:12px;">${escapeHtml(summary)}</div>
       <pre class="json-panel preview-code">${escapeHtml(yaml)}</pre>
+      ${generated?.serviceId === preview.target.serviceId
+        ? `
+          <div class="preview-meta" style="margin-top:16px;">
+            <div class="preview-meta-item">
+              <strong>Compose</strong>
+              <span>${escapeHtml(generated.composePath || "-")}</span>
+            </div>
+            <div class="preview-meta-item">
+              <strong>Env</strong>
+              <span>${escapeHtml(generated.envPath || "-")}</span>
+            </div>
+            <div class="preview-meta-item">
+              <strong>Summary</strong>
+              <span>${escapeHtml(generated.reviewSummaryPath || "-")}</span>
+            </div>
+            <div class="preview-meta-item">
+              <strong>Review Notes</strong>
+              <span>${escapeHtml(generated.reviewNotesPath || "-")}</span>
+            </div>
+          </div>
+        `
+        : ""}
       <div style="margin-top:16px;">
         <span class="preview-section-title">Warnings</span>
         ${warnings}

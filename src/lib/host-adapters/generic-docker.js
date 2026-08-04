@@ -80,7 +80,7 @@ export async function validateGenericDockerHost(settings = {}) {
   return validateDockerHostProfile(settings, {
     adapterId: "generic-docker",
     label: "Generic Docker Host",
-    dockerCandidates: [settings.dockerBin, process.env.DOCKER_BIN, "docker"]
+    dockerCandidates: [settings.dockerBin || "docker"]
   });
 }
 

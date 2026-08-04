@@ -103,7 +103,7 @@ export async function validateQnapHost(settings = {}) {
   return validateDockerHostProfile(settings, {
     adapterId: "qnap",
     label: "QNAP / Container Station",
-    dockerCandidates: [settings.dockerBin, ...QNAP_DOCKER_BINS]
+    dockerCandidates: [settings.dockerBin || "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker"]
   });
 }
 

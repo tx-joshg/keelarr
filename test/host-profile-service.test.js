@@ -3,6 +3,62 @@ import assert from "node:assert/strict";
 
 import { HostProfileService } from "../src/lib/app-services/host-profile-service.js";
 
+test("resolveStateSettings keeps initialized settings and returns host inspection", async () => {
+  const settings = {
+    initialized: true,
+    adapterType: "qnap",
+    hostLabel: "QNAP NAS",
+    dockerBin: "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
+    stackRoot: "/share/Container/docker",
+    configRoot: "/share/Container",
+    mediaRoot: "/share/Media",
+    downloadsRoot: "/share/Media/Downloads",
+    plexLogsRoot: "/share/Container/plex/Logs",
+    hostUrl: "http://nas.local",
+    tz: "America/Chicago",
+    puid: "1000",
+    pgid: "1000",
+    ombiVersion: "latest",
+    selectedServiceIds: ["trailarr", "tautulli"],
+    services: {}
+  };
+
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => settings,
+    detectHostEnvironmentImpl: async () => ({
+      selected: {
+        adapterId: "qnap",
+        label: "QNAP / Container Station",
+        suggestedSettings: {
+          adapterType: "qnap",
+          hostLabel: "QNAP NAS"
+        }
+      },
+      detections: [{ adapterId: "qnap", label: "QNAP / Container Station", score: 95 }]
+    }),
+    normalizeSettingsImpl: (input) => input,
+    validateHostProfileImpl: async () => ({
+      ok: true,
+      errors: [],
+      warnings: [],
+      fieldResults: {
+        dockerBin: {
+          ok: true,
+          level: "info",
+          value: settings.dockerBin,
+          message: "Docker and Compose validated."
+        }
+      }
+    })
+  });
+
+  const result = await service.resolveStateSettings();
+
+  assert.equal(result.settings, settings);
+  assert.equal(result.hostDetection.selected.adapterId, "qnap");
+  assert.equal(result.hostDetection.validation.ok, true);
+});
+
 test("detectHost returns effective settings and validation details", async () => {
   const service = new HostProfileService({
     detectHostEnvironmentImpl: async () => ({

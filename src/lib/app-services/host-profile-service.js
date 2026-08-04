@@ -74,7 +74,7 @@ export class HostProfileService {
     if (settings.initialized) {
       return {
         settings,
-        hostDetection: null
+        hostDetection: await this.inspectHostDraft(settings)
       };
     }
 
