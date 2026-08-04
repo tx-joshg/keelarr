@@ -1,4 +1,11 @@
-import { confidenceFromScore, field, firstSuccessfulDockerProbe, pathExists, pathWritable } from "./shared.js";
+import {
+  confidenceFromScore,
+  field,
+  firstSuccessfulDockerProbe,
+  pathCreatable,
+  pathExists,
+  validateDockerHostProfile
+} from "./shared.js";
 
 const QNAP_DOCKER_BINS = [
   "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
@@ -26,7 +33,7 @@ export async function detectQnapHost(settings = {}) {
   ] = await Promise.all([
     pathExists("/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker"),
     pathExists(stackRoot),
-    pathWritable("/share/Container"),
+    pathCreatable(stackRoot),
     pathExists(configRoot),
     pathExists(mediaRoot),
     pathExists(downloadsRoot),
@@ -92,3 +99,17 @@ export async function detectQnapHost(settings = {}) {
   };
 }
 
+export async function validateQnapHost(settings = {}) {
+  return validateDockerHostProfile(settings, {
+    adapterId: "qnap",
+    label: "QNAP / Container Station",
+    dockerCandidates: [settings.dockerBin, ...QNAP_DOCKER_BINS]
+  });
+}
+
+export const qnapHostAdapter = {
+  id: "qnap",
+  label: "QNAP / Container Station",
+  detect: detectQnapHost,
+  validate: validateQnapHost
+};

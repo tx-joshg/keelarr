@@ -1,0 +1,63 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { HostProfileService } from "../src/lib/app-services/host-profile-service.js";
+
+test("prepareSetup rejects invalid Docker validation before saving settings", async () => {
+  const service = new HostProfileService({
+    appendActivityImpl: async () => {
+      throw new Error("appendActivity should not run when validation fails");
+    },
+    detectHostEnvironmentImpl: async () => ({
+      selected: {
+        adapterId: "generic-docker",
+        suggestedSettings: {
+          dockerBin: "docker",
+          stackRoot: "/srv/stackarr/stacks",
+          configRoot: "/srv/stackarr/config",
+          mediaRoot: "/srv/media",
+          downloadsRoot: "/srv/media/downloads",
+          hostLabel: "Generic Docker Host"
+        }
+      },
+      detections: []
+    }),
+    saveSettingsImpl: async () => {
+      throw new Error("saveSettings should not run when validation fails");
+    },
+    validateHostProfileImpl: async () => ({
+      ok: false,
+      errors: ["Docker binary could not be executed: docker."],
+      warnings: []
+    }),
+    writeStacksImpl: async () => {
+      throw new Error("writeStacks should not run when validation fails");
+    }
+  });
+
+  await assert.rejects(
+    service.prepareSetup({
+      adapterType: "generic-docker",
+      hostLabel: "Broken Docker Host",
+      projectName: "Stackarr",
+      hostUrl: "http://nas.local",
+      dockerBin: "docker",
+      stackRoot: "/srv/stackarr/stacks",
+      configRoot: "/srv/stackarr/config",
+      mediaRoot: "/srv/media",
+      downloadsRoot: "/srv/media/downloads",
+      plexLogsRoot: "",
+      tz: "America/Chicago",
+      puid: "1000",
+      pgid: "1000",
+      ombiVersion: "latest",
+      selectedServiceIds: ["radarr"]
+    }),
+    (error) => {
+      assert.equal(error.statusCode, 400);
+      assert.match(error.message, /Docker binary could not be executed/i);
+      assert.equal(error.details?.ok, false);
+      return true;
+    }
+  );
+});

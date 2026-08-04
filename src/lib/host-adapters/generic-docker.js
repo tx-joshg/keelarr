@@ -1,4 +1,11 @@
-import { confidenceFromScore, field, firstSuccessfulDockerProbe, pathExists, pathWritable } from "./shared.js";
+import {
+  confidenceFromScore,
+  field,
+  firstSuccessfulDockerProbe,
+  pathCreatable,
+  pathExists,
+  validateDockerHostProfile
+} from "./shared.js";
 
 export async function detectGenericDockerHost(settings = {}) {
   const dockerCandidates = [settings.dockerBin, process.env.DOCKER_BIN, "docker"];
@@ -11,7 +18,7 @@ export async function detectGenericDockerHost(settings = {}) {
 
   const [stackExists, stackWritable, mediaExists] = await Promise.all([
     pathExists(stackRoot),
-    pathWritable(stackRoot),
+    pathCreatable(stackRoot),
     pathExists(mediaRoot)
   ]);
 
@@ -69,3 +76,17 @@ export async function detectGenericDockerHost(settings = {}) {
   };
 }
 
+export async function validateGenericDockerHost(settings = {}) {
+  return validateDockerHostProfile(settings, {
+    adapterId: "generic-docker",
+    label: "Generic Docker Host",
+    dockerCandidates: [settings.dockerBin, process.env.DOCKER_BIN, "docker"]
+  });
+}
+
+export const genericDockerHostAdapter = {
+  id: "generic-docker",
+  label: "Generic Docker Host",
+  detect: detectGenericDockerHost,
+  validate: validateGenericDockerHost
+};

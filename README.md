@@ -66,6 +66,7 @@ The dashboard can also run a read-only adoption scan:
 
 ```text
 stackarr/
+├── deploy/              # example controller deployment files
 ├── docs/                # product and architecture docs
 ├── public/              # static frontend
 ├── src/
@@ -84,6 +85,53 @@ npm run dev
 ```
 
 Then open `http://localhost:4687`.
+
+## Run As A Docker Controller
+
+Stackarr can now run as its own container while still managing the host Docker daemon.
+
+Requirements:
+
+- mount the Docker socket into the Stackarr container
+- mount the host paths Stackarr needs to inspect at the same absolute paths inside the container
+- keep Stackarr's own `data/` directory on persistent storage
+
+Quick start:
+
+```bash
+cd stackarr/deploy
+cp .env.example .env
+docker compose -f compose.example.yml up -d --build
+```
+
+Important:
+
+- `HOST_STACK_ROOT`, `HOST_CONFIG_ROOT`, `HOST_MEDIA_ROOT`, and `HOST_DOWNLOADS_ROOT` in `.env` must match the real host paths
+- those paths are mounted into the container at the exact same absolute paths so generated Compose files, backups, and adoption scans stay aligned with the host
+- remove the Plex logs mount line from `compose.example.yml` if you do not use Tautulli or do not want Plex log health support yet
+
+### First Test On QNAP
+
+For the current QNAP-oriented setup we audited on August 4, 2026, the example `deploy/.env.example` values already match the expected share layout:
+
+```text
+HOST_STACK_ROOT=/share/Container/docker
+HOST_CONFIG_ROOT=/share/Container
+HOST_MEDIA_ROOT=/share/Media
+HOST_DOWNLOADS_ROOT=/share/Media/Downloads
+HOST_PLEX_LOGS_ROOT=/share/Container/plex/Logs
+```
+
+After the container starts:
+
+1. open `http://<nas-ip>:4687`
+2. go to `Settings`
+3. run `Detect Host`
+4. confirm the detected paths
+5. save without deploy first
+6. review generated stack folders before installing any managed service
+
+If host validation fails, Stackarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
 
 ## Run The Interactive Demo
 

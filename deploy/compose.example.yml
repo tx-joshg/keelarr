@@ -1,0 +1,23 @@
+services:
+  stackarr:
+    build:
+      context: ..
+    image: stackarr:local
+    container_name: stackarr
+    restart: unless-stopped
+    ports:
+      - "${STACKARR_PORT:-4687}:4687"
+    environment:
+      STACKARR_PORT: "4687"
+      STACKARR_DATA_DIR: /app/data
+    volumes:
+      - ${STACKARR_DATA_DIR:-../data}:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Keep host paths identical inside the container so detection, validation,
+      # Compose generation, and backups all use the same absolute paths.
+      - ${HOST_STACK_ROOT}:${HOST_STACK_ROOT}
+      - ${HOST_CONFIG_ROOT}:${HOST_CONFIG_ROOT}
+      - ${HOST_MEDIA_ROOT}:${HOST_MEDIA_ROOT}
+      - ${HOST_DOWNLOADS_ROOT}:${HOST_DOWNLOADS_ROOT}
+      # Remove this line if Plex logs are not available on the host.
+      - ${HOST_PLEX_LOGS_ROOT}:${HOST_PLEX_LOGS_ROOT}:ro
