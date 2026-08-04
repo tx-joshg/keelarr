@@ -109,6 +109,8 @@ For the generated draft in `/share/Container/docker/<app>/`:
 - `compose.yml`
 - `.env`
 - `.env.example`
+- `import-summary.json`
+- `IMPORT-REVIEW.md`
 
 Check that:
 
@@ -118,6 +120,8 @@ Check that:
 - ports match the running container
 - restart policy matches the running container
 - custom network settings are preserved if the current container uses them
+- `import-summary.json` reflects the live container you scanned
+- `IMPORT-REVIEW.md` gives you a cutover checklist before touching the live container
 
 ## Not Part Of The First Test
 

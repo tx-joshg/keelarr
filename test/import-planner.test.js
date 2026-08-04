@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildImportDraftArtifacts, buildImportPreview } from "../src/lib/import-planner.js";
+import {
+  buildImportDraftArtifacts,
+  buildImportPreview,
+  buildImportReviewArtifacts
+} from "../src/lib/import-planner.js";
 import { normalizeSettings } from "../src/lib/store.js";
 
 const baseSettings = normalizeSettings({
@@ -134,4 +138,46 @@ test("builds a managed draft that preserves image, host networking details, and 
   assert.match(draft.envText, /API_KEY=secret-value/);
   assert.doesNotMatch(draft.envText, /PATH=/);
   assert.match(draft.envExampleText, /API_KEY=/);
+});
+
+test("builds safe review artifacts for an import draft", async () => {
+  const preview = await buildImportPreview(baseSettings, {
+    containerId: "trailarrdemo",
+    containerName: "trailarr",
+    image: "nandyalu/trailarr:latest",
+    recognized: true,
+    serviceId: "trailarr",
+    serviceName: "Trailarr",
+    matchedBy: "name",
+    status: "running",
+    restartPolicy: "unless-stopped",
+    networkMode: "bridge",
+    ports: [
+      {
+        containerPort: "7889/tcp",
+        hostIp: "0.0.0.0",
+        hostPort: "7889",
+        display: "0.0.0.0:7889->7889/tcp"
+      }
+    ],
+    mounts: [
+      { source: "/share/Container/trailarr/config", target: "/config", mode: "rw", type: "bind", name: null },
+      { source: "/share/Media", target: "/Media", mode: "rw", type: "bind", name: null }
+    ],
+    networks: [{ name: "bridge", address: "203.0.113.7" }],
+    envKeys: ["PUID", "PGID", "TZ"],
+    issues: [],
+    adoptable: true,
+    command: [],
+    entrypoint: ["/app/scripts/entrypoint.sh"]
+  });
+
+  const review = buildImportReviewArtifacts(preview, "2026-08-04T12:00:00.000Z");
+
+  assert.equal(review.summary.source.containerName, "trailarr");
+  assert.equal(review.summary.target.serviceId, "trailarr");
+  assert.equal(review.summary.draft.envKeys.includes("PUID"), true);
+  assert.match(review.markdown, /Import Review: trailarr -> Trailarr/);
+  assert.match(review.markdown, /import-summary\.json/);
+  assert.match(review.markdown, /Env Keys: PUID, PGID, TZ/);
 });

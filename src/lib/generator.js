@@ -1,3 +1,4 @@
+import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 
 import YAML from "yaml";
@@ -53,11 +54,24 @@ export async function writeDraftFiles(draft) {
   await writeFile(draft.envPath, draft.envText, "utf8");
   await writeFile(draft.envExamplePath, draft.envExampleText, "utf8");
 
+  const reviewSummaryPath = path.join(draft.stackDir, "import-summary.json");
+  const reviewNotesPath = path.join(draft.stackDir, "IMPORT-REVIEW.md");
+
+  if (draft.reviewSummary) {
+    await writeFile(reviewSummaryPath, `${JSON.stringify(draft.reviewSummary, null, 2)}\n`, "utf8");
+  }
+
+  if (draft.reviewNotes) {
+    await writeFile(reviewNotesPath, `${draft.reviewNotes}\n`, "utf8");
+  }
+
   return {
     serviceId: draft.serviceId,
     composePath: draft.composePath,
     envPath: draft.envPath,
-    envExamplePath: draft.envExamplePath
+    envExamplePath: draft.envExamplePath,
+    reviewSummaryPath: draft.reviewSummary ? reviewSummaryPath : null,
+    reviewNotesPath: draft.reviewNotes ? reviewNotesPath : null
   };
 }
 

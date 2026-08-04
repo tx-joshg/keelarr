@@ -1,5 +1,9 @@
 import { writeDraftFiles } from "../generator.js";
-import { buildImportDraftArtifacts, buildImportPreview } from "../import-planner.js";
+import {
+  buildImportDraftArtifacts,
+  buildImportPreview,
+  buildImportReviewArtifacts
+} from "../import-planner.js";
 import { scanDockerInventory } from "../import-scanner.js";
 import { appendActivity, loadSettings, saveSettings } from "../store.js";
 import { StackarrError } from "../errors.js";
@@ -8,6 +12,7 @@ export class ImportService {
   constructor({
     appendActivityImpl = appendActivity,
     buildImportPreviewImpl = buildImportPreview,
+    buildImportReviewArtifactsImpl = buildImportReviewArtifacts,
     buildImportDraftArtifactsImpl = buildImportDraftArtifacts,
     hostProfileService = null,
     loadSettingsImpl = loadSettings,
@@ -16,6 +21,7 @@ export class ImportService {
   } = {}) {
     this.appendActivity = appendActivityImpl;
     this.buildImportPreview = buildImportPreviewImpl;
+    this.buildImportReviewArtifacts = buildImportReviewArtifactsImpl;
     this.buildImportDraftArtifacts = buildImportDraftArtifactsImpl;
     this.hostProfileService = hostProfileService;
     this.loadSettingsImpl = loadSettingsImpl;
@@ -72,7 +78,12 @@ export class ImportService {
           selectedServiceIds: nextSelectedServiceIds
         });
 
-    const draft = this.buildImportDraftArtifacts(nextSettings, item);
+    const reviewArtifacts = this.buildImportReviewArtifacts(preview);
+    const draft = {
+      ...this.buildImportDraftArtifacts(nextSettings, item),
+      reviewSummary: reviewArtifacts.summary,
+      reviewNotes: reviewArtifacts.markdown
+    };
     const generated = await writeDraftFiles(draft);
     await this.appendActivity({
       kind: "import-draft",

@@ -19,5 +19,8 @@ test("demo service can generate a managed draft from an import candidate", async
 
   assert.equal(result.ok, true);
   assert.equal(result.preview.target.serviceId, "trailarr");
+  assert.equal(result.generated.serviceId, "trailarr");
+  assert.match(result.generated.reviewSummaryPath, /import-summary\.json$/);
+  assert.match(result.generated.reviewNotesPath, /IMPORT-REVIEW\.md$/);
   assert.equal(scan.items.find((item) => item.containerId === "trailarrdemo")?.adoptedDraft, true);
 });

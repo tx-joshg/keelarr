@@ -43,6 +43,7 @@ The dashboard can also run a read-only adoption scan:
 - Per-container adoption preview
 - Safe managed-draft generation for recognized existing containers
 - Managed drafts preserve the live container image, ports, restart policy, mounts, entrypoint, command, and custom Docker networks
+- Managed drafts also write `import-summary.json` and `IMPORT-REVIEW.md` beside the Compose files for cutover review
 - Per-service deploy
 - Per-service update check
 - Per-service upgrade

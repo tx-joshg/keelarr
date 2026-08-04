@@ -1,4 +1,8 @@
-import { buildImportPreview } from "./import-planner.js";
+import {
+  buildImportDraftArtifacts,
+  buildImportPreview,
+  buildImportReviewArtifacts
+} from "./import-planner.js";
 import { normalizeSettings } from "./store.js";
 import { listServices } from "./service-catalog.js";
 import { StackarrError } from "./errors.js";
@@ -501,9 +505,25 @@ export class DemoStackarrAppService {
       message: `Generated a managed draft for ${item.serviceName} from ${item.containerName}.`
     });
 
+    const preview = await buildImportPreview(this.demo.settings, item, { demo: true });
+    const reviewArtifacts = buildImportReviewArtifacts(preview, nowIso());
+    const draft = {
+      ...buildImportDraftArtifacts(this.demo.settings, item),
+      reviewSummary: reviewArtifacts.summary,
+      reviewNotes: reviewArtifacts.markdown
+    };
+
     return {
       ok: true,
-      preview: await buildImportPreview(this.demo.settings, item, { demo: true }),
+      preview,
+      generated: {
+        serviceId: draft.serviceId,
+        composePath: draft.composePath,
+        envPath: draft.envPath,
+        envExamplePath: draft.envExamplePath,
+        reviewSummaryPath: `${draft.stackDir}/import-summary.json`,
+        reviewNotesPath: `${draft.stackDir}/IMPORT-REVIEW.md`
+      },
       state: await this.buildState()
     };
   }

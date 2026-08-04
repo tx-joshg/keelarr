@@ -251,6 +251,76 @@ export function buildImportDraftArtifacts(settings, item) {
   };
 }
 
+function formatReviewList(items = []) {
+  if (!items.length) {
+    return "- none";
+  }
+
+  return items.map((item) => `- ${item}`).join("\n");
+}
+
+export function buildImportReviewArtifacts(preview, generatedAt = new Date().toISOString()) {
+  const summary = {
+    generatedAt,
+    source: preview.source,
+    target: preview.target,
+    preservation: preview.preservation,
+    warnings: preview.warnings,
+    recommendedSteps: preview.recommendedSteps,
+    draftArtifacts: preview.draftArtifacts,
+    draft: {
+      restartPolicy: preview.draft?.restartPolicy || null,
+      networkMode: preview.draft?.networkMode || null,
+      containerName: preview.draft?.containerName || null,
+      envKeys: preview.draft?.envKeys || []
+    }
+  };
+
+  const markdown = [
+    `# Import Review: ${preview.source.containerName} -> ${preview.target.serviceName}`,
+    "",
+    "## Source",
+    `- Container ID: ${preview.source.containerId}`,
+    `- Container Name: ${preview.source.containerName}`,
+    `- Image: ${preview.source.image}`,
+    `- Status: ${preview.source.status}`,
+    `- Restart Policy: ${preview.source.restartPolicy}`,
+    `- Network Mode: ${preview.source.networkMode}`,
+    preview.source.ports?.length ? `- Ports: ${preview.source.ports.map((port) => port.display).join(", ")}` : "- Ports: none",
+    preview.source.networks?.length ? `- Networks: ${preview.source.networks.map((network) => `${network.name}${network.address ? ` (${network.address})` : ""}`).join(", ")}` : "- Networks: none",
+    preview.source.envKeys?.length ? `- Env Keys: ${preview.source.envKeys.join(", ")}` : "- Env Keys: none",
+    "",
+    "## Managed Draft",
+    `- Service ID: ${preview.target.serviceId}`,
+    `- Compose Path: ${preview.draftArtifacts.composePath}`,
+    `- Env Path: ${preview.draftArtifacts.envPath}`,
+    `- Env Example Path: ${preview.draftArtifacts.envExamplePath}`,
+    `- Draft Container Name: ${preview.draft?.containerName || preview.target.containerName}`,
+    `- Draft Restart Policy: ${preview.draft?.restartPolicy || preview.target.restartPolicy || "unless-stopped"}`,
+    `- Draft Network Mode: ${preview.draft?.networkMode || preview.target.networkMode || "default"}`,
+    preview.draft?.envKeys?.length ? `- Draft Env Keys: ${preview.draft.envKeys.join(", ")}` : "- Draft Env Keys: none",
+    "",
+    "## Preserved Paths",
+    ...preview.preservation.map((item) => `- ${item.label}: ${item.source || "missing"} -> ${item.target} (${item.status})`),
+    "",
+    "## Warnings",
+    formatReviewList((preview.warnings || []).map((item) => `${item.level}: ${item.message}`)),
+    "",
+    "## Recommended Steps",
+    formatReviewList(preview.recommendedSteps || []),
+    "",
+    "## Notes",
+    "- `.env` is local-only and may contain secret values copied from the running container.",
+    "- `import-summary.json` is safe to review and commit because it records env keys, not env values.",
+    `- Generated At: ${generatedAt}`
+  ].join("\n");
+
+  return {
+    summary,
+    markdown
+  };
+}
+
 export async function buildImportPreview(settings, item, options = {}) {
   const demo = options.demo === true;
 
