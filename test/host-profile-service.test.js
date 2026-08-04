@@ -180,3 +180,84 @@ test("prepareSetup rejects invalid Docker validation before saving settings", as
     }
   );
 });
+
+test("prepareSetup preserves existing service overrides when saving host settings", async () => {
+  let savedPayload = null;
+
+  const service = new HostProfileService({
+    appendActivityImpl: async () => [],
+    detectHostEnvironmentImpl: async () => ({
+      selected: {
+        adapterId: "generic-docker",
+        suggestedSettings: {
+          adapterType: "generic-docker",
+          hostLabel: "Generic Docker Host",
+          dockerBin: "docker",
+          stackRoot: "/srv/stackarr/stacks",
+          configRoot: "/srv/stackarr/config",
+          mediaRoot: "/srv/media",
+          downloadsRoot: "/srv/media/downloads",
+          plexLogsRoot: ""
+        }
+      },
+      detections: []
+    }),
+    loadSettingsImpl: async () => ({
+      initialized: true,
+      projectName: "Stackarr",
+      adapterType: "generic-docker",
+      hostLabel: "Generic Docker Host",
+      dockerBin: "docker",
+      stackRoot: "/srv/stackarr/stacks",
+      configRoot: "/srv/stackarr/config",
+      mediaRoot: "/srv/media",
+      downloadsRoot: "/srv/media/downloads",
+      plexLogsRoot: "",
+      hostUrl: "http://old-host.local",
+      tz: "America/Chicago",
+      puid: "1000",
+      pgid: "1000",
+      ombiVersion: "latest",
+      selectedServiceIds: ["trailarr"],
+      serviceOverrides: {
+        trailarr: {
+          mode: "imported-draft",
+          image: "nandyalu/trailarr:custom",
+          port: 7889,
+          containerName: "trailarr",
+          restartPolicy: "unless-stopped",
+          networkMode: "bridge",
+          envKeys: ["PUID", "PGID", "TZ"],
+          sourceContainerId: "trailarrdemo",
+          sourceContainerName: "trailarr",
+          sourceImage: "nandyalu/trailarr:custom",
+          reviewSummaryPath: "/srv/stackarr/stacks/trailarr/import-summary.json",
+          reviewNotesPath: "/srv/stackarr/stacks/trailarr/IMPORT-REVIEW.md",
+          importedAt: "2026-08-04T12:00:00.000Z"
+        }
+      },
+      services: {}
+    }),
+    normalizeSettingsImpl: (input) => input,
+    saveSettingsImpl: async (input) => {
+      savedPayload = input;
+      return input;
+    },
+    validateHostProfileImpl: async () => ({
+      ok: true,
+      errors: [],
+      warnings: [],
+      fieldResults: {}
+    }),
+    writeStacksImpl: async () => []
+  });
+
+  await service.prepareSetup({
+    hostUrl: "http://nas.local",
+    selectedServiceIds: ["trailarr"]
+  });
+
+  assert.equal(savedPayload.hostUrl, "http://nas.local");
+  assert.equal(savedPayload.serviceOverrides.trailarr.mode, "imported-draft");
+  assert.equal(savedPayload.serviceOverrides.trailarr.reviewSummaryPath, "/srv/stackarr/stacks/trailarr/import-summary.json");
+});

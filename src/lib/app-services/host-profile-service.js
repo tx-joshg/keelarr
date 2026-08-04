@@ -102,8 +102,14 @@ export class HostProfileService {
     const deploy = input?.deploy === true;
     const rawSettings = { ...input };
     delete rawSettings.deploy;
+    const savedSettings = await this.loadSettings();
+    const baseSettings = {
+      ...savedSettings,
+      ...rawSettings,
+      initialized: savedSettings.initialized
+    };
 
-    const inspection = await this.inspectHostDraft(rawSettings);
+    const inspection = await this.inspectHostDraft(baseSettings);
     const candidateSettings = inspection.effectiveSettings;
     const validation = inspection.validation;
 
