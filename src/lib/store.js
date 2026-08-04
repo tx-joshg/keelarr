@@ -29,6 +29,7 @@ export const defaultSettings = {
   pgid: "1000",
   ombiVersion: "latest",
   selectedServiceIds: ["prowlarr", "radarr", "sonarr", "bazarr", "trailarr", "ombi", "tautulli", "sabnzbd"],
+  serviceOverrides: {},
   services: {}
 };
 
@@ -62,6 +63,38 @@ function sanitizeSelectedServiceIds(value) {
   return [...new Set(value.filter((item) => typeof item === "string" && item.length > 0))];
 }
 
+function sanitizeServiceOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const overrides = {};
+
+  for (const [serviceId, item] of Object.entries(value)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+
+    overrides[serviceId] = {
+      mode: typeof item.mode === "string" ? item.mode : null,
+      image: typeof item.image === "string" ? item.image : null,
+      port: Number.isFinite(Number(item.port)) ? Number(item.port) : null,
+      containerName: typeof item.containerName === "string" ? item.containerName : null,
+      restartPolicy: typeof item.restartPolicy === "string" ? item.restartPolicy : null,
+      networkMode: typeof item.networkMode === "string" ? item.networkMode : null,
+      envKeys: Array.isArray(item.envKeys) ? item.envKeys.filter((key) => typeof key === "string" && key.length > 0) : [],
+      sourceContainerId: typeof item.sourceContainerId === "string" ? item.sourceContainerId : null,
+      sourceContainerName: typeof item.sourceContainerName === "string" ? item.sourceContainerName : null,
+      sourceImage: typeof item.sourceImage === "string" ? item.sourceImage : null,
+      reviewSummaryPath: typeof item.reviewSummaryPath === "string" ? item.reviewSummaryPath : null,
+      reviewNotesPath: typeof item.reviewNotesPath === "string" ? item.reviewNotesPath : null,
+      importedAt: typeof item.importedAt === "string" ? item.importedAt : null
+    };
+  }
+
+  return overrides;
+}
+
 export function normalizeSettings(input = {}) {
   const merged = {
     ...defaultSettings,
@@ -84,12 +117,13 @@ export function normalizeSettings(input = {}) {
   merged.pgid = String(merged.pgid || defaultSettings.pgid).trim();
   merged.ombiVersion = String(merged.ombiVersion || defaultSettings.ombiVersion).trim();
   merged.selectedServiceIds = sanitizeSelectedServiceIds(merged.selectedServiceIds);
+  merged.serviceOverrides = sanitizeServiceOverrides(merged.serviceOverrides);
 
   if (merged.selectedServiceIds.length === 0) {
     merged.selectedServiceIds = defaultSettings.selectedServiceIds;
   }
 
-  merged.services = buildServicesFromSelection(merged, merged.selectedServiceIds);
+  merged.services = buildServicesFromSelection(merged, merged.selectedServiceIds, merged.serviceOverrides);
 
   return merged;
 }

@@ -1,9 +1,19 @@
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 
 import YAML from "yaml";
 
 import { buildComposeSpec } from "./service-catalog.js";
+import { StackarrError } from "./errors.js";
+
+async function fileExists(filePath) {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function buildEnvLines(settings, service) {
   const lines = [
@@ -82,6 +92,27 @@ export async function writeStacks(settings, serviceIds = settings.selectedServic
     const service = settings.services[serviceId];
 
     if (!service?.enabled) {
+      continue;
+    }
+
+    if (service.managedMode === "imported-draft") {
+      const composeExists = await fileExists(service.composePath);
+      const envExists = await fileExists(service.envPath);
+
+      if (!composeExists || !envExists) {
+        throw new StackarrError(`Imported draft files are missing for ${service.name}. Re-run the adoption draft before deploying.`, {
+          statusCode: 400
+        });
+      }
+
+      writes.push({
+        serviceId: service.id,
+        composePath: service.composePath,
+        envPath: service.envPath,
+        envExamplePath: service.envExamplePath,
+        reviewSummaryPath: service.reviewSummaryPath,
+        reviewNotesPath: service.reviewNotesPath
+      });
       continue;
     }
 

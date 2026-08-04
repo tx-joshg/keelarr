@@ -164,7 +164,7 @@ export function getServiceDefinition(id) {
   return SERVICE_CATALOG[id];
 }
 
-export function buildServiceFromCatalog(baseSettings, id) {
+export function buildServiceFromCatalog(baseSettings, id, override = {}) {
   const definition = getServiceDefinition(id);
 
   if (!definition) {
@@ -180,26 +180,36 @@ export function buildServiceFromCatalog(baseSettings, id) {
     name: definition.name,
     family: definition.family,
     description: definition.description,
-    image: definition.defaultImage,
-    port: definition.defaultPort,
+    image: override.image || definition.defaultImage,
+    port: override.port || definition.defaultPort,
     stackDir,
     composePath: `${stackDir}/compose.yml`,
     envPath: `${stackDir}/.env`,
     envExamplePath: `${stackDir}/.env.example`,
-    containerName: id,
+    containerName: override.containerName || id,
     configDir,
     mediaDir: baseSettings.mediaRoot,
     downloadsDir: baseSettings.downloadsRoot,
     plexLogsDir: baseSettings.plexLogsRoot,
-    appUrl: `${publicHost}:${definition.defaultPort}`,
+    appUrl: `${publicHost}:${override.port || definition.defaultPort}`,
     healthStatuses: definition.healthStatuses,
-    volumes: definition.volumes
+    volumes: definition.volumes,
+    managedMode: override.mode || "catalog",
+    restartPolicy: override.restartPolicy || "unless-stopped",
+    networkMode: override.networkMode || "default",
+    envKeys: override.envKeys || [],
+    sourceContainerId: override.sourceContainerId || null,
+    sourceContainerName: override.sourceContainerName || null,
+    sourceImage: override.sourceImage || null,
+    reviewSummaryPath: override.reviewSummaryPath || null,
+    reviewNotesPath: override.reviewNotesPath || null,
+    importedAt: override.importedAt || null
   };
 
   return service;
 }
 
-export function buildServicesFromSelection(baseSettings, selectedServiceIds) {
+export function buildServicesFromSelection(baseSettings, selectedServiceIds, serviceOverrides = {}) {
   const selected = new Set(selectedServiceIds);
   const services = {};
 
@@ -208,7 +218,7 @@ export function buildServicesFromSelection(baseSettings, selectedServiceIds) {
       continue;
     }
 
-    services[id] = buildServiceFromCatalog(baseSettings, id);
+    services[id] = buildServiceFromCatalog(baseSettings, id, serviceOverrides[id] || {});
   }
 
   return services;
@@ -219,7 +229,7 @@ export function buildComposeSpec(settings, service) {
   const composeService = {
     container_name: service.containerName,
     image: service.image,
-    restart: "unless-stopped",
+    restart: service.restartPolicy || "unless-stopped",
     ports: [`${"${PORT}"}:${service.port}`],
     environment: definition.buildEnvironment(service),
     volumes: [`${"${CONFIG_DIR}"}:/config`]
@@ -240,4 +250,3 @@ export function buildComposeSpec(settings, service) {
     }
   };
 }
-

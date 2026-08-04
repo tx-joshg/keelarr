@@ -91,6 +91,8 @@ The preview should preserve:
 
 The generated `.env` file is local-only and may contain secret values copied from the existing container environment. Do not commit that file.
 
+After a managed draft is created, Stackarr now treats that draft as the service source of truth. Later `Save`, `Save And Generate`, and per-service install actions keep using the reviewed draft files instead of regenerating a default catalog template on top of them.
+
 ## Recommended First Adoption Candidate
 
 Start with `trailarr`.

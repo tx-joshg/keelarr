@@ -71,14 +71,36 @@ export class ImportService {
       ? settings.selectedServiceIds
       : [...settings.selectedServiceIds, item.serviceId];
 
-    const nextSettings = nextSelectedServiceIds === settings.selectedServiceIds
-      ? settings
-      : await this.saveSettings({
-          ...settings,
-          selectedServiceIds: nextSelectedServiceIds
-        });
-
+    const nextSettingsBase = {
+      ...settings,
+      selectedServiceIds: nextSelectedServiceIds
+    };
+    const draftBase = this.buildImportDraftArtifacts(nextSettingsBase, item);
     const reviewArtifacts = this.buildImportReviewArtifacts(preview);
+    const importedOverride = {
+      mode: "imported-draft",
+      image: draftBase.image,
+      port: draftBase.port,
+      containerName: draftBase.containerName,
+      restartPolicy: draftBase.restartPolicy,
+      networkMode: draftBase.networkMode,
+      envKeys: draftBase.envKeys,
+      sourceContainerId: item.containerId,
+      sourceContainerName: item.containerName,
+      sourceImage: item.image,
+      reviewSummaryPath: `${draftBase.stackDir}/import-summary.json`,
+      reviewNotesPath: `${draftBase.stackDir}/IMPORT-REVIEW.md`,
+      importedAt: new Date().toISOString()
+    };
+
+    const nextSettings = await this.saveSettings({
+      ...nextSettingsBase,
+      serviceOverrides: {
+        ...(settings.serviceOverrides || {}),
+        [item.serviceId]: importedOverride
+      }
+    });
+
     const draft = {
       ...this.buildImportDraftArtifacts(nextSettings, item),
       reviewSummary: reviewArtifacts.summary,

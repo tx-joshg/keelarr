@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildServicesFromSelection, buildComposeSpec } from "../src/lib/service-catalog.js";
-import { writeDraftFiles } from "../src/lib/generator.js";
+import { writeDraftFiles, writeStacks } from "../src/lib/generator.js";
 import { normalizeSettings } from "../src/lib/store.js";
 
 test("builds a compose spec with expected media and config mounts", () => {
@@ -53,4 +53,60 @@ test("writes import review artifacts beside a managed draft", async () => {
 
   assert.equal(reviewSummary.source.containerName, "trailarr");
   assert.match(reviewNotes, /Import Review/);
+});
+
+test("writeStacks preserves imported draft files instead of regenerating catalog defaults", async () => {
+  const stackDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-imported-stack-"));
+  const composePath = path.join(stackDir, "compose.yml");
+  const envPath = path.join(stackDir, ".env");
+  const envExamplePath = path.join(stackDir, ".env.example");
+  const reviewSummaryPath = path.join(stackDir, "import-summary.json");
+  const reviewNotesPath = path.join(stackDir, "IMPORT-REVIEW.md");
+
+  await writeDraftFiles({
+    serviceId: "trailarr",
+    stackDir,
+    composePath,
+    envPath,
+    envExamplePath,
+    composeYaml: "name: trailarr\nservices:\n  trailarr:\n    image: nandyalu/trailarr:custom\n",
+    envText: "PUID=1000\n",
+    envExampleText: "PUID=\n",
+    reviewSummary: { source: { containerName: "trailarr" } },
+    reviewNotes: "# Import Review\n"
+  });
+
+  const settings = normalizeSettings({
+    stackRoot: path.dirname(stackDir),
+    configRoot: "/share/Container",
+    mediaRoot: "/share/Media",
+    downloadsRoot: "/share/Media/Downloads",
+    selectedServiceIds: ["trailarr"],
+    serviceOverrides: {
+      trailarr: {
+        mode: "imported-draft",
+        image: "nandyalu/trailarr:custom",
+        port: 7889,
+        containerName: "trailarr",
+        restartPolicy: "unless-stopped",
+        networkMode: "bridge",
+        reviewSummaryPath,
+        reviewNotesPath
+      }
+    }
+  });
+
+  settings.services.trailarr.stackDir = stackDir;
+  settings.services.trailarr.composePath = composePath;
+  settings.services.trailarr.envPath = envPath;
+  settings.services.trailarr.envExamplePath = envExamplePath;
+  settings.services.trailarr.reviewSummaryPath = reviewSummaryPath;
+  settings.services.trailarr.reviewNotesPath = reviewNotesPath;
+
+  const result = await writeStacks(settings, ["trailarr"]);
+  const composeText = await readFile(composePath, "utf8");
+
+  assert.equal(result[0].reviewSummaryPath, reviewSummaryPath);
+  assert.match(composeText, /trailarr:custom/);
+  assert.doesNotMatch(composeText, /trailarr:latest/);
 });
