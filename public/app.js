@@ -188,6 +188,168 @@ function buildLatestResultPayload() {
   };
 }
 
+const inspectionFieldLabels = {
+  dockerBin: "Docker Binary",
+  stackRoot: "Compose Stack Root",
+  configRoot: "Config Root",
+  mediaRoot: "Media Root",
+  downloadsRoot: "Downloads Root",
+  plexLogsRoot: "Plex Logs Path"
+};
+
+function latestResultData() {
+  return ui.latestResult?.data || null;
+}
+
+function currentHostInspection() {
+  const latest = latestResultData();
+  if (latest?.selected && Array.isArray(latest?.detections)) {
+    return latest;
+  }
+
+  if (latest?.hostDetection?.selected && Array.isArray(latest?.hostDetection?.detections)) {
+    return latest.hostDetection;
+  }
+
+  if (latest?.details?.selected && Array.isArray(latest?.details?.detections)) {
+    return latest.details;
+  }
+
+  return state.hostDetection;
+}
+
+function currentHostValidation() {
+  const latest = latestResultData();
+  if (latest?.validation?.fieldResults) {
+    return latest.validation;
+  }
+
+  if (latest?.details?.fieldResults) {
+    return latest.details;
+  }
+
+  if (state.hostDetection?.validation?.fieldResults) {
+    return state.hostDetection.validation;
+  }
+
+  return null;
+}
+
+function currentEffectiveSettings() {
+  const latest = latestResultData();
+  if (latest?.effectiveSettings) {
+    return latest.effectiveSettings;
+  }
+
+  if (latest?.details?.effectiveSettings) {
+    return latest.details.effectiveSettings;
+  }
+
+  if (state.hostDetection?.effectiveSettings) {
+    return state.hostDetection.effectiveSettings;
+  }
+
+  return state.settings;
+}
+
+function resultToneClass(level = "info") {
+  if (level === "error") {
+    return "status-pill-danger";
+  }
+
+  if (level === "warn") {
+    return "status-pill-warning";
+  }
+
+  if (level === "manual") {
+    return "status-pill-idle";
+  }
+
+  return "status-pill-info";
+}
+
+function renderStatusPill(label, level = "info") {
+  return `<span class="status-pill ${resultToneClass(level)}">${escapeHtml(label)}</span>`;
+}
+
+function resultSummaryText() {
+  const latest = latestResultData();
+  if (!ui.latestResult || !latest) {
+    return "";
+  }
+
+  if (latest.ok === false) {
+    return latest.error || "The last operation failed.";
+  }
+
+  if (ui.latestResult.title === "Host Detection") {
+    const inspection = currentHostInspection();
+    const validation = currentHostValidation();
+    const selectedLabel = inspection?.selected?.label || "host profile";
+
+    if (validation?.ok === false) {
+      return `Detected ${selectedLabel}, but validation found ${validation.errors.length} blocker(s).`;
+    }
+
+    return `Detected ${selectedLabel} and validated the current draft settings.`;
+  }
+
+  if (Array.isArray(latest.generated)) {
+    return `Generated ${latest.generated.length} stack folder(s).`;
+  }
+
+  if (Array.isArray(latest.results)) {
+    const okCount = latest.results.filter((item) => item.ok).length;
+    return `${okCount} of ${latest.results.length} operations succeeded.`;
+  }
+
+  if (latest.ok === true) {
+    return "The last operation completed successfully.";
+  }
+
+  return "";
+}
+
+function renderResultPanel() {
+  const latest = latestResultData();
+  if (!ui.latestResult || !latest || ui.view === "activity" || ui.latestResult.title === "Import Preview") {
+    return "";
+  }
+
+  const validation = currentHostValidation();
+  const errors = validation?.errors || [];
+  const warnings = validation?.warnings || [];
+  const summary = resultSummaryText();
+
+  return `
+    <div class="result-panel ${latest.ok === false ? "result-panel-danger" : "result-panel-info"}">
+      <div class="result-panel-header">
+        <div>
+          <div class="result-panel-title">${escapeHtml(ui.latestResult.title)}</div>
+          ${summary ? `<div class="result-panel-copy">${escapeHtml(summary)}</div>` : ""}
+        </div>
+        ${renderStatusPill(latest.ok === false ? "Needs Attention" : "Ready", latest.ok === false ? "error" : "info")}
+      </div>
+      ${errors.length
+        ? `
+          <div class="result-list result-list-danger">
+            <strong>Blockers</strong>
+            <ul>${errors.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+        `
+        : ""}
+      ${warnings.length
+        ? `
+          <div class="result-list result-list-warning">
+            <strong>Warnings</strong>
+            <ul>${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+        `
+        : ""}
+    </div>
+  `;
+}
+
 function renderSidebarNav() {
   const navItems = [
     {
@@ -235,8 +397,10 @@ function renderSidebarNav() {
 }
 
 function renderHostSummary() {
-  const hostName = state.hostDetection?.selected?.label || state.settings?.hostLabel || "Docker Host";
-  const composeState = state.hostDetection?.selected?.validation?.composeOk ? "compose ok" : "compose pending";
+  const inspection = currentHostInspection();
+  const validation = currentHostValidation();
+  const hostName = inspection?.selected?.label || state.settings?.hostLabel || "Docker Host";
+  const composeState = validation?.fieldResults?.dockerBin?.ok ? "compose ok" : "compose pending";
   const stackRootState = selectedServices().some((service) => service.generated) ? "stack root ready" : "stack root pending";
 
   return `
@@ -644,6 +808,152 @@ function renderManageRow(service) {
   `;
 }
 
+function renderFirstRunGuide() {
+  if (state.configured) {
+    return "";
+  }
+
+  return `
+    <fieldset class="fieldset">
+      <legend class="legend">First Live Test</legend>
+      <div class="info-alert">
+        <i class="fa-solid fa-circle-info"></i>
+        <span>Detect the host first, save without deploy, then use Adoption to run a read-only scan and generate one managed draft at a time.</span>
+      </div>
+      <div class="muted-paragraph">For an existing QNAP stack, the safest first target is Trailarr because it uses straightforward bind mounts and an explicit port mapping.</div>
+    </fieldset>
+  `;
+}
+
+function renderHostInspection() {
+  const inspection = currentHostInspection();
+  const validation = currentHostValidation();
+  const effectiveSettings = currentEffectiveSettings();
+
+  if (!inspection?.selected) {
+    return `
+      <fieldset class="fieldset">
+        <legend class="legend">Host Detection</legend>
+        <div class="info-alert">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>Run Detect Host to validate the current Docker binary and path layout before saving.</span>
+        </div>
+      </fieldset>
+    `;
+  }
+
+  const selected = inspection.selected;
+  const fieldSuggestions = selected.fieldSuggestions || {};
+  const fieldResults = validation?.fieldResults || {};
+  const fieldKeys = [...new Set([...Object.keys(inspectionFieldLabels), ...Object.keys(fieldSuggestions), ...Object.keys(fieldResults)])]
+    .filter((key) => inspectionFieldLabels[key]);
+  const detectionCards = (inspection.detections || [])
+    .map((item) => `
+      <div class="inspection-card ${item.adapterId === selected.adapterId ? "inspection-card-selected" : ""}">
+        <div class="inspection-card-header">
+          <strong>${escapeHtml(item.label)}</strong>
+          ${renderStatusPill(item.confidence || "low", item.confidence === "high" ? "info" : item.confidence === "medium" ? "warn" : "manual")}
+        </div>
+        <div class="inspection-card-copy">score ${escapeHtml(String(item.score || 0))} &middot; ${item.matched ? "matched" : "fallback"}</div>
+        <div class="inspection-card-copy">${escapeHtml((item.notes || []).join(" "))}</div>
+      </div>
+    `)
+    .join("");
+  const fieldRows = fieldKeys
+    .map((key) => {
+      const suggestion = fieldSuggestions[key] || null;
+      const result = fieldResults[key] || null;
+      const value = result?.value ?? effectiveSettings?.[key] ?? suggestion?.value ?? "";
+      const confidence = suggestion?.confidence || "manual";
+      const source = suggestion?.source || "current-settings";
+      const message = result?.message || suggestion?.note || "";
+
+      return `
+        <tr>
+          <td>${escapeHtml(inspectionFieldLabels[key])}</td>
+          <td class="cell-truncate">${escapeHtml(value || "-")}</td>
+          <td>${renderStatusPill(confidence, confidence === "high" ? "info" : confidence === "medium" ? "warn" : confidence === "low" ? "error" : "manual")}</td>
+          <td>${result ? renderStatusPill(result.level || "info", result.level || "info") : renderStatusPill("manual", "manual")}</td>
+          <td class="secondary-copy">${escapeHtml(message || source)}</td>
+        </tr>
+      `;
+    })
+    .join("");
+  const diagnostics = (selected.diagnostics || inspection.diagnostics || [])
+    .map((item) => `
+      <tr>
+        <td class="cell-truncate">${escapeHtml(item.binaryPath || "-")}</td>
+        <td>${renderStatusPill(item.dockerOk ? "docker ok" : "docker fail", item.dockerOk ? "info" : "error")}</td>
+        <td>${renderStatusPill(item.composeOk ? "compose ok" : "compose fail", item.composeOk ? "info" : "error")}</td>
+        <td class="secondary-copy">${escapeHtml(item.dockerVersion || item.composeVersion || item.error || "-")}</td>
+      </tr>
+    `)
+    .join("");
+  const errors = validation?.errors || [];
+  const warnings = validation?.warnings || [];
+
+  return `
+    <fieldset class="fieldset">
+      <legend class="legend">Host Detection</legend>
+      <div class="inspection-summary">
+        <div>
+          <div class="inspection-title">${escapeHtml(selected.label)}</div>
+          <div class="inspection-copy">${escapeHtml((selected.notes || []).join(" "))}</div>
+        </div>
+        <div class="inspection-summary-badges">
+          ${renderStatusPill(selected.confidence || "low", selected.confidence === "high" ? "info" : selected.confidence === "medium" ? "warn" : "manual")}
+          ${renderStatusPill(validation?.ok === false ? `${errors.length} blocker(s)` : "validated", validation?.ok === false ? "error" : "info")}
+        </div>
+      </div>
+      ${detectionCards ? `<div class="inspection-grid">${detectionCards}</div>` : ""}
+      ${errors.length
+        ? `
+          <div class="result-list result-list-danger">
+            <strong>Blockers</strong>
+            <ul>${errors.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+        `
+        : ""}
+      ${warnings.length
+        ? `
+          <div class="result-list result-list-warning">
+            <strong>Warnings</strong>
+            <ul>${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          </div>
+        `
+        : ""}
+      <table class="table-view inspection-table">
+        <thead>
+          <tr>
+            <th style="width:18%;">Field</th>
+            <th style="width:32%;">Value</th>
+            <th style="width:14%;">Confidence</th>
+            <th style="width:14%;">Status</th>
+            <th style="width:22%;">Details</th>
+          </tr>
+        </thead>
+        <tbody>${fieldRows}</tbody>
+      </table>
+      ${diagnostics
+        ? `
+          <div class="inspection-section-title">Docker Probes</div>
+          <table class="table-view inspection-table">
+            <thead>
+              <tr>
+                <th style="width:30%;">Binary</th>
+                <th style="width:15%;">Docker</th>
+                <th style="width:15%;">Compose</th>
+                <th style="width:40%;">Version / Error</th>
+              </tr>
+            </thead>
+            <tbody>${diagnostics}</tbody>
+          </table>
+        `
+        : ""}
+    </fieldset>
+  `;
+}
+
 function renderSettingsView() {
   const hostFields = [
     {
@@ -726,6 +1036,8 @@ function renderSettingsView() {
 
   return `
     <div data-screen-label="Settings" class="form-container">
+      ${renderFirstRunGuide()}
+      ${renderHostInspection()}
       <fieldset class="fieldset">
         <legend class="legend">Host</legend>
         ${hostFields.map((field) => renderInputRow(field)).join("")}
@@ -811,12 +1123,13 @@ function render() {
         </aside>
         <main class="main-shell">
           ${renderToolbar()}
-          <div class="scroll-shell">
-            <div class="page-content">
-              ${renderWarningBanner()}
-              ${renderCurrentView()}
-            </div>
-            <div class="page-footer">${renderFooter()}</div>
+      <div class="scroll-shell">
+        <div class="page-content">
+          ${renderWarningBanner()}
+          ${renderResultPanel()}
+          ${renderCurrentView()}
+        </div>
+        <div class="page-footer">${renderFooter()}</div>
           </div>
         </main>
       </div>
@@ -883,6 +1196,9 @@ async function loadState() {
   state.activity = data.activity;
   state.hostDetection = data.hostDetection || null;
   state.meta = data.meta || null;
+  if (!state.configured && ui.view === "stack") {
+    ui.view = "settings";
+  }
   render();
 }
 
@@ -902,7 +1218,7 @@ async function detectHost() {
     body: JSON.stringify(settingsPayload(false))
   });
   state.hostDetection = data;
-  state.settings = {
+  state.settings = data.effectiveSettings || {
     ...state.settings,
     ...(data.selected?.suggestedSettings || {})
   };
@@ -1038,8 +1354,6 @@ function showError(error) {
     error: error.message,
     details: error.details || error.payload?.details || null
   });
-  ui.view = "activity";
-  ui.jsonOpen = true;
   render();
 }
 

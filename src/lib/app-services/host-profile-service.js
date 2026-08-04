@@ -43,6 +43,31 @@ export class HostProfileService {
     return this.loadSettingsImpl();
   }
 
+  buildCandidateSettings(rawSettings, detection) {
+    return {
+      ...detection?.selected?.suggestedSettings,
+      ...rawSettings,
+      adapterType: rawSettings.adapterType || detection?.selected?.adapterId || "generic-docker",
+      hostLabel: rawSettings.hostLabel || detection?.selected?.suggestedSettings?.hostLabel || "Docker Host"
+    };
+  }
+
+  async inspectHostDraft(rawSettings = {}) {
+    const detection = await this.detectHostEnvironment(rawSettings);
+    const candidateSettings = this.buildCandidateSettings(rawSettings, detection);
+    const effectiveSettings = this.normalizeSettings({
+      ...candidateSettings,
+      initialized: rawSettings.initialized === true
+    });
+    const validation = await this.validateHostProfile(effectiveSettings);
+
+    return {
+      ...detection,
+      validation,
+      effectiveSettings
+    };
+  }
+
   async resolveStateSettings() {
     const settings = await this.loadSettings();
 
@@ -53,7 +78,7 @@ export class HostProfileService {
       };
     }
 
-    const hostDetection = await this.detectHostEnvironment(settings);
+    const hostDetection = await this.inspectHostDraft(settings);
     return {
       settings: this.normalizeSettings(applyDetectionSuggestions(settings, hostDetection.selected)),
       hostDetection
@@ -63,14 +88,14 @@ export class HostProfileService {
   async detectHost(input = null) {
     const savedSettings = await this.loadSettings();
     const draftSettings = input
-      ? this.normalizeSettings({
+      ? {
           ...savedSettings,
           ...input,
           initialized: savedSettings.initialized
-        })
+        }
       : savedSettings;
 
-    return this.detectHostEnvironment(draftSettings);
+    return this.inspectHostDraft(draftSettings);
   }
 
   async prepareSetup(input = {}) {
@@ -78,19 +103,19 @@ export class HostProfileService {
     const rawSettings = { ...input };
     delete rawSettings.deploy;
 
-    const detection = await this.detectHostEnvironment(rawSettings);
-    const candidateSettings = {
-      ...detection.selected?.suggestedSettings,
-      ...rawSettings,
-      adapterType: rawSettings.adapterType || detection.selected?.adapterId || "generic-docker",
-      hostLabel: rawSettings.hostLabel || detection.selected?.suggestedSettings?.hostLabel || "Docker Host"
-    };
-    const validation = await this.validateHostProfile(candidateSettings);
+    const inspection = await this.inspectHostDraft(rawSettings);
+    const candidateSettings = inspection.effectiveSettings;
+    const validation = inspection.validation;
 
     if (!validation.ok) {
       throw new StackarrError(summarizeValidationErrors(validation), {
         statusCode: 400,
-        details: validation
+        details: {
+          ...validation,
+          detections: inspection.detections,
+          selected: inspection.selected,
+          effectiveSettings: inspection.effectiveSettings
+        }
       });
     }
 
@@ -111,8 +136,9 @@ export class HostProfileService {
     return {
       settings,
       generated,
-      detection,
+      detection: inspection,
       validation,
+      effectiveSettings: inspection.effectiveSettings,
       deploy
     };
   }

@@ -42,6 +42,9 @@ export class StackarrAppService {
     const {
       settings,
       generated,
+      detection,
+      effectiveSettings,
+      validation,
       deploy
     } = await this.hostProfileService.prepareSetup(input);
     const deployResults = deploy
@@ -52,7 +55,10 @@ export class StackarrAppService {
     return {
       ...state,
       generated,
-      deployResults
+      deployResults,
+      hostDetection: detection,
+      validation,
+      effectiveSettings
     };
   }
 
