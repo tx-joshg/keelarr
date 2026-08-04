@@ -5,7 +5,7 @@ import {
   buildImportReviewArtifacts
 } from "../import-planner.js";
 import { scanDockerInventory } from "../import-scanner.js";
-import { appendActivity, loadSettings, saveSettings } from "../store.js";
+import { appendActivity, loadSettings, normalizeSettings, saveSettings } from "../store.js";
 import { StackarrError } from "../errors.js";
 
 export class ImportService {
@@ -16,8 +16,10 @@ export class ImportService {
     buildImportDraftArtifactsImpl = buildImportDraftArtifacts,
     hostProfileService = null,
     loadSettingsImpl = loadSettings,
+    normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
-    scanDockerInventoryImpl = scanDockerInventory
+    scanDockerInventoryImpl = scanDockerInventory,
+    writeDraftFilesImpl = writeDraftFiles
   } = {}) {
     this.appendActivity = appendActivityImpl;
     this.buildImportPreview = buildImportPreviewImpl;
@@ -25,8 +27,10 @@ export class ImportService {
     this.buildImportDraftArtifacts = buildImportDraftArtifactsImpl;
     this.hostProfileService = hostProfileService;
     this.loadSettingsImpl = loadSettingsImpl;
+    this.normalizeSettings = normalizeSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.scanDockerInventory = scanDockerInventoryImpl;
+    this.writeDraftFiles = writeDraftFilesImpl;
   }
 
   async loadSettings() {
@@ -75,38 +79,48 @@ export class ImportService {
       ...settings,
       selectedServiceIds: nextSelectedServiceIds
     };
-    const draftBase = this.buildImportDraftArtifacts(nextSettingsBase, item);
-    const reviewArtifacts = this.buildImportReviewArtifacts(preview);
     const importedOverride = {
       mode: "imported-draft",
-      image: draftBase.image,
-      port: draftBase.port,
-      containerName: draftBase.containerName,
-      restartPolicy: draftBase.restartPolicy,
-      networkMode: draftBase.networkMode,
-      envKeys: draftBase.envKeys,
+      image: preview.target.image,
+      port: preview.target.port,
+      containerName: preview.target.containerName,
+      restartPolicy: preview.target.restartPolicy,
+      networkMode: preview.target.networkMode,
+      envKeys: preview.draft?.envKeys || [],
       sourceContainerId: item.containerId,
       sourceContainerName: item.containerName,
       sourceImage: item.image,
-      reviewSummaryPath: `${draftBase.stackDir}/import-summary.json`,
-      reviewNotesPath: `${draftBase.stackDir}/IMPORT-REVIEW.md`,
+      reviewSummaryPath: preview.draftArtifacts?.reviewSummaryPath || `${preview.target.stackDir}/import-summary.json`,
+      reviewNotesPath: preview.draftArtifacts?.reviewNotesPath || `${preview.target.stackDir}/IMPORT-REVIEW.md`,
       importedAt: new Date().toISOString()
     };
-
-    const nextSettings = await this.saveSettings({
+    const nextSettingsDraft = this.normalizeSettings({
       ...nextSettingsBase,
       serviceOverrides: {
         ...(settings.serviceOverrides || {}),
         [item.serviceId]: importedOverride
       }
     });
-
+    const nextPreview = await this.buildImportPreview(nextSettingsDraft, item);
+    const reviewArtifacts = this.buildImportReviewArtifacts(nextPreview);
     const draft = {
-      ...this.buildImportDraftArtifacts(nextSettings, item),
+      ...this.buildImportDraftArtifacts(nextSettingsDraft, item),
       reviewSummary: reviewArtifacts.summary,
       reviewNotes: reviewArtifacts.markdown
     };
-    const generated = await writeDraftFiles(draft);
+    const generated = await this.writeDraftFiles(draft);
+
+    const nextSettings = await this.saveSettings({
+      ...nextSettingsDraft,
+      serviceOverrides: {
+        ...(nextSettingsDraft.serviceOverrides || {}),
+        [item.serviceId]: {
+          ...importedOverride,
+          reviewSummaryPath: generated.reviewSummaryPath,
+          reviewNotesPath: generated.reviewNotesPath
+        }
+      }
+    });
     await this.appendActivity({
       kind: "import-draft",
       level: "info",

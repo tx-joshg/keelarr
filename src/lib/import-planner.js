@@ -243,6 +243,8 @@ export function buildImportDraftArtifacts(settings, item) {
     composePath: target.composePath,
     envPath: target.envPath,
     envExamplePath: target.envExamplePath,
+    reviewSummaryPath: target.reviewSummaryPath || `${target.stackDir}/import-summary.json`,
+    reviewNotesPath: target.reviewNotesPath || `${target.stackDir}/IMPORT-REVIEW.md`,
     configDir: target.configDir,
     mediaDir: target.mediaDir,
     downloadsDir: target.downloadsDir,
@@ -447,7 +449,9 @@ export async function buildImportPreview(settings, item, options = {}) {
       envExists,
       composePath: target.composePath,
       envPath: target.envPath,
-      envExamplePath: target.envExamplePath
+      envExamplePath: target.envExamplePath,
+      reviewSummaryPath: draft.reviewSummaryPath,
+      reviewNotesPath: draft.reviewNotesPath
     },
     draft: {
       composeYaml: draft.composeYaml,

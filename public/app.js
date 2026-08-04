@@ -710,6 +710,15 @@ function renderImportPreview() {
 
   const preview = state.importPreview;
   const generated = currentGeneratedArtifacts();
+  const generatedPaths = generated?.serviceId === preview.target.serviceId
+    ? generated
+    : {
+        composePath: preview.draftArtifacts?.composePath || preview.target.composePath,
+        envPath: preview.draftArtifacts?.envPath || preview.target.envPath,
+        envExamplePath: preview.draftArtifacts?.envExamplePath || preview.target.envExamplePath,
+        reviewSummaryPath: preview.draftArtifacts?.reviewSummaryPath || null,
+        reviewNotesPath: preview.draftArtifacts?.reviewNotesPath || null
+      };
   const yaml = preview.draft?.composeYaml || "";
   const warnings = preview.warnings?.length
     ? preview.warnings
@@ -743,24 +752,28 @@ function renderImportPreview() {
       </div>
       <div class="preview-copy" style="margin-bottom:12px;">${escapeHtml(summary)}</div>
       <pre class="json-panel preview-code">${escapeHtml(yaml)}</pre>
-      ${generated?.serviceId === preview.target.serviceId
+      ${generatedPaths
         ? `
           <div class="preview-meta" style="margin-top:16px;">
             <div class="preview-meta-item">
               <strong>Compose</strong>
-              <span>${escapeHtml(generated.composePath || "-")}</span>
+              <span>${escapeHtml(generatedPaths.composePath || "-")}</span>
             </div>
             <div class="preview-meta-item">
               <strong>Env</strong>
-              <span>${escapeHtml(generated.envPath || "-")}</span>
+              <span>${escapeHtml(generatedPaths.envPath || "-")}</span>
+            </div>
+            <div class="preview-meta-item">
+              <strong>Env Example</strong>
+              <span>${escapeHtml(generatedPaths.envExamplePath || "-")}</span>
             </div>
             <div class="preview-meta-item">
               <strong>Summary</strong>
-              <span>${escapeHtml(generated.reviewSummaryPath || "-")}</span>
+              <span>${escapeHtml(generatedPaths.reviewSummaryPath || "-")}</span>
             </div>
             <div class="preview-meta-item">
               <strong>Review Notes</strong>
-              <span>${escapeHtml(generated.reviewNotesPath || "-")}</span>
+              <span>${escapeHtml(generatedPaths.reviewNotesPath || "-")}</span>
             </div>
           </div>
         `
