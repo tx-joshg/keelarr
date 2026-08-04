@@ -37,6 +37,24 @@ function parseEnvKeys(env = []) {
     .filter(Boolean))].sort();
 }
 
+function parseEnvironment(env = []) {
+  const entries = {};
+
+  for (const item of env) {
+    const index = item.indexOf("=");
+    const key = index === -1 ? item : item.slice(0, index);
+    const value = index === -1 ? "" : item.slice(index + 1);
+
+    if (!key) {
+      continue;
+    }
+
+    entries[key] = value;
+  }
+
+  return entries;
+}
+
 function parsePorts(inspect) {
   const networkMode = inspect.HostConfig?.NetworkMode || "default";
   const published = inspect.NetworkSettings?.Ports || {};
@@ -169,12 +187,13 @@ export async function buildAdoptionIssues(serviceMatch, inspect, mounts) {
   return issues;
 }
 
-async function buildInventoryItem(inspect) {
+async function buildInventoryItem(inspect, options = {}) {
   const serviceMatch = matchSupportedService(inspect);
   const mounts = parseMounts(inspect);
   const issues = await buildAdoptionIssues(serviceMatch, inspect, mounts);
+  const environment = parseEnvironment(inspect.Config?.Env || []);
 
-  return {
+  const item = {
     containerId: inspect.Id?.slice(0, 12) || null,
     containerName: sanitizeContainerName(inspect.Name || ""),
     image: inspect.Config?.Image || "",
@@ -188,12 +207,18 @@ async function buildInventoryItem(inspect) {
     networks: parseNetworks(inspect),
     ports: parsePorts(inspect),
     mounts,
-    envKeys: parseEnvKeys(inspect.Config?.Env || []),
+    envKeys: Object.keys(environment).sort(),
     command: inspect.Config?.Cmd || [],
     entrypoint: inspect.Config?.Entrypoint || [],
     issues,
     adoptable: Boolean(serviceMatch) && !issues.some((issue) => issue.level === "error")
   };
+
+  if (options.includeSensitive === true) {
+    item.environment = environment;
+  }
+
+  return item;
 }
 
 async function loadContainerInventory(dockerBin) {
@@ -219,9 +244,9 @@ async function loadContainerInventory(dockerBin) {
   return JSON.parse(inspectResult.stdout || "[]");
 }
 
-export async function scanDockerInventory(settings) {
+export async function scanDockerInventory(settings, options = {}) {
   const inventory = await loadContainerInventory(settings.dockerBin);
-  const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect)));
+  const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect, options)));
   const sortedItems = [...items].sort((left, right) => {
     if (left.recognized !== right.recognized) {
       return left.recognized ? -1 : 1;

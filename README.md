@@ -42,6 +42,7 @@ The dashboard can also run a read-only adoption scan:
 - Read-only Docker inventory scan for existing container adoption
 - Per-container adoption preview
 - Safe managed-draft generation for recognized existing containers
+- Managed drafts preserve the live container image, ports, restart policy, mounts, entrypoint, command, and custom Docker networks
 - Per-service deploy
 - Per-service update check
 - Per-service upgrade
@@ -132,6 +133,8 @@ After the container starts:
 6. review generated stack folders before installing any managed service
 
 If host validation fails, Stackarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
+
+For a fuller first-pass workflow on an existing QNAP stack, see [docs/qnap-first-test.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/qnap-first-test.md).
 
 ## Run The Interactive Demo
 

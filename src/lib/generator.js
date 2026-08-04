@@ -47,6 +47,20 @@ async function writeServiceFiles(settings, service) {
   };
 }
 
+export async function writeDraftFiles(draft) {
+  await mkdir(draft.stackDir, { recursive: true });
+  await writeFile(draft.composePath, draft.composeYaml, "utf8");
+  await writeFile(draft.envPath, draft.envText, "utf8");
+  await writeFile(draft.envExamplePath, draft.envExampleText, "utf8");
+
+  return {
+    serviceId: draft.serviceId,
+    composePath: draft.composePath,
+    envPath: draft.envPath,
+    envExamplePath: draft.envExamplePath
+  };
+}
+
 export async function writeStacks(settings, serviceIds = settings.selectedServiceIds) {
   const writes = [];
 
@@ -62,4 +76,3 @@ export async function writeStacks(settings, serviceIds = settings.selectedServic
 
   return writes;
 }
-

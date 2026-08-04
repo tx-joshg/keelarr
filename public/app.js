@@ -46,7 +46,10 @@ async function request(url, options = {}) {
   const data = await response.json();
 
   if (!response.ok || data.ok === false) {
-    throw new Error(data.error || "Request failed.");
+    const error = new Error(data.error || "Request failed.");
+    error.details = data.details || null;
+    error.payload = data;
+    throw error;
   }
 
   return data;
@@ -490,68 +493,6 @@ function renderImportTable() {
   `;
 }
 
-function composePreviewYaml(preview) {
-  if (!preview?.supported) {
-    return "";
-  }
-
-  const serviceId = preview.target.serviceId;
-  const configMount = preview.preservation.find((item) => item.label === "Config");
-  const mediaMount = preview.preservation.find((item) => item.label === "Media");
-  const plexLogsMount = preview.preservation.find((item) => item.label === "Plex Logs");
-  const environment = [
-    ["PUID", state.settings?.puid || "1000"],
-    ["PGID", state.settings?.pgid || "1000"],
-    ["TZ", state.settings?.tz || "America/Chicago"]
-  ];
-
-  if (serviceId === "ombi") {
-    environment.push(["VERSION", state.settings?.ombiVersion || "latest"]);
-  }
-
-  const volumes = [];
-  if (configMount?.source) {
-    volumes.push(`${configMount.source}:/config`);
-  }
-
-  if (mediaMount?.source) {
-    volumes.push(`${mediaMount.source}:/Media`);
-  }
-
-  if (plexLogsMount?.source) {
-    volumes.push(`${plexLogsMount.source}:/plex_logs:ro`);
-  }
-
-  const port = preview.target.port;
-  const lines = [
-    `name: ${serviceId}`,
-    "services:",
-    `  ${serviceId}:`,
-    `    container_name: ${serviceId}`,
-    `    image: ${preview.target.image}`,
-    "    restart: unless-stopped"
-  ];
-
-  if (port) {
-    lines.push("    ports:");
-    lines.push(`      - "${port}:${port}"`);
-  }
-
-  lines.push("    environment:");
-  for (const [key, value] of environment) {
-    lines.push(`      ${key}: "${value}"`);
-  }
-
-  if (volumes.length) {
-    lines.push("    volumes:");
-    for (const volume of volumes) {
-      lines.push(`      - "${volume}"`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
 function renderImportPreview() {
   if (!state.importPreview) {
     return '<div class="muted-paragraph">Select a recognized container from the adoption scan to preview its managed draft.</div>';
@@ -572,12 +513,19 @@ function renderImportPreview() {
   }
 
   const preview = state.importPreview;
-  const yaml = composePreviewYaml(preview);
+  const yaml = preview.draft?.composeYaml || "";
   const warnings = preview.warnings?.length
     ? preview.warnings
       .map((warning) => `<div class="preview-warning"><strong>${escapeHtml(warning.level)}:</strong> ${escapeHtml(warning.message)}</div>`)
       .join("")
     : '<div class="preview-copy">No adoption warnings.</div>';
+  const summary = [
+    `Image: ${preview.target.image}`,
+    `Container: ${preview.target.containerName}`,
+    `Restart: ${preview.target.restartPolicy || "unless-stopped"}`,
+    `Network: ${preview.target.networkMode || "default"}`,
+    `Env Keys: ${preview.draft?.envKeys?.length || 0}`
+  ].join(" \u00b7 ");
 
   return `
     <div class="preview-card">
@@ -596,6 +544,7 @@ function renderImportPreview() {
           `
           : ""}
       </div>
+      <div class="preview-copy" style="margin-bottom:12px;">${escapeHtml(summary)}</div>
       <pre class="json-panel preview-code">${escapeHtml(yaml)}</pre>
       <div style="margin-top:16px;">
         <span class="preview-section-title">Warnings</span>
@@ -1086,7 +1035,8 @@ function clearActivityView() {
 function showError(error) {
   setLatestResult("Error", {
     ok: false,
-    error: error.message
+    error: error.message,
+    details: error.details || error.payload?.details || null
   });
   ui.view = "activity";
   ui.jsonOpen = true;

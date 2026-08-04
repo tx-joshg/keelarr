@@ -1,5 +1,5 @@
-import { writeStacks } from "../generator.js";
-import { buildImportPreview } from "../import-planner.js";
+import { writeDraftFiles } from "../generator.js";
+import { buildImportDraftArtifacts, buildImportPreview } from "../import-planner.js";
 import { scanDockerInventory } from "../import-scanner.js";
 import { appendActivity, loadSettings, saveSettings } from "../store.js";
 import { StackarrError } from "../errors.js";
@@ -8,19 +8,19 @@ export class ImportService {
   constructor({
     appendActivityImpl = appendActivity,
     buildImportPreviewImpl = buildImportPreview,
+    buildImportDraftArtifactsImpl = buildImportDraftArtifacts,
     hostProfileService = null,
     loadSettingsImpl = loadSettings,
     saveSettingsImpl = saveSettings,
-    scanDockerInventoryImpl = scanDockerInventory,
-    writeStacksImpl = writeStacks
+    scanDockerInventoryImpl = scanDockerInventory
   } = {}) {
     this.appendActivity = appendActivityImpl;
     this.buildImportPreview = buildImportPreviewImpl;
+    this.buildImportDraftArtifacts = buildImportDraftArtifactsImpl;
     this.hostProfileService = hostProfileService;
     this.loadSettingsImpl = loadSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.scanDockerInventory = scanDockerInventoryImpl;
-    this.writeStacks = writeStacksImpl;
   }
 
   async loadSettings() {
@@ -50,7 +50,9 @@ export class ImportService {
       });
     }
 
-    const item = await this.findImportCandidate(settings, containerId);
+    const item = await this.findImportCandidate(settings, containerId, {
+      includeSensitive: true
+    });
     const preview = await this.buildImportPreview(settings, item);
 
     if (!preview.supported || !preview.adoptable || !item.serviceId) {
@@ -70,7 +72,8 @@ export class ImportService {
           selectedServiceIds: nextSelectedServiceIds
         });
 
-    const generated = await this.writeStacks(nextSettings, [item.serviceId]);
+    const draft = this.buildImportDraftArtifacts(nextSettings, item);
+    const generated = await writeDraftFiles(draft);
     await this.appendActivity({
       kind: "import-draft",
       level: "info",
@@ -88,8 +91,8 @@ export class ImportService {
     };
   }
 
-  async findImportCandidate(settings, containerId) {
-    const inventory = await this.scanDockerInventory(settings);
+  async findImportCandidate(settings, containerId, options = {}) {
+    const inventory = await this.scanDockerInventory(settings, options);
     const item = inventory.items.find((candidate) => candidate.containerId === containerId);
 
     if (!item) {
