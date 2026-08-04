@@ -1,0 +1,20 @@
+{
+  "name": "stackarr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Arr-focused Compose controller MVP for Sonarr, Radarr, Trailarr, Ombi, and Tautulli style stacks.",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "demo": "STACKARR_DEMO=1 node src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "yaml": "^2.8.1"
+  }
+}
