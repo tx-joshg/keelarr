@@ -154,7 +154,7 @@ function buildVolumeArtifacts(serviceId, mounts = []) {
   };
 }
 
-function buildNetworkArtifacts(item) {
+function buildNetworkArtifacts(item, projectName) {
   if (item.networkMode === "host" || item.networkMode === "none") {
     return {
       networkMode: item.networkMode,
@@ -163,7 +163,13 @@ function buildNetworkArtifacts(item) {
     };
   }
 
-  const externalNetworks = (item.networks || []).filter((network) => !["bridge", "host", "none"].includes(network.name));
+  // A container already running under Compose sits on <project>_default, which
+  // Compose recreates on its own. Emitting that as an external network with a
+  // pinned auto-assigned IP is both wrong and brittle.
+  const projectDefaultNetwork = `${projectName}_default`;
+  const externalNetworks = (item.networks || []).filter(
+    (network) => !["bridge", "host", "none"].includes(network.name) && network.name !== projectDefaultNetwork
+  );
 
   if (!externalNetworks.length) {
     // A container on Docker's default bridge has to stay there. Emitting no
@@ -199,7 +205,7 @@ export function buildImportDraftArtifacts(settings, item) {
   const filteredEnvironment = filterImportedEnvironment(item.environment || {});
   const environmentArtifacts = buildEnvironmentSpec(filteredEnvironment, item.envKeys || []);
   const volumeArtifacts = buildVolumeArtifacts(target.id, item.mounts || []);
-  const networkArtifacts = buildNetworkArtifacts(item);
+  const networkArtifacts = buildNetworkArtifacts(item, target.id);
   const composeService = {
     container_name: item.containerName || target.containerName,
     image: item.image || target.image,

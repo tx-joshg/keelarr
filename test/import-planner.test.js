@@ -279,3 +279,25 @@ test("a custom external network is still emitted as a network, not a mode", () =
   assert.deepEqual(draft.composeSpec.services.sabnzbd.networks, { "qnet-static": { ipv4_address: "198.51.100.40" } });
   assert.equal(draft.composeSpec.networks["qnet-static"].external, true);
 });
+
+test("a compose project's own default network is left for compose to recreate", () => {
+  const draft = buildImportDraftArtifacts(baseSettings, {
+    containerId: "abc",
+    containerName: "trailarr",
+    serviceId: "trailarr",
+    image: "nandyalu/trailarr:latest",
+    // Already compose-managed: it sits on <project>_default with an
+    // auto-assigned address that must not be pinned into the draft.
+    networkMode: "trailarr_default",
+    networks: [{ name: "trailarr_default", address: "172.29.4.2" }],
+    ports: [{ containerPort: "7889/tcp", hostIp: "0.0.0.0", hostPort: "7889" }],
+    mounts: [{ type: "bind", source: "/share/Container/trailarr/config", target: "/config", mode: "rw" }],
+    environment: {},
+    envKeys: []
+  });
+
+  assert.equal(draft.composeSpec.services.trailarr.networks, undefined);
+  assert.equal(draft.composeSpec.services.trailarr.network_mode, undefined);
+  assert.equal(draft.composeSpec.networks, undefined);
+  assert.doesNotMatch(draft.composeYaml, /172\.29\.4\.2/);
+});
