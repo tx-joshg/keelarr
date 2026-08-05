@@ -424,43 +424,68 @@ export class ManagedStackService {
     }
   }
 
+  /**
+   * The single deploy path. Save And Deploy, per-service install, and setup all
+   * go through this, so the post-deploy bookkeeping cannot be applied to one
+   * and missed by another.
+   */
+  async deployOne(settings, service, logger, { backup = false } = {}) {
+    const serviceLogger = logger.child({
+      serviceId: service.id,
+      containerName: service.containerName
+    });
+
+    await this.prepareNetwork(settings, service, serviceLogger);
+
+    const result = backup
+      ? await this.installService(settings, service, { logger: serviceLogger })
+      : await this.generateAndDeploy(settings, service, { logger: serviceLogger });
+
+    logger[result.ok ? "info" : "error"]("service.deploy", {
+      serviceId: service.id,
+      serviceName: service.name,
+      containerName: service.containerName,
+      composePath: service.composePath,
+      envPath: service.envPath,
+      ok: result.ok,
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
+
+    if (result.ok) {
+      // A deploy just resolved and pulled the tag, so the service is current by
+      // definition. Leaving the old status made a freshly installed app show
+      // "Unknown" until someone ran a manual update check.
+      await this.recordFreshImageState(service.id);
+    }
+
+    await this.appendActivity({
+      kind: "deploy",
+      level: result.ok ? "info" : "error",
+      message: result.ok ? `Deployed ${service.name}.` : `Deploy failed for ${service.name}.`,
+      details: {
+        serviceId: service.id,
+        ok: result.ok,
+        output: `${result.stdout}\n${result.stderr}`.trim()
+      }
+    });
+
+    return {
+      serviceId: service.id,
+      ok: result.ok,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      output: `${result.stdout}\n${result.stderr}`.trim()
+    };
+  }
+
   async deploySelected(settings, serviceIds = settings.selectedServiceIds, context = {}) {
     const logger = this.scopedLogger(context);
     const deployResults = [];
 
     for (const serviceId of serviceIds) {
       const service = this.requireService(settings, serviceId);
-      await this.prepareNetwork(settings, service, logger);
-      const result = await this.generateAndDeploy(settings, service, {
-        logger: logger.child({
-          serviceId: service.id,
-          containerName: service.containerName
-        })
-      });
-      const deployEntry = {
-        serviceId,
-        ok: result.ok,
-        output: `${result.stdout}\n${result.stderr}`.trim()
-      };
-      deployResults.push(deployEntry);
-
-      logger[result.ok ? "info" : "error"]("service.deploy", {
-        serviceId: service.id,
-        serviceName: service.name,
-        containerName: service.containerName,
-        composePath: service.composePath,
-        envPath: service.envPath,
-        ok: result.ok,
-        stdout: result.stdout,
-        stderr: result.stderr
-      });
-
-      await this.appendActivity({
-        kind: "deploy",
-        level: result.ok ? "info" : "error",
-        message: result.ok ? `Deployed ${service.name}.` : `Deploy failed for ${service.name}.`,
-        details: deployEntry
-      });
+      deployResults.push(await this.deployOne(settings, service, logger));
     }
 
     return deployResults;
@@ -491,38 +516,10 @@ export class ManagedStackService {
   async installManagedService(serviceId, context = {}) {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
-    const logger = this.scopedLogger(context);
     await this.writeStacks(settings, [service.id]);
-    await this.prepareNetwork(settings, service, logger);
-    const result = await this.installService(settings, service, {
-      logger: logger.child({
-        serviceId: service.id,
-        containerName: service.containerName
-      })
-    });
-
-    logger[result.ok ? "info" : "error"]("service.install", {
-      serviceId: service.id,
-      serviceName: service.name,
-      containerName: service.containerName,
-      ok: result.ok,
-      stdout: result.stdout,
-      stderr: result.stderr
-    });
-
-    if (result.ok) {
-      await this.recordFreshImageState(service.id);
-    }
-
-    await this.appendActivity({
-      kind: "install",
-      level: result.ok ? "info" : "error",
-      message: result.ok ? `Installed ${service.name}.` : `Install failed for ${service.name}.`,
-      details: {
-        stdout: result.stdout,
-        stderr: result.stderr
-      }
-    });
+    // backup: an install may be replacing an existing container, so capture
+    // the rollback point first.
+    const result = await this.deployOne(settings, service, this.scopedLogger(context), { backup: true });
 
     return {
       ok: result.ok,

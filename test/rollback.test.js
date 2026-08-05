@@ -625,3 +625,71 @@ test("Upgrade All says so plainly when there is nothing to do", async (t) => {
 
   assert.match(job.result.summary, /Nothing to upgrade/);
 });
+
+/* --- a freshly deployed service must not report "Unknown" --- */
+
+function createDeployService(t, stack, updateState, deployed) {
+  return new ManagedStackService({
+    logger: silentLogger,
+    loadSettingsImpl: async () => stack.settings,
+    ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
+    generateAndDeployImpl: async (_s, svc) => {
+      deployed.push(svc.id);
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    installServiceImpl: async (_s, svc) => {
+      deployed.push(`install:${svc.id}`);
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    writeStacksImpl: async () => [],
+    readUpdateStateImpl: async () => updateState,
+    writeUpdateStateImpl: async (next) => Object.assign(updateState, next),
+    appendActivityImpl: async () => {}
+  });
+}
+
+test("Save And Deploy records the freshly pulled state, not Unknown", async (t) => {
+  const stack = await createStackWith(t, ["lidarr"]);
+  const updateState = {};
+  const deployed = [];
+  const service = createDeployService(t, stack, updateState, deployed);
+
+  await service.deploySelected(stack.settings, ["lidarr"]);
+
+  assert.deepEqual(deployed, ["lidarr"]);
+  // A deploy just resolved and pulled the tag; reporting "Unknown" until a
+  // manual update check is plainly wrong.
+  assert.equal(updateState.lidarr.status, "current");
+  assert.ok(updateState.lidarr.checkedAt);
+});
+
+test("per-service install records the same state as Save And Deploy", async (t) => {
+  const stack = await createStackWith(t, ["lidarr"]);
+  const updateState = {};
+  const deployed = [];
+  const service = createDeployService(t, stack, updateState, deployed);
+
+  await service.installManagedService("lidarr");
+
+  assert.deepEqual(deployed, ["install:lidarr"]);
+  assert.equal(updateState.lidarr.status, "current");
+});
+
+test("a failed deploy does not claim the service is current", async (t) => {
+  const stack = await createStackWith(t, ["lidarr"]);
+  const updateState = {};
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    loadSettingsImpl: async () => stack.settings,
+    ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
+    generateAndDeployImpl: async () => ({ ok: false, stdout: "", stderr: "port in use" }),
+    readUpdateStateImpl: async () => updateState,
+    writeUpdateStateImpl: async (next) => Object.assign(updateState, next),
+    appendActivityImpl: async () => {}
+  });
+
+  const [result] = await service.deploySelected(stack.settings, ["lidarr"]);
+
+  assert.equal(result.ok, false);
+  assert.equal(updateState.lidarr, undefined);
+});
