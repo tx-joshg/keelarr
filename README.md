@@ -27,16 +27,20 @@ The core workflow is:
 
 ## Current Validated State
 
-As of August 5, 2026, the live QNAP test has validated these pieces end to end:
+As of August 5, 2026, all eight catalog services run under Stackarr management
+on the live QNAP. Six were imported from existing containers; Prowlarr and
+Bazarr were installed from the catalog in one click. See
+[docs/qnap-first-test.md](docs/qnap-first-test.md) for the per-service detail.
+
+Validated on that host:
 
 - Stackarr runs as its own controller container on QNAP through `deploy/compose.example.yml`
 - host detection and validation succeed against the QNAP share layout using `docker` inside the controller container
-- adoption scan finds the live Arr/Ombi/Tautulli/SABnzbd stack without exposing secret values in the UI
-- managed draft generation preserves the live container shape for imported services
-- `trailarr` has been cut over successfully to Compose management at `/share/Container/docker/trailarr/compose.yml`
-- the dashboard now reports Trailarr as `Generated`, `Running`, `Healthy`, and `Managed`
-
-The remaining live apps are still detected correctly, but they have not been migrated under Stackarr management yet.
+- adoption scan finds the live stack without exposing secret values in the UI
+- managed drafts preserve the live container shape, including host networking, a custom network with a static address, named volumes, and entrypoint/command overrides
+- per-service versions are read from image labels, so `:latest` tags still show a real release
+- a real upgrade, a rollback to the previous image digest, and an upgrade forward that cleared the pin
+- one-click install of Prowlarr and Bazarr, both healthy and able to reach the rest of the stack
 
 The dashboard can also run a read-only adoption scan:
 
@@ -52,6 +56,9 @@ The dashboard can also run a read-only adoption scan:
 - Arr-focused service catalog
 - Per-app Compose generation
 - `.env` generation beside each stack, with a key-only `.env.example` that documents the expected keys without repeating this host's resolved paths
+- Catalog-installed services join a shared `stackarr` network so they resolve each other by container name; imported services keep the network they were already on
+- Per-service version read from image labels rather than the image tag
+- Image rollback to the previously running digest, verified before it is kept, with automatic restore if it fails to come up
 - Read-only Docker inventory scan for existing container adoption
 - Per-container adoption preview
 - Safe managed-draft generation for recognized existing containers
@@ -70,6 +77,24 @@ The dashboard can also run a read-only adoption scan:
 - Pre-upgrade backups of compose files and container inspect output
 - Each backup also writes `rollback.json` recording the image id and repo digest the container was running before the operation, so a rollback can pin the previous image instead of re-pulling a mutable tag
 - Per-service cutover and revert from the dashboard, run as background jobs with a live step checklist (see [Cutover](#cutover))
+
+## Rollback
+
+Every install and upgrade writes `rollback.json` recording the image id and repo
+digest the container was running beforehand. A `Roll Back` button appears on a
+managed service once such a record exists and its image is still present on the
+host.
+
+```text
+POST /api/services/:serviceId/rollback -> 202 { job }
+```
+
+Rollback pins the image digest directly into `compose.yml` and recreates the
+container, then verifies it the same way a cutover does. If it fails to come
+up, the newer image is restored automatically. The pin stays until an upgrade
+clears it, so a rolled-back service will not silently jump forward on the next
+deploy — and upgrading always clears the pin first, so it can still move
+forward when you want it to.
 
 ## Cutover
 
@@ -119,8 +144,7 @@ Outcomes:
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control
-- Full rollback to previous images
-- App-to-app API provisioning
+- App-to-app API provisioning (indexers, download clients, and API keys are still configured inside each app)
 - Reverse proxy and certificate automation
 - One-click indexer/download-client/provider setup inside each app
 - Generic marketplace support for unrelated self-hosted software
