@@ -11,27 +11,53 @@ export const HEALTH_OUTCOME = Object.freeze({
 
 const DEAD_STATUSES = new Set(["exited", "dead", "removing"]);
 
-export async function probeAppUrl(service) {
+const PROBE_TIMEOUT_MS = 1500;
+// A reachable app answers fast; re-checking every refresh adds nothing.
+const PROBE_OK_TTL_MS = 20_000;
+// A failure is usually structural — a bridge-networked container cannot reach
+// the host's published ports at all — so re-probing it every few seconds just
+// burns the timeout again. Back off harder on failure than on success.
+const PROBE_FAIL_TTL_MS = 90_000;
+
+const probeCache = new Map();
+
+export function clearProbeCache() {
+  probeCache.clear();
+}
+
+export async function probeAppUrl(service, options = {}) {
+  const now = options.nowImpl ? options.nowImpl() : Date.now();
+  const cached = probeCache.get(service.appUrl);
+
+  if (cached && now - cached.at < (cached.value.reachable ? PROBE_OK_TTL_MS : PROBE_FAIL_TTL_MS)) {
+    return cached.value;
+  }
+
+  let value;
+
   try {
     const startedAt = Date.now();
     const response = await fetch(service.appUrl, {
       redirect: "manual",
-      signal: AbortSignal.timeout(2500)
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
     });
 
-    return {
+    value = {
       reachable: service.healthStatuses.includes(response.status),
       latencyMs: Date.now() - startedAt,
       httpStatus: response.status
     };
   } catch (error) {
-    return {
+    value = {
       reachable: false,
       latencyMs: null,
       httpStatus: null,
       error: error.message
     };
   }
+
+  probeCache.set(service.appUrl, { at: now, value });
+  return value;
 }
 
 /**

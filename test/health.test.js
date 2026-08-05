@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { HEALTH_OUTCOME, classifyHealthSnapshot, isProbeableAppUrl, verifyServiceHealth } from "../src/lib/health.js";
+import { HEALTH_OUTCOME, classifyHealthSnapshot, clearProbeCache, isProbeableAppUrl, probeAppUrl, verifyServiceHealth } from "../src/lib/health.js";
 
 const service = {
   containerName: "trailarr",
@@ -155,4 +155,54 @@ test("an unprobeable app URL reports honestly instead of claiming the app did no
   assert.equal(result.outcome, HEALTH_OUTCOME.UNVERIFIED);
   assert.match(result.reason, /not reachable from the controller/);
   assert.doesNotMatch(result.reason, /did not respond/);
+});
+
+test("probe results are cached so a refresh does not re-pay the timeout", async () => {
+  clearProbeCache();
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return { status: 200 };
+  };
+
+  const svc = { appUrl: "http://198.51.100.2:7878", healthStatuses: [200] };
+
+  try {
+    await probeAppUrl(svc);
+    await probeAppUrl(svc);
+    await probeAppUrl(svc);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearProbeCache();
+  }
+});
+
+test("a failing probe backs off harder than a succeeding one", async () => {
+  clearProbeCache();
+  let calls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls += 1;
+    throw new Error("timed out");
+  };
+
+  const svc = { appUrl: "http://198.51.100.2:6767", healthStatuses: [200] };
+
+  try {
+    let clock = 0;
+    await probeAppUrl(svc, { nowImpl: () => clock });
+    // Still inside the success TTL but well inside the longer failure TTL.
+    clock = 30_000;
+    await probeAppUrl(svc, { nowImpl: () => clock });
+    assert.equal(calls, 1, "a structural failure should not be re-probed every refresh");
+
+    clock = 120_000;
+    await probeAppUrl(svc, { nowImpl: () => clock });
+    assert.equal(calls, 2, "it must eventually retry in case the app came back");
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearProbeCache();
+  }
 });
