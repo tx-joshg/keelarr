@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 
 import {
   activityPath,
@@ -46,9 +46,21 @@ async function readJson(filePath, fallback) {
   }
 }
 
-async function writeJson(filePath, value) {
+export async function writeJson(filePath, value) {
   await ensureDataDir();
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+
+  // Write to a sibling temp file and rename so a crash mid-write cannot leave
+  // a truncated settings/activity file behind. Rename is atomic within a
+  // filesystem, and the temp file always lands in the same directory.
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+
+  try {
+    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
 }
 
 function sanitizeSelectedServiceIds(value) {

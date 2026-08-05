@@ -15,29 +15,39 @@ async function fileExists(filePath) {
   }
 }
 
-function buildEnvLines(settings, service) {
-  const lines = [
-    `PUID=${settings.puid}`,
-    `PGID=${settings.pgid}`,
-    `TZ=${settings.tz}`,
-    `PORT=${service.port}`,
-    `CONFIG_DIR=${service.configDir}`,
-    `MEDIA_DIR=${settings.mediaRoot}`
+export function buildEnvEntries(settings, service) {
+  const entries = [
+    ["PUID", settings.puid],
+    ["PGID", settings.pgid],
+    ["TZ", settings.tz],
+    ["PORT", service.port],
+    ["CONFIG_DIR", service.configDir],
+    ["MEDIA_DIR", settings.mediaRoot]
   ];
 
   if (service.id === "ombi") {
-    lines.push(`OMBI_VERSION=${settings.ombiVersion}`);
+    entries.push(["OMBI_VERSION", settings.ombiVersion]);
   }
 
   if (service.volumes.includes("plex_logs")) {
-    lines.push(`PLEX_LOGS_DIR=${settings.plexLogsRoot}`);
+    entries.push(["PLEX_LOGS_DIR", settings.plexLogsRoot]);
   }
 
   if (service.id === "sabnzbd") {
-    lines.push(`DOWNLOADS_DIR=${settings.downloadsRoot}`);
+    entries.push(["DOWNLOADS_DIR", settings.downloadsRoot]);
   }
 
-  return `${lines.join("\n")}\n`;
+  return entries;
+}
+
+export function renderEnvText(entries) {
+  return `${entries.map(([key, value]) => `${key}=${value}`).join("\n")}\n`;
+}
+
+// The example file documents which keys a stack expects without baking in this
+// host's resolved values, matching how imported drafts render `.env.example`.
+export function renderEnvExampleText(entries) {
+  return `${entries.map(([key]) => `${key}=`).join("\n")}\n`;
 }
 
 async function writeServiceFiles(settings, service) {
@@ -45,11 +55,11 @@ async function writeServiceFiles(settings, service) {
 
   const composeSpec = buildComposeSpec(settings, service);
   const composeText = YAML.stringify(composeSpec);
-  const envText = buildEnvLines(settings, service);
+  const envEntries = buildEnvEntries(settings, service);
 
   await writeFile(service.composePath, composeText, "utf8");
-  await writeFile(service.envPath, envText, "utf8");
-  await writeFile(service.envExamplePath, envText, "utf8");
+  await writeFile(service.envPath, renderEnvText(envEntries), "utf8");
+  await writeFile(service.envExamplePath, renderEnvExampleText(envEntries), "utf8");
 
   return {
     serviceId: service.id,

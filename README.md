@@ -51,7 +51,7 @@ The dashboard can also run a read-only adoption scan:
 - Host detection with confidence hints and QNAP-aware suggestions
 - Arr-focused service catalog
 - Per-app Compose generation
-- `.env` generation beside each stack
+- `.env` generation beside each stack, with a key-only `.env.example` that documents the expected keys without repeating this host's resolved paths
 - Read-only Docker inventory scan for existing container adoption
 - Per-container adoption preview
 - Safe managed-draft generation for recognized existing containers
@@ -68,6 +68,7 @@ The dashboard can also run a read-only adoption scan:
 - Reachability checks against each app URL
 - Compose runtime checks via `docker compose ps`
 - Pre-upgrade backups of compose files and container inspect output
+- Each backup also writes `rollback.json` recording the image id and repo digest the container was running before the operation, so a rollback can pin the previous image instead of re-pulling a mutable tag
 
 ## What Is Still Deliberately Missing
 
@@ -153,7 +154,7 @@ After the container starts:
 
 If host validation fails, Stackarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
 
-For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/qnap-first-test.md).
+For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](docs/qnap-first-test.md).
 
 ## Logging
 
@@ -186,18 +187,18 @@ In demo mode:
 - `Open` buttons land on Stackarr-served stub app pages
 - `Reset Demo` restores the seeded scenario
 
-There is also a short guided walkthrough in [stackarr-demo-walkthrough.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/outputs/stackarr-demo-walkthrough.md).
+There is also a short guided walkthrough in [docs/demo-walkthrough.md](docs/demo-walkthrough.md).
 
 ## Product Foundation
 
-The build decisions for scope, support tiers, onboarding, and Docker-first host support are documented in [docs/foundation.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/foundation.md).
+The build decisions for scope, support tiers, onboarding, and Docker-first host support are documented in [docs/foundation.md](docs/foundation.md).
 
 The detailed interaction and platform specs live in:
 
-- [docs/product-spec.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/product-spec.md)
-- [docs/host-support.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/host-support.md)
-- [docs/architecture.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/architecture.md)
-- [docs/roadmap.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/roadmap.md)
+- [docs/product-spec.md](docs/product-spec.md)
+- [docs/host-support.md](docs/host-support.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/roadmap.md](docs/roadmap.md)
 
 ## QNAP Notes
 

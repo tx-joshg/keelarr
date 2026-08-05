@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildServicesFromSelection, buildComposeSpec } from "../src/lib/service-catalog.js";
-import { writeDraftFiles, writeStacks } from "../src/lib/generator.js";
+import {
+  buildEnvEntries,
+  renderEnvExampleText,
+  renderEnvText,
+  writeDraftFiles,
+  writeStacks
+} from "../src/lib/generator.js";
 import { normalizeSettings } from "../src/lib/store.js";
 
 test("builds a compose spec with expected media and config mounts", () => {
@@ -27,6 +33,45 @@ test("builds a compose spec with expected media and config mounts", () => {
     "${CONFIG_DIR}:/config",
     "${MEDIA_DIR}:/Media"
   ]);
+});
+
+test("renders .env with resolved values and .env.example with keys only", () => {
+  const settings = normalizeSettings({
+    stackRoot: "/share/Container/docker",
+    configRoot: "/share/Container",
+    mediaRoot: "/share/Media",
+    downloadsRoot: "/share/Media/Downloads",
+    selectedServiceIds: ["radarr"]
+  });
+  const entries = buildEnvEntries(settings, settings.services.radarr);
+
+  assert.match(renderEnvText(entries), /^MEDIA_DIR=\/share\/Media$/m);
+  assert.match(renderEnvExampleText(entries), /^MEDIA_DIR=$/m);
+  assert.doesNotMatch(renderEnvExampleText(entries), /\/share\/Media/);
+});
+
+test("writeStacks keeps host values out of the generated .env.example", async () => {
+  const stackRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-env-"));
+  const settings = normalizeSettings({
+    stackRoot,
+    configRoot: "/share/Container",
+    mediaRoot: "/share/Media",
+    downloadsRoot: "/share/Media/Downloads",
+    selectedServiceIds: ["sabnzbd"]
+  });
+
+  await writeStacks(settings, ["sabnzbd"]);
+
+  const envText = await readFile(settings.services.sabnzbd.envPath, "utf8");
+  const envExampleText = await readFile(settings.services.sabnzbd.envExamplePath, "utf8");
+
+  assert.match(envText, /^DOWNLOADS_DIR=\/share\/Media\/Downloads$/m);
+  assert.match(envExampleText, /^DOWNLOADS_DIR=$/m);
+  assert.doesNotMatch(envExampleText, /\/share\//);
+
+  // Both files must still describe the same key set.
+  const keysOf = (text) => text.trim().split("\n").map((line) => line.split("=")[0]);
+  assert.deepEqual(keysOf(envExampleText), keysOf(envText));
 });
 
 test("writes import review artifacts beside a managed draft", async () => {

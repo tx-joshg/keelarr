@@ -69,6 +69,26 @@ async function readContainerImageId(settings, service, options = {}) {
   return normalizeImageId(result.stdout);
 }
 
+async function readImageRepoDigest(settings, imageRef, options = {}) {
+  if (!imageRef) {
+    return null;
+  }
+
+  const result = await runCommand(
+    settings.dockerBin,
+    ["image", "inspect", imageRef, "--format", "{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}"],
+    {
+      logger: options.logger
+    }
+  );
+
+  if (!result.ok) {
+    return null;
+  }
+
+  return normalizeImageId(result.stdout);
+}
+
 async function readTaggedImageId(settings, service, options = {}) {
   const result = await runCommand(settings.dockerBin, ["image", "inspect", service.image, "--format", "{{.Id}}"], {
     logger: options.logger
@@ -81,8 +101,24 @@ async function readTaggedImageId(settings, service, options = {}) {
   return normalizeImageId(result.stdout);
 }
 
+export function buildRollbackRecord(service, { imageId, imageRepoDigest, backedUpAt }) {
+  return {
+    serviceId: service.id,
+    containerName: service.containerName,
+    // The tag the stack asks for, which is usually mutable (`:latest`).
+    image: service.image || null,
+    // The image the container was actually running before this operation.
+    // Rollback needs this: re-pulling the tag after an upgrade would just
+    // fetch the new image again.
+    imageId: imageId || null,
+    imageRepoDigest: imageRepoDigest || null,
+    backedUpAt
+  };
+}
+
 export async function backupService(settings, service, options = {}) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backedUpAt = new Date().toISOString();
+  const timestamp = backedUpAt.replace(/[:.]/g, "-");
   const backupDir = path.join(settings.stackRoot, ".stackarr-backups", service.id, timestamp);
   await mkdir(backupDir, { recursive: true });
 
@@ -96,7 +132,27 @@ export async function backupService(settings, service, options = {}) {
     await writeFile(path.join(backupDir, "inspect.json"), inspectResult.stdout, "utf8");
   }
 
-  return backupDir;
+  // Capture the running image identity before anything pulls or recreates it.
+  const imageId = await readContainerImageId(settings, service, options);
+  const rollback = buildRollbackRecord(service, {
+    imageId,
+    imageRepoDigest: await readImageRepoDigest(settings, imageId, options),
+    backedUpAt
+  });
+  await writeFile(path.join(backupDir, "rollback.json"), `${JSON.stringify(rollback, null, 2)}\n`, "utf8");
+
+  options.logger?.info("service.backup", {
+    serviceId: service.id,
+    containerName: service.containerName,
+    backupDir,
+    imageId: rollback.imageId,
+    imageRepoDigest: rollback.imageRepoDigest
+  });
+
+  return {
+    backupDir,
+    rollback
+  };
 }
 
 export async function composePs(settings, service, options = {}) {
