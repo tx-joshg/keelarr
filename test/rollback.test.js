@@ -554,3 +554,74 @@ test("Upgrade All skips services that were never installed", async (t) => {
   assert.equal(job.result.skipped, 1);
   assert.equal(job.result.failed, 0);
 });
+
+test("Upgrade All only touches services that actually have an update", async (t) => {
+  const stack = await createStackWith(t, ["radarr", "sonarr", "ombi"]);
+  const attempted = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async (_s, svc) => {
+      attempted.push(svc.id);
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
+    readUpdateStateImpl: async () => ({
+      radarr: { status: "ready" },
+      sonarr: { status: "current" },
+      ombi: { status: "current" }
+    }),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  // Recreating an already-current live service is pointless churn and a
+  // needless chance for it not to come back.
+  assert.deepEqual(attempted, ["radarr"]);
+  assert.equal(job.result.upgraded, 1);
+  assert.equal(job.result.skipped, 2);
+  assert.match(job.steps.find((s) => s.name === "sonarr").detail, /Already current/);
+});
+
+test("Upgrade All with force re-pulls everything regardless of status", async (t) => {
+  const stack = await createStackWith(t, ["radarr", "sonarr"]);
+  const attempted = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async (_s, svc) => {
+      attempted.push(svc.id);
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
+    readUpdateStateImpl: async () => ({ radarr: { status: "current" }, sonarr: { status: "current" } }),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll({ force: true }).create()).id);
+
+  assert.deepEqual(attempted, ["radarr", "sonarr"]);
+  assert.equal(job.result.upgraded, 2);
+});
+
+test("Upgrade All says so plainly when there is nothing to do", async (t) => {
+  const stack = await createStackWith(t, ["radarr"]);
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+    readUpdateStateImpl: async () => ({ radarr: { status: "current" } }),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  assert.match(job.result.summary, /Nothing to upgrade/);
+});

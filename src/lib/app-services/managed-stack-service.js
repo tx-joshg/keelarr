@@ -723,18 +723,34 @@ export class ManagedStackService {
           steps: services.map((service) => ({ name: service.id, label: `Upgrade ${service.name}` }))
         });
 
-        return this.jobs.start(job, (ctx) => this.runUpgradeAll(ctx, settings, services, context));
+        return this.jobs.start(job, (ctx) => this.runUpgradeAll(ctx, settings, services, context, input));
       }
     };
   }
 
-  async runUpgradeAll(ctx, settings, services, context) {
+  async runUpgradeAll(ctx, settings, services, context, input = {}) {
     const logger = this.scopedLogger(context);
     const results = [];
+    // Only touch what actually has an update. Pulling and recreating a service
+    // that is already current is pointless churn on a live stack, and every
+    // recreate is a chance for something to not come back.
+    const updateState = await this.readUpdateState();
 
     for (const service of services) {
       try {
         const result = await ctx.step(service.id, async () => {
+          const stored = updateState[service.id]?.status;
+
+          if (!input?.force && stored && stored !== "ready" && stored !== "unknown") {
+            return {
+              serviceId: service.id,
+              ok: true,
+              skipped: true,
+              reason: stored === "not-deployed" ? "not-deployed" : "up-to-date",
+              detail: stored === "not-deployed" ? "Not installed, skipped." : "Already current, skipped."
+            };
+          }
+
           const outcome = await this.upgradeOne(settings, service, logger);
 
           if (!outcome.ok) {
@@ -784,7 +800,9 @@ export class ManagedStackService {
       results,
       summary: failed.length
         ? `${upgraded.length} upgraded, ${failed.length} failed${skipped.length ? `, ${skipped.length} skipped` : ""}.`
-        : `${upgraded.length} upgraded${skipped.length ? `, ${skipped.length} skipped` : ""}.`
+        : upgraded.length === 0
+          ? `Nothing to upgrade — all ${skipped.length} services are already current.`
+          : `${upgraded.length} upgraded${skipped.length ? `, ${skipped.length} already current` : ""}.`
     };
   }
 }

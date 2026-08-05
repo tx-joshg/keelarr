@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { HEALTH_OUTCOME, classifyHealthSnapshot, verifyServiceHealth } from "../src/lib/health.js";
+import { HEALTH_OUTCOME, classifyHealthSnapshot, isProbeableAppUrl, verifyServiceHealth } from "../src/lib/health.js";
 
 const service = {
   containerName: "trailarr",
@@ -122,4 +122,37 @@ test("verifyServiceHealth does not probe a container that is not running", async
   });
 
   assert.equal(probes, 0);
+});
+
+test("a loopback app URL is not probed, since localhost is the controller not the host", () => {
+  assert.equal(isProbeableAppUrl("http://localhost:7878"), false);
+  assert.equal(isProbeableAppUrl("http://127.0.0.1:7878"), false);
+  assert.equal(isProbeableAppUrl("http://0.0.0.0:7878"), false);
+  assert.equal(isProbeableAppUrl(""), false);
+  assert.equal(isProbeableAppUrl("http://198.51.100.2:7878"), true);
+  assert.equal(isProbeableAppUrl("http://nas.local:7878"), true);
+});
+
+test("an unprobeable app URL reports honestly instead of claiming the app did not respond", async () => {
+  let probes = 0;
+  let clock = 0;
+
+  const result = await verifyServiceHealth({}, { containerName: "radarr", appUrl: "http://localhost:7878", healthStatuses: [200] }, {
+    inspectImpl: async () => ({ exists: true, status: "running", healthStatus: null }),
+    probeImpl: async () => {
+      probes += 1;
+      return { reachable: false, httpStatus: null, error: "fetch failed" };
+    },
+    sleepImpl: async () => {
+      clock += 1_000;
+    },
+    intervalMs: 0,
+    timeoutMs: 2_000,
+    nowImpl: () => clock
+  });
+
+  assert.equal(probes, 0);
+  assert.equal(result.outcome, HEALTH_OUTCOME.UNVERIFIED);
+  assert.match(result.reason, /not reachable from the controller/);
+  assert.doesNotMatch(result.reason, /did not respond/);
 });

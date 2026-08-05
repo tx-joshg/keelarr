@@ -77,11 +77,30 @@ export function classifyHealthSnapshot(state, probe = null) {
     outcome: "running-unverified",
     reason: probe?.error
       ? `Container is running but the app URL did not respond (${probe.error}).`
-      : "Container is running but no healthcheck or app response confirmed it."
+      : probe === null
+        ? "Container is running. No healthcheck, and the app URL is not reachable from the controller, so health could not be confirmed."
+        : "Container is running but no healthcheck or app response confirmed it."
   };
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A loopback app URL is meaningless from inside the controller container:
+ * localhost is the controller, not the host. Probing it always fails, which
+ * would report every healthy service as unverified.
+ */
+export function isProbeableAppUrl(value) {
+  if (!value) {
+    return false;
+  }
+
+  try {
+    return !["localhost", "127.0.0.1", "::1", "0.0.0.0"].includes(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Polls until the service is confirmed healthy, confirmed dead, or the
@@ -109,7 +128,7 @@ export async function verifyServiceHealth(settings, service, options = {}) {
   while (true) {
     attempts += 1;
     lastState = await inspectImpl(settings, service.containerName, { logger });
-    lastProbe = lastState.exists && lastState.status === "running" && service.appUrl
+    lastProbe = lastState.exists && lastState.status === "running" && isProbeableAppUrl(service.appUrl)
       ? await probeImpl(service)
       : null;
     last = classifyHealthSnapshot(lastState, lastProbe);
