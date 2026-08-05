@@ -8,17 +8,22 @@ export class StackarrAppService {
     dashboardService = null,
     hostProfileService = null,
     importService = null,
+    logger = null,
     managedStackService = null
   } = {}) {
-    this.hostProfileService = hostProfileService || new HostProfileService();
+    this.hostProfileService = hostProfileService || new HostProfileService({
+      logger
+    });
     this.dashboardService = dashboardService || new DashboardService({
       hostProfileService: this.hostProfileService
     });
     this.importService = importService || new ImportService({
-      hostProfileService: this.hostProfileService
+      hostProfileService: this.hostProfileService,
+      logger
     });
     this.managedStackService = managedStackService || new ManagedStackService({
-      hostProfileService: this.hostProfileService
+      hostProfileService: this.hostProfileService,
+      logger
     });
   }
 
@@ -34,11 +39,11 @@ export class StackarrAppService {
     return this.dashboardService.buildState();
   }
 
-  async detectHost(input = null) {
-    return this.hostProfileService.detectHost(input);
+  async detectHost(input = null, context = {}) {
+    return this.hostProfileService.detectHost(input, context);
   }
 
-  async setup(input = {}) {
+  async setup(input = {}, context = {}) {
     const {
       settings,
       generated,
@@ -46,9 +51,9 @@ export class StackarrAppService {
       effectiveSettings,
       validation,
       deploy
-    } = await this.hostProfileService.prepareSetup(input);
+    } = await this.hostProfileService.prepareSetup(input, context);
     const deployResults = deploy
-      ? await this.managedStackService.deploySelected(settings)
+      ? await this.managedStackService.deploySelected(settings, settings.selectedServiceIds, context)
       : [];
     const state = await this.dashboardService.buildState();
 
@@ -62,16 +67,16 @@ export class StackarrAppService {
     };
   }
 
-  async scanImportInventory() {
-    return this.importService.scanImportInventory();
+  async scanImportInventory(context = {}) {
+    return this.importService.scanImportInventory(context);
   }
 
-  async previewImport(containerId) {
-    return this.importService.previewImport(containerId);
+  async previewImport(containerId, context = {}) {
+    return this.importService.previewImport(containerId, context);
   }
 
-  async adoptImportAsDraft(containerId) {
-    const result = await this.importService.adoptImportAsDraft(containerId);
+  async adoptImportAsDraft(containerId, context = {}) {
+    const result = await this.importService.adoptImportAsDraft(containerId, context);
 
     return {
       ...result,
@@ -79,27 +84,27 @@ export class StackarrAppService {
     };
   }
 
-  async generateServiceFiles(serviceId) {
-    return this.managedStackService.generateServiceFiles(serviceId);
+  async generateServiceFiles(serviceId, context = {}) {
+    return this.managedStackService.generateServiceFiles(serviceId, context);
   }
 
-  async installManagedService(serviceId) {
-    return this.managedStackService.installManagedService(serviceId);
+  async installManagedService(serviceId, context = {}) {
+    return this.managedStackService.installManagedService(serviceId, context);
   }
 
-  async checkServiceUpdate(serviceId) {
-    return this.managedStackService.checkServiceUpdate(serviceId);
+  async checkServiceUpdate(serviceId, context = {}) {
+    return this.managedStackService.checkServiceUpdate(serviceId, context);
   }
 
-  async upgradeManagedService(serviceId) {
-    return this.managedStackService.upgradeManagedService(serviceId);
+  async upgradeManagedService(serviceId, context = {}) {
+    return this.managedStackService.upgradeManagedService(serviceId, context);
   }
 
-  async checkAllUpdates() {
-    return this.managedStackService.checkAllUpdates();
+  async checkAllUpdates(context = {}) {
+    return this.managedStackService.checkAllUpdates(context);
   }
 
-  async upgradeAll() {
-    return this.managedStackService.upgradeAll();
+  async upgradeAll(context = {}) {
+    return this.managedStackService.upgradeAll(context);
   }
 }

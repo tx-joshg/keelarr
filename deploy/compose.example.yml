@@ -10,6 +10,7 @@ services:
     environment:
       STACKARR_PORT: "4687"
       STACKARR_DATA_DIR: /app/data
+      STACKARR_LOG_LEVEL: ${STACKARR_LOG_LEVEL:-info}
     volumes:
       - ${STACKARR_DATA_DIR:-../data}:/app/data
       - /var/run/docker.sock:/var/run/docker.sock

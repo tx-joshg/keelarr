@@ -1,25 +1,74 @@
 import express from "express";
 import path from "node:path";
 
-export function createHttpApp({ publicDir, stackarrApp }) {
+function logLevelForStatus(statusCode) {
+  if (statusCode >= 500) {
+    return "error";
+  }
+
+  if (statusCode >= 400) {
+    return "warn";
+  }
+
+  return "info";
+}
+
+function requestContext(request) {
+  return {
+    requestId: request.requestId
+  };
+}
+
+export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
   const app = express();
+  const appLogger = logger?.child ? logger.child({
+    component: "http"
+  }) : null;
+
+  app.use((request, response, next) => {
+    const startedAt = process.hrtime.bigint();
+    request.requestId = crypto.randomUUID();
+    response.setHeader("x-request-id", request.requestId);
+
+    response.on("finish", () => {
+      if (!appLogger) {
+        return;
+      }
+
+      const shouldLog = request.path.startsWith("/api") || request.path.startsWith("/demo") || response.statusCode >= 400;
+      if (!shouldLog) {
+        return;
+      }
+
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      appLogger[logLevelForStatus(response.statusCode)]("http.request", {
+        requestId: request.requestId,
+        method: request.method,
+        path: request.originalUrl,
+        statusCode: response.statusCode,
+        durationMs: Math.round(durationMs * 100) / 100
+      });
+    });
+
+    next();
+  });
 
   app.use(express.json({ limit: "1mb" }));
   app.use(express.static(publicDir));
 
-  app.get("/api/state", async (_request, response, next) => {
+  app.get("/api/state", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.buildState());
+      response.json(await stackarrApp.buildState(requestContext(request)));
     } catch (error) {
       next(error);
     }
   });
 
-  app.get("/api/host/detect", async (_request, response, next) => {
+  app.get("/api/host/detect", async (request, response, next) => {
     try {
       response.json({
         ok: true,
-        ...(await stackarrApp.detectHost())
+        ...(await stackarrApp.detectHost(null, requestContext(request)))
       });
     } catch (error) {
       next(error);
@@ -30,7 +79,7 @@ export function createHttpApp({ publicDir, stackarrApp }) {
     try {
       response.json({
         ok: true,
-        ...(await stackarrApp.detectHost(request.body || {}))
+        ...(await stackarrApp.detectHost(request.body || {}, requestContext(request)))
       });
     } catch (error) {
       next(error);
@@ -39,15 +88,15 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.post("/api/setup", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.setup(request.body || {}));
+      response.json(await stackarrApp.setup(request.body || {}, requestContext(request)));
     } catch (error) {
       next(error);
     }
   });
 
-  app.get("/api/import/scan", async (_request, response, next) => {
+  app.get("/api/import/scan", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.scanImportInventory());
+      response.json(await stackarrApp.scanImportInventory(requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -55,7 +104,7 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.get("/api/import/:containerId/preview", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.previewImport(request.params.containerId));
+      response.json(await stackarrApp.previewImport(request.params.containerId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -63,7 +112,7 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.post("/api/import/:containerId/adopt-draft", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.adoptImportAsDraft(request.params.containerId));
+      response.json(await stackarrApp.adoptImportAsDraft(request.params.containerId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -87,7 +136,7 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.post("/api/services/:serviceId/generate", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.generateServiceFiles(request.params.serviceId));
+      response.json(await stackarrApp.generateServiceFiles(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -95,7 +144,7 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.post("/api/services/:serviceId/install", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.installManagedService(request.params.serviceId));
+      response.json(await stackarrApp.installManagedService(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -103,7 +152,7 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.post("/api/services/:serviceId/check-update", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.checkServiceUpdate(request.params.serviceId));
+      response.json(await stackarrApp.checkServiceUpdate(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -111,23 +160,23 @@ export function createHttpApp({ publicDir, stackarrApp }) {
 
   app.post("/api/services/:serviceId/upgrade", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.upgradeManagedService(request.params.serviceId));
+      response.json(await stackarrApp.upgradeManagedService(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/services/check-all", async (_request, response, next) => {
+  app.post("/api/services/check-all", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.checkAllUpdates());
+      response.json(await stackarrApp.checkAllUpdates(requestContext(request)));
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/services/upgrade-all", async (_request, response, next) => {
+  app.post("/api/services/upgrade-all", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.upgradeAll());
+      response.json(await stackarrApp.upgradeAll(requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -156,7 +205,16 @@ export function createHttpApp({ publicDir, stackarrApp }) {
     response.sendFile(path.join(publicDir, "index.html"));
   });
 
-  app.use((error, _request, response, _next) => {
+  app.use((error, request, response, _next) => {
+    appLogger?.error("http.error", {
+      requestId: request.requestId || null,
+      method: request.method,
+      path: request.originalUrl,
+      statusCode: error.statusCode || 500,
+      message: error.message || "Unexpected server error.",
+      details: error.details || null,
+      stack: error.stack || null
+    });
     response.status(error.statusCode || 500).json({
       ok: false,
       error: error.message || "Unexpected server error.",

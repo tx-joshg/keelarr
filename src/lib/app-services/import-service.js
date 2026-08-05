@@ -7,6 +7,7 @@ import {
 import { scanDockerInventory } from "../import-scanner.js";
 import { appendActivity, loadSettings, normalizeSettings, saveSettings } from "../store.js";
 import { StackarrError } from "../errors.js";
+import { defaultLogger } from "../logger.js";
 
 export class ImportService {
   constructor({
@@ -16,6 +17,7 @@ export class ImportService {
     buildImportDraftArtifactsImpl = buildImportDraftArtifacts,
     hostProfileService = null,
     loadSettingsImpl = loadSettings,
+    logger = defaultLogger,
     normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
     scanDockerInventoryImpl = scanDockerInventory,
@@ -27,6 +29,9 @@ export class ImportService {
     this.buildImportDraftArtifacts = buildImportDraftArtifactsImpl;
     this.hostProfileService = hostProfileService;
     this.loadSettingsImpl = loadSettingsImpl;
+    this.logger = logger.child({
+      component: "import-service"
+    });
     this.normalizeSettings = normalizeSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.scanDockerInventory = scanDockerInventoryImpl;
@@ -41,18 +46,38 @@ export class ImportService {
     return this.loadSettingsImpl();
   }
 
-  async scanImportInventory() {
-    const settings = await this.loadSettings();
-    return this.scanDockerInventory(settings);
+  scopedLogger(context = {}) {
+    return context.requestId
+      ? this.logger.child({ requestId: context.requestId })
+      : this.logger;
   }
 
-  async previewImport(containerId) {
+  async scanImportInventory(context = {}) {
     const settings = await this.loadSettings();
-    const item = await this.findImportCandidate(settings, containerId);
-    return this.buildImportPreview(settings, item);
+    const inventory = await this.scanDockerInventory(settings, {
+      logger: this.scopedLogger(context).child({
+        inventory: "docker"
+      })
+    });
+    this.scopedLogger(context).info("import.scan", inventory.summary);
+    return inventory;
   }
 
-  async adoptImportAsDraft(containerId) {
+  async previewImport(containerId, context = {}) {
+    const settings = await this.loadSettings();
+    const item = await this.findImportCandidate(settings, containerId, {}, context);
+    const preview = await this.buildImportPreview(settings, item);
+    this.scopedLogger(context).info("import.preview", {
+      containerId,
+      serviceId: preview.target?.serviceId || null,
+      supported: preview.supported === true,
+      adoptable: preview.adoptable === true,
+      warningCount: Array.isArray(preview.warnings) ? preview.warnings.length : 0
+    });
+    return preview;
+  }
+
+  async adoptImportAsDraft(containerId, context = {}) {
     const settings = await this.loadSettings();
     if (!settings.initialized) {
       throw new StackarrError("Configure the host profile before adopting an existing container into a managed draft.", {
@@ -60,9 +85,10 @@ export class ImportService {
       });
     }
 
+    const logger = this.scopedLogger(context);
     const item = await this.findImportCandidate(settings, containerId, {
       includeSensitive: true
-    });
+    }, context);
     const preview = await this.buildImportPreview(settings, item);
 
     if (!preview.supported || !preview.adoptable || !item.serviceId) {
@@ -121,6 +147,16 @@ export class ImportService {
         }
       }
     });
+    logger.info("import.adopt_draft", {
+      containerId: item.containerId,
+      containerName: item.containerName,
+      serviceId: item.serviceId,
+      serviceName: item.serviceName,
+      composePath: generated.composePath,
+      envPath: generated.envPath,
+      reviewSummaryPath: generated.reviewSummaryPath,
+      reviewNotesPath: generated.reviewNotesPath
+    });
     await this.appendActivity({
       kind: "import-draft",
       level: "info",
@@ -138,8 +174,14 @@ export class ImportService {
     };
   }
 
-  async findImportCandidate(settings, containerId, options = {}) {
-    const inventory = await this.scanDockerInventory(settings, options);
+  async findImportCandidate(settings, containerId, options = {}, context = {}) {
+    const inventory = await this.scanDockerInventory(settings, {
+      ...options,
+      logger: this.scopedLogger(context).child({
+        inventory: "docker",
+        containerId
+      })
+    });
     const item = inventory.items.find((candidate) => candidate.containerId === containerId);
 
     if (!item) {

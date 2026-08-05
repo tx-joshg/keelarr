@@ -29,8 +29,8 @@ export function applyDetectionSuggestions(settings, detection) {
   };
 }
 
-export async function detectHostEnvironment(settings = {}) {
-  const detections = await Promise.all(HOST_ADAPTERS.map((adapter) => adapter.detect(settings)));
+export async function detectHostEnvironment(settings = {}, options = {}) {
+  const detections = await Promise.all(HOST_ADAPTERS.map((adapter) => adapter.detect(settings, options)));
   const selected = pickBestHostDetection(detections);
 
   return {
@@ -39,7 +39,7 @@ export async function detectHostEnvironment(settings = {}) {
   };
 }
 
-export async function validateHostProfile(settings = {}) {
+export async function validateHostProfile(settings = {}, options = {}) {
   const adapter = getHostAdapter(settings.adapterType) || genericDockerHostAdapter;
-  return adapter.validate(settings);
+  return adapter.validate(settings, options);
 }

@@ -14,8 +14,8 @@ const QNAP_DOCKER_BINS = [
   "docker"
 ];
 
-export async function detectQnapHost(settings = {}) {
-  const dockerProbe = await firstSuccessfulDockerProbe([settings.dockerBin, ...QNAP_DOCKER_BINS]);
+export async function detectQnapHost(settings = {}, options = {}) {
+  const dockerProbe = await firstSuccessfulDockerProbe([settings.dockerBin, ...QNAP_DOCKER_BINS], options);
   const stackRoot = "/share/Container/docker";
   const configRoot = "/share/Container";
   const mediaRoot = "/share/Media";
@@ -99,8 +99,9 @@ export async function detectQnapHost(settings = {}) {
   };
 }
 
-export async function validateQnapHost(settings = {}) {
+export async function validateQnapHost(settings = {}, options = {}) {
   return validateDockerHostProfile(settings, {
+    ...options,
     adapterId: "qnap",
     label: "QNAP / Container Station",
     dockerCandidates: [settings.dockerBin || "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker"]

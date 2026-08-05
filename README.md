@@ -112,6 +112,8 @@ Important:
 - `HOST_STACK_ROOT`, `HOST_CONFIG_ROOT`, `HOST_MEDIA_ROOT`, and `HOST_DOWNLOADS_ROOT` in `.env` must match the real host paths
 - those paths are mounted into the container at the exact same absolute paths so generated Compose files, backups, and adoption scans stay aligned with the host
 - remove the Plex logs mount line from `compose.example.yml` if you do not use Tautulli or do not want Plex log health support yet
+- controller logs are written to `${STACKARR_DATA_DIR}/stackarr.log` and also mirrored to `docker logs stackarr`
+- set `STACKARR_LOG_LEVEL=debug` in `deploy/.env` when you want verbose Docker command and request logging during troubleshooting
 
 ### First Test On QNAP
 
@@ -137,6 +139,17 @@ After the container starts:
 If host validation fails, Stackarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
 
 For a fuller first-pass workflow on an existing QNAP stack, see [docs/qnap-first-test.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/qnap-first-test.md).
+
+## Logging
+
+Stackarr now keeps two different operational records:
+
+- `data/activity.json`: user-facing activity feed with summarized action history
+- `data/stackarr.log`: structured JSONL operation log for requests, Docker commands, setup/import actions, upgrades, and failures
+
+When Stackarr runs in Docker, the same log entries are also emitted to container stdout, so `docker logs stackarr` stays useful.
+
+The operation log intentionally avoids logging request bodies and redacts obvious secret-like keys such as passwords, tokens, secrets, cookies, and API keys. If you need more detail while testing, raise `STACKARR_LOG_LEVEL` to `debug`.
 
 ## Run The Interactive Demo
 

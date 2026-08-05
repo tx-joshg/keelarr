@@ -13,6 +13,7 @@ import {
   writeUpdateState
 } from "../store.js";
 import { StackarrError } from "../errors.js";
+import { defaultLogger } from "../logger.js";
 
 export class ManagedStackService {
   constructor({
@@ -22,6 +23,7 @@ export class ManagedStackService {
     hostProfileService = null,
     installServiceImpl = installService,
     loadSettingsImpl = loadSettings,
+    logger = defaultLogger,
     readUpdateStateImpl = readUpdateState,
     upgradeAllServicesImpl = upgradeAllServices,
     upgradeServiceImpl = upgradeService,
@@ -34,6 +36,9 @@ export class ManagedStackService {
     this.hostProfileService = hostProfileService;
     this.installService = installServiceImpl;
     this.loadSettingsImpl = loadSettingsImpl;
+    this.logger = logger.child({
+      component: "managed-stack-service"
+    });
     this.readUpdateState = readUpdateStateImpl;
     this.upgradeAllServices = upgradeAllServicesImpl;
     this.upgradeService = upgradeServiceImpl;
@@ -61,18 +66,41 @@ export class ManagedStackService {
     return service;
   }
 
-  async deploySelected(settings, serviceIds = settings.selectedServiceIds) {
+  scopedLogger(context = {}) {
+    return context.requestId
+      ? this.logger.child({ requestId: context.requestId })
+      : this.logger;
+  }
+
+  async deploySelected(settings, serviceIds = settings.selectedServiceIds, context = {}) {
+    const logger = this.scopedLogger(context);
     const deployResults = [];
 
     for (const serviceId of serviceIds) {
       const service = this.requireService(settings, serviceId);
-      const result = await this.generateAndDeploy(settings, service);
+      const result = await this.generateAndDeploy(settings, service, {
+        logger: logger.child({
+          serviceId: service.id,
+          containerName: service.containerName
+        })
+      });
       const deployEntry = {
         serviceId,
         ok: result.ok,
         output: `${result.stdout}\n${result.stderr}`.trim()
       };
       deployResults.push(deployEntry);
+
+      logger[result.ok ? "info" : "error"]("service.deploy", {
+        serviceId: service.id,
+        serviceName: service.name,
+        containerName: service.containerName,
+        composePath: service.composePath,
+        envPath: service.envPath,
+        ok: result.ok,
+        stdout: result.stdout,
+        stderr: result.stderr
+      });
 
       await this.appendActivity({
         kind: "deploy",
@@ -85,10 +113,16 @@ export class ManagedStackService {
     return deployResults;
   }
 
-  async generateServiceFiles(serviceId) {
+  async generateServiceFiles(serviceId, context = {}) {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
     const generated = await this.writeStacks(settings, [service.id]);
+    this.scopedLogger(context).info("service.generate", {
+      serviceId: service.id,
+      serviceName: service.name,
+      composePath: service.composePath,
+      envPath: service.envPath
+    });
     await this.appendActivity({
       kind: "generate",
       level: "info",
@@ -101,11 +135,26 @@ export class ManagedStackService {
     };
   }
 
-  async installManagedService(serviceId) {
+  async installManagedService(serviceId, context = {}) {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
+    const logger = this.scopedLogger(context);
     await this.writeStacks(settings, [service.id]);
-    const result = await this.installService(settings, service);
+    const result = await this.installService(settings, service, {
+      logger: logger.child({
+        serviceId: service.id,
+        containerName: service.containerName
+      })
+    });
+
+    logger[result.ok ? "info" : "error"]("service.install", {
+      serviceId: service.id,
+      serviceName: service.name,
+      containerName: service.containerName,
+      ok: result.ok,
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
 
     await this.appendActivity({
       kind: "install",
@@ -124,10 +173,16 @@ export class ManagedStackService {
     };
   }
 
-  async checkServiceUpdate(serviceId) {
+  async checkServiceUpdate(serviceId, context = {}) {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
-    const result = await this.checkForUpdates(settings, service);
+    const logger = this.scopedLogger(context);
+    const result = await this.checkForUpdates(settings, service, {
+      logger: logger.child({
+        serviceId: service.id,
+        containerName: service.containerName
+      })
+    });
     const updateState = await this.readUpdateState();
 
     updateState[service.id] = {
@@ -135,6 +190,16 @@ export class ManagedStackService {
       checkedAt: new Date().toISOString()
     };
     await this.writeUpdateState(updateState);
+
+    logger[result.ok ? "info" : "warn"]("service.update_check", {
+      serviceId: service.id,
+      serviceName: service.name,
+      containerName: service.containerName,
+      ok: result.ok,
+      updateStatus: result.updateStatus,
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
 
     await this.appendActivity({
       kind: "update-check",
@@ -150,10 +215,25 @@ export class ManagedStackService {
     };
   }
 
-  async upgradeManagedService(serviceId) {
+  async upgradeManagedService(serviceId, context = {}) {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
-    const result = await this.upgradeService(settings, service);
+    const logger = this.scopedLogger(context);
+    const result = await this.upgradeService(settings, service, {
+      logger: logger.child({
+        serviceId: service.id,
+        containerName: service.containerName
+      })
+    });
+
+    logger[result.ok ? "info" : "error"]("service.upgrade", {
+      serviceId: service.id,
+      serviceName: service.name,
+      containerName: service.containerName,
+      ok: result.ok,
+      stdout: result.stdout,
+      stderr: result.stderr
+    });
 
     await this.appendActivity({
       kind: "upgrade",
@@ -172,14 +252,20 @@ export class ManagedStackService {
     };
   }
 
-  async checkAllUpdates() {
+  async checkAllUpdates(context = {}) {
     const settings = await this.loadSettings();
     const nextState = await this.readUpdateState();
     const results = [];
+    const logger = this.scopedLogger(context);
 
     for (const serviceId of settings.selectedServiceIds) {
       const service = this.requireService(settings, serviceId);
-      const result = await this.checkForUpdates(settings, service);
+      const result = await this.checkForUpdates(settings, service, {
+        logger: logger.child({
+          serviceId: service.id,
+          containerName: service.containerName
+        })
+      });
       nextState[service.id] = {
         status: result.updateStatus,
         checkedAt: new Date().toISOString()
@@ -192,6 +278,9 @@ export class ManagedStackService {
     }
 
     await this.writeUpdateState(nextState);
+    logger.info("service.update_check_all", {
+      results
+    });
     await this.appendActivity({
       kind: "update-check-all",
       level: "info",
@@ -204,11 +293,19 @@ export class ManagedStackService {
     };
   }
 
-  async upgradeAll() {
+  async upgradeAll(context = {}) {
     const settings = await this.loadSettings();
     const services = settings.selectedServiceIds.map((serviceId) => this.requireService(settings, serviceId));
-    const results = await this.upgradeAllServices(settings, services);
+    const logger = this.scopedLogger(context);
+    const results = await this.upgradeAllServices(settings, services, {
+      logger
+    });
     const ok = results.every((result) => result.ok);
+
+    logger[ok ? "info" : "error"]("service.upgrade_all", {
+      ok,
+      results
+    });
 
     await this.appendActivity({
       kind: "upgrade-all",

@@ -221,8 +221,10 @@ async function buildInventoryItem(inspect, options = {}) {
   return item;
 }
 
-async function loadContainerInventory(dockerBin) {
-  const idsResult = await runCommand(dockerBin, ["ps", "-aq"]);
+async function loadContainerInventory(dockerBin, options = {}) {
+  const idsResult = await runCommand(dockerBin, ["ps", "-aq"], {
+    logger: options.logger
+  });
   if (!idsResult.ok) {
     throw new Error(idsResult.stderr || idsResult.stdout || "Unable to list Docker containers.");
   }
@@ -236,7 +238,9 @@ async function loadContainerInventory(dockerBin) {
     return [];
   }
 
-  const inspectResult = await runCommand(dockerBin, ["inspect", ...containerIds]);
+  const inspectResult = await runCommand(dockerBin, ["inspect", ...containerIds], {
+    logger: options.logger
+  });
   if (!inspectResult.ok) {
     throw new Error(inspectResult.stderr || inspectResult.stdout || "Unable to inspect Docker containers.");
   }
@@ -245,7 +249,7 @@ async function loadContainerInventory(dockerBin) {
 }
 
 export async function scanDockerInventory(settings, options = {}) {
-  const inventory = await loadContainerInventory(settings.dockerBin);
+  const inventory = await loadContainerInventory(settings.dockerBin, options);
   const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect, options)));
   const sortedItems = [...items].sort((left, right) => {
     if (left.recognized !== right.recognized) {

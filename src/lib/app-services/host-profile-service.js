@@ -11,6 +11,7 @@ import {
   saveSettings
 } from "../store.js";
 import { StackarrError } from "../errors.js";
+import { defaultLogger } from "../logger.js";
 
 function summarizeValidationErrors(validation) {
   if (!Array.isArray(validation?.errors) || validation.errors.length === 0) {
@@ -25,6 +26,7 @@ export class HostProfileService {
     appendActivityImpl = appendActivity,
     detectHostEnvironmentImpl = detectHostEnvironment,
     loadSettingsImpl = loadSettings,
+    logger = defaultLogger,
     normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
     validateHostProfileImpl = validateHostProfile,
@@ -33,6 +35,9 @@ export class HostProfileService {
     this.appendActivity = appendActivityImpl;
     this.detectHostEnvironment = detectHostEnvironmentImpl;
     this.loadSettingsImpl = loadSettingsImpl;
+    this.logger = logger.child({
+      component: "host-profile-service"
+    });
     this.normalizeSettings = normalizeSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.validateHostProfile = validateHostProfileImpl;
@@ -41,6 +46,12 @@ export class HostProfileService {
 
   async loadSettings() {
     return this.loadSettingsImpl();
+  }
+
+  scopedLogger(context = {}) {
+    return context.requestId
+      ? this.logger.child({ requestId: context.requestId })
+      : this.logger;
   }
 
   buildCandidateSettings(rawSettings, detection) {
@@ -52,14 +63,23 @@ export class HostProfileService {
     };
   }
 
-  async inspectHostDraft(rawSettings = {}) {
-    const detection = await this.detectHostEnvironment(rawSettings);
+  async inspectHostDraft(rawSettings = {}, context = {}) {
+    const logger = this.scopedLogger(context);
+    const detection = await this.detectHostEnvironment(rawSettings, {
+      logger: logger.child({
+        probe: "detect-host"
+      })
+    });
     const candidateSettings = this.buildCandidateSettings(rawSettings, detection);
     const effectiveSettings = this.normalizeSettings({
       ...candidateSettings,
       initialized: rawSettings.initialized === true
     });
-    const validation = await this.validateHostProfile(effectiveSettings);
+    const validation = await this.validateHostProfile(effectiveSettings, {
+      logger: logger.child({
+        probe: "validate-host"
+      })
+    });
 
     return {
       ...detection,
@@ -85,7 +105,7 @@ export class HostProfileService {
     };
   }
 
-  async detectHost(input = null) {
+  async detectHost(input = null, context = {}) {
     const savedSettings = await this.loadSettings();
     const draftSettings = input
       ? {
@@ -95,10 +115,19 @@ export class HostProfileService {
         }
       : savedSettings;
 
-    return this.inspectHostDraft(draftSettings);
+    const inspection = await this.inspectHostDraft(draftSettings, context);
+    this.scopedLogger(context).info("host.detect", {
+      adapterId: inspection.selected?.adapterId || null,
+      confidence: inspection.selected?.confidence || null,
+      validationOk: inspection.validation?.ok === true,
+      errors: inspection.validation?.errors || [],
+      warnings: inspection.validation?.warnings || []
+    });
+    return inspection;
   }
 
-  async prepareSetup(input = {}) {
+  async prepareSetup(input = {}, context = {}) {
+    const logger = this.scopedLogger(context);
     const deploy = input?.deploy === true;
     const rawSettings = { ...input };
     delete rawSettings.deploy;
@@ -109,11 +138,16 @@ export class HostProfileService {
       initialized: savedSettings.initialized
     };
 
-    const inspection = await this.inspectHostDraft(baseSettings);
+    const inspection = await this.inspectHostDraft(baseSettings, context);
     const candidateSettings = inspection.effectiveSettings;
     const validation = inspection.validation;
 
     if (!validation.ok) {
+      logger.warn("host.setup_validation_failed", {
+        adapterId: inspection.selected?.adapterId || candidateSettings.adapterType,
+        errors: validation.errors,
+        warnings: validation.warnings
+      });
       throw new StackarrError(summarizeValidationErrors(validation), {
         statusCode: 400,
         details: {
@@ -127,6 +161,13 @@ export class HostProfileService {
 
     const settings = await this.saveSettings(candidateSettings);
     const generated = await this.writeStacks(settings, settings.selectedServiceIds);
+
+    logger.info("host.setup_saved", {
+      adapterId: settings.adapterType,
+      deploy,
+      generatedCount: generated.length,
+      validationWarnings: validation.warnings
+    });
 
     await this.appendActivity({
       kind: "setup",

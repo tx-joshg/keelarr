@@ -41,7 +41,7 @@ export async function pathCreatable(filePath) {
   }
 }
 
-export async function probeDockerCandidate(binaryPath) {
+export async function probeDockerCandidate(binaryPath, options = {}) {
   if (!binaryPath) {
     return {
       binaryPath: null,
@@ -55,7 +55,8 @@ export async function probeDockerCandidate(binaryPath) {
 
   try {
     const dockerResult = await runCommand(binaryPath, ["version", "--format", "{{.Client.Version}}"], {
-      timeoutMs: 8_000
+      timeoutMs: 8_000,
+      logger: options.logger
     });
 
     if (!dockerResult.ok) {
@@ -70,7 +71,8 @@ export async function probeDockerCandidate(binaryPath) {
     }
 
     const composeResult = await runCommand(binaryPath, ["compose", "version"], {
-      timeoutMs: 8_000
+      timeoutMs: 8_000,
+      logger: options.logger
     });
 
     return {
@@ -93,7 +95,7 @@ export async function probeDockerCandidate(binaryPath) {
   }
 }
 
-export async function firstSuccessfulDockerProbe(candidates) {
+export async function firstSuccessfulDockerProbe(candidates, options = {}) {
   const results = [];
   const seen = new Set();
 
@@ -102,7 +104,7 @@ export async function firstSuccessfulDockerProbe(candidates) {
       continue;
     }
     seen.add(candidate);
-    const probe = await probeDockerCandidate(candidate);
+    const probe = await probeDockerCandidate(candidate, options);
     results.push(probe);
     if (probe.composeOk) {
       return {
@@ -150,7 +152,7 @@ function result(ok, level, value, message) {
 
 export async function validateDockerHostProfile(settings = {}, options = {}) {
   const dockerCandidates = options.dockerCandidates || [settings.dockerBin, "docker"];
-  const dockerProbe = await firstSuccessfulDockerProbe(dockerCandidates);
+  const dockerProbe = await firstSuccessfulDockerProbe(dockerCandidates, options);
   const stackRoot = String(settings.stackRoot || "").trim();
   const configRoot = String(settings.configRoot || "").trim();
   const mediaRoot = String(settings.mediaRoot || "").trim();

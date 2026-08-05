@@ -1,16 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
+import {
+  activityPath,
+  dataDir,
+  settingsPath,
+  updatesPath
+} from "./data-paths.js";
 import { buildServicesFromSelection } from "./service-catalog.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = process.env.STACKARR_DATA_DIR
-  ? path.resolve(process.env.STACKARR_DATA_DIR)
-  : path.resolve(here, "..", "..", "data");
-const settingsPath = path.join(dataDir, "settings.json");
-const activityPath = path.join(dataDir, "activity.json");
-const updatesPath = path.join(dataDir, "updates.json");
 
 export const defaultSettings = {
   initialized: false,

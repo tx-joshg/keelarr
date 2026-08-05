@@ -7,9 +7,9 @@ import {
   validateDockerHostProfile
 } from "./shared.js";
 
-export async function detectGenericDockerHost(settings = {}) {
+export async function detectGenericDockerHost(settings = {}, options = {}) {
   const dockerCandidates = [settings.dockerBin, process.env.DOCKER_BIN, "docker"];
-  const dockerProbe = await firstSuccessfulDockerProbe(dockerCandidates);
+  const dockerProbe = await firstSuccessfulDockerProbe(dockerCandidates, options);
   const stackRoot = settings.stackRoot || "/opt/stackarr/stacks";
   const configRoot = settings.configRoot || "/srv/stackarr/config";
   const mediaRoot = settings.mediaRoot || "/srv/media";
@@ -76,8 +76,9 @@ export async function detectGenericDockerHost(settings = {}) {
   };
 }
 
-export async function validateGenericDockerHost(settings = {}) {
+export async function validateGenericDockerHost(settings = {}, options = {}) {
   return validateDockerHostProfile(settings, {
+    ...options,
     adapterId: "generic-docker",
     label: "Generic Docker Host",
     dockerCandidates: [settings.dockerBin || "docker"]

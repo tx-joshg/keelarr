@@ -24,7 +24,7 @@ async function backupFileIfPresent(filePath, destinationDir) {
   }
 }
 
-export async function backupService(settings, service) {
+export async function backupService(settings, service, options = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupDir = path.join(settings.stackRoot, ".stackarr-backups", service.id, timestamp);
   await mkdir(backupDir, { recursive: true });
@@ -32,7 +32,9 @@ export async function backupService(settings, service) {
   await backupFileIfPresent(service.composePath, backupDir);
   await backupFileIfPresent(service.envPath, backupDir);
 
-  const inspectResult = await runCommand(settings.dockerBin, ["inspect", service.containerName]);
+  const inspectResult = await runCommand(settings.dockerBin, ["inspect", service.containerName], {
+    logger: options.logger
+  });
   if (inspectResult.ok) {
     await writeFile(path.join(backupDir, "inspect.json"), inspectResult.stdout, "utf8");
   }
@@ -40,8 +42,10 @@ export async function backupService(settings, service) {
   return backupDir;
 }
 
-export async function composePs(settings, service) {
-  const result = await runCommand(settings.dockerBin, composeArgs(service, "ps", "--format", "json"));
+export async function composePs(settings, service, options = {}) {
+  const result = await runCommand(settings.dockerBin, composeArgs(service, "ps", "--format", "json"), {
+    logger: options.logger
+  });
 
   if (!result.ok) {
     return {
@@ -61,24 +65,30 @@ export async function composePs(settings, service) {
   }
 }
 
-export async function generateAndDeploy(settings, service) {
-  return runCommand(settings.dockerBin, composeArgs(service, "up", "-d"));
+export async function generateAndDeploy(settings, service, options = {}) {
+  return runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
+    logger: options.logger
+  });
 }
 
-export async function installService(settings, service) {
-  await backupService(settings, service);
-  return generateAndDeploy(settings, service);
+export async function installService(settings, service, options = {}) {
+  await backupService(settings, service, options);
+  return generateAndDeploy(settings, service, options);
 }
 
-export async function upgradeService(settings, service) {
-  await backupService(settings, service);
+export async function upgradeService(settings, service, options = {}) {
+  await backupService(settings, service, options);
 
-  const pullResult = await runCommand(settings.dockerBin, composeArgs(service, "pull"));
+  const pullResult = await runCommand(settings.dockerBin, composeArgs(service, "pull"), {
+    logger: options.logger
+  });
   if (!pullResult.ok) {
     return pullResult;
   }
 
-  const upResult = await runCommand(settings.dockerBin, composeArgs(service, "up", "-d"));
+  const upResult = await runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
+    logger: options.logger
+  });
   return {
     ok: upResult.ok,
     code: upResult.code,
@@ -87,8 +97,10 @@ export async function upgradeService(settings, service) {
   };
 }
 
-export async function checkForUpdates(settings, service) {
-  const result = await runCommand(settings.dockerBin, composeArgs(service, "pull"));
+export async function checkForUpdates(settings, service, options = {}) {
+  const result = await runCommand(settings.dockerBin, composeArgs(service, "pull"), {
+    logger: options.logger
+  });
   const combinedOutput = `${result.stdout}\n${result.stderr}`.trim();
   let status = "unknown";
 
@@ -104,13 +116,13 @@ export async function checkForUpdates(settings, service) {
   };
 }
 
-export async function upgradeAllServices(settings, services) {
+export async function upgradeAllServices(settings, services, options = {}) {
   const results = [];
 
   for (const service of services) {
     results.push({
       serviceId: service.id,
-      ...(await upgradeService(settings, service))
+      ...(await upgradeService(settings, service, options))
     });
   }
 
