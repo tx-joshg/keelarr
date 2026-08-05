@@ -1487,3 +1487,28 @@ table {
   gap: 8px;
   flex-shrink: 0;
 }
+
+.busy-shell {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 11;
+}
+
+.busy-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--primary-color);
+  border-radius: 6px;
+  background: rgba(17, 17, 17, 0.97);
+  padding: 12px 18px;
+  color: var(--text-color);
+  font-size: 13px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+}
+
+.busy-panel i {
+  color: var(--primary-color);
+}

@@ -33,6 +33,7 @@ const ui = {
   toast: null,
   toastTimer: null,
   pathPicker: null,
+  busy: null,
   selectedImportContainerId: null,
   pendingServices: new Set(),
   // Confirmation dialog for a cutover or revert, mirroring the server-side
@@ -519,6 +520,38 @@ function currentGeneratedArtifacts() {
 }
 
 const TOAST_VISIBLE_MS = 6000;
+
+/**
+ * Wraps a long action so the UI shows it is working. Deploying a stack takes
+ * many seconds against a NAS, and without this the click looks like it did
+ * nothing at all.
+ */
+async function runBusy(label, run) {
+  ui.busy = { label };
+  render();
+
+  try {
+    return await run();
+  } finally {
+    ui.busy = null;
+    render();
+  }
+}
+
+function renderBusyBanner() {
+  if (!ui.busy) {
+    return "";
+  }
+
+  return `
+    <div class="busy-shell">
+      <div class="busy-panel">
+        <i class="fa-solid fa-spinner fa-spin"></i>
+        <span>${escapeHtml(ui.busy.label)}</span>
+      </div>
+    </div>
+  `;
+}
 
 function showToast(message, tone = "info") {
   ui.toast = {
@@ -1868,6 +1901,10 @@ function render() {
     return;
   }
 
+  // Every render replaces the whole tree, which resets scroll to the top.
+  // Toggling a checkbox halfway down Settings should not throw you back up.
+  const previousScroll = appNode.querySelector(".scroll-shell")?.scrollTop ?? 0;
+
   try {
     document.title = `${appDisplayName()} v${appVersion()}`;
 
@@ -1909,6 +1946,7 @@ function render() {
           </main>
         </div>
         ${renderToast()}
+        ${renderBusyBanner()}
         ${renderPathPicker()}
         ${renderCutoverModal()}
       </div>
@@ -1923,6 +1961,11 @@ function render() {
         input.setSelectionRange(input.value.length, input.value.length);
       }
     }
+    const scroller = appNode.querySelector(".scroll-shell");
+    if (scroller && previousScroll > 0) {
+      scroller.scrollTop = previousScroll;
+    }
+
     window.__stackarrRenderError = null;
   } catch (error) {
     window.__stackarrRenderError = error?.message || "Render failed.";
@@ -2464,6 +2507,12 @@ appNode.addEventListener("click", (event) => {
   const toolbarTarget = event.target.closest("[data-toolbar-action]");
   if (toolbarTarget) {
     const action = toolbarTarget.dataset.toolbarAction;
+
+    // A second click mid-deploy would run the whole thing twice.
+    if (ui.busy) {
+      return;
+    }
+
     (async () => {
       if (action === "refresh") {
         await loadState();
@@ -2471,17 +2520,17 @@ appNode.addEventListener("click", (event) => {
       }
 
       if (action === "deploy-all") {
-        await deployAllSelected();
+        await runBusy("Deploying selected stacks...", deployAllSelected);
         return;
       }
 
       if (action === "check-updates") {
-        await checkAllUpdates();
+        await runBusy("Checking for updates...", checkAllUpdates);
         return;
       }
 
       if (action === "upgrade-all") {
-        await upgradeAll();
+        await runBusy("Starting upgrade...", upgradeAll);
         return;
       }
 
@@ -2492,7 +2541,7 @@ appNode.addEventListener("click", (event) => {
       }
 
       if (action === "scan-docker") {
-        await scanImports();
+        await runBusy("Scanning existing containers...", () => scanImports());
         return;
       }
 
@@ -2510,12 +2559,12 @@ appNode.addEventListener("click", (event) => {
       }
 
       if (action === "save") {
-        await saveSettingsOnly();
+        await runBusy("Saving host settings...", saveSettingsOnly);
         return;
       }
 
       if (action === "detect-host") {
-        await detectHost();
+        await runBusy("Detecting host...", () => detectHost());
         return;
       }
 
@@ -2640,7 +2689,10 @@ appNode.addEventListener("click", (event) => {
     }
 
     const action = stackAction === "upgrade" ? "upgrade" : "install";
-    serviceAction(serviceId, action).catch(showError);
+    runBusy(
+      action === "upgrade" ? `Upgrading ${serviceId}...` : `Installing ${serviceId}...`,
+      () => serviceAction(serviceId, action)
+    ).catch(showError);
     return;
   }
 
@@ -2661,6 +2713,10 @@ appNode.addEventListener("click", (event) => {
   if (previewTarget) {
     const containerId = previewTarget.dataset.containerId;
 
+    if (ui.busy) {
+      return;
+    }
+
     if (previewTarget.dataset.previewAction === "cutover") {
       const preview = state.importPreview;
       openCutoverDialog({
@@ -2673,7 +2729,7 @@ appNode.addEventListener("click", (event) => {
       return;
     }
 
-    adoptImportDraft(containerId).catch(showError);
+    runBusy("Generating managed draft...", () => adoptImportDraft(containerId)).catch(showError);
     return;
   }
 
@@ -2686,18 +2742,24 @@ appNode.addEventListener("click", (event) => {
   const settingsTarget = event.target.closest("[data-settings-action]");
   if (settingsTarget) {
     const action = settingsTarget.dataset.settingsAction;
+
+    if (ui.busy) {
+      return;
+    }
+
     if (action === "save") {
-      saveSettingsOnly().catch(showError);
+      runBusy("Saving host settings...", saveSettingsOnly).catch(showError);
       return;
     }
 
     if (action === "save-deploy") {
-      submitSetup(true).catch(showError);
+      // The slowest action in the app: it pulls images and starts containers.
+      runBusy("Saving and deploying stacks. This can take a few minutes...", () => submitSetup(true)).catch(showError);
       return;
     }
 
     if (action === "save-generate") {
-      submitSetup(false).catch(showError);
+      runBusy("Saving and generating stack files...", () => submitSetup(false)).catch(showError);
       return;
     }
   }
