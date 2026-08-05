@@ -9,6 +9,7 @@ import {
   diffEnvironment,
   matchSupportedService,
   normalizeImageRepository,
+  parseDockerStatsLine,
   shouldIncludeInventoryItem
 } from "../src/lib/import-scanner.js";
 
@@ -116,6 +117,20 @@ test("diffEnvironment removes image defaults from imported env keys", () => {
     PUID: "1000",
     PGID: "1000",
     TZ: "America/Chicago"
+  });
+});
+
+test("parseDockerStatsLine extracts cpu and memory usage details", () => {
+  const parsed = parseDockerStatsLine('{"CPUPerc":"181.08%","ID":"8ce33fc56553","MemPerc":"3.97%","MemUsage":"311.5MiB / 7.663GiB","Name":"trailarr"}');
+
+  assert.deepEqual(parsed, {
+    containerId: "8ce33fc56553",
+    containerName: "trailarr",
+    cpuPercent: 181.08,
+    cpuPercentDisplay: "181.08%",
+    memoryUsageDisplay: "311.5MiB / 7.663GiB",
+    memoryPercent: 3.97,
+    memoryPercentDisplay: "3.97%"
   });
 });
 

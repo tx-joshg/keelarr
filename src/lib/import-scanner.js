@@ -128,6 +128,37 @@ function parseNetworks(inspect) {
   }));
 }
 
+function parsePercent(value = "") {
+  const numeric = Number.parseFloat(String(value).replace("%", "").trim());
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+export function parseDockerStatsLine(line = "") {
+  const trimmed = String(line || "").trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const parsed = JSON.parse(trimmed);
+  const containerId = parsed.ID || parsed.Container || null;
+  const containerName = parsed.Name || parsed.Container || null;
+
+  if (!containerId && !containerName) {
+    return null;
+  }
+
+  return {
+    containerId,
+    containerName,
+    cpuPercent: parsePercent(parsed.CPUPerc),
+    cpuPercentDisplay: parsed.CPUPerc || null,
+    memoryUsageDisplay: parsed.MemUsage || null,
+    memoryPercent: parsePercent(parsed.MemPerc),
+    memoryPercentDisplay: parsed.MemPerc || null
+  };
+}
+
 export function matchSupportedService(inspect) {
   const containerName = sanitizeContainerName(inspect.Name || "");
   if (SERVICE_CATALOG[containerName]) {
@@ -213,6 +244,10 @@ async function buildInventoryItem(inspect, options = {}) {
     parseEnvironment(inspect.Config?.Env || []),
     options.imageEnvironmentByRef?.get(inspect.Config?.Image || "") || {}
   );
+  const stats = options.statsByContainerId?.get(inspect.Id)
+    || options.statsByContainerId?.get(inspect.Id?.slice(0, 12) || "")
+    || options.statsByContainerName?.get(sanitizeContainerName(inspect.Name || ""))
+    || null;
 
   const item = {
     containerId: inspect.Id?.slice(0, 12) || null,
@@ -233,6 +268,7 @@ async function buildInventoryItem(inspect, options = {}) {
     envKeys: Object.keys(environment).sort(),
     command: inspect.Config?.Cmd || [],
     entrypoint: inspect.Config?.Entrypoint || [],
+    resourceUsage: stats,
     issues,
     adoptable: Boolean(serviceMatch) && !issues.some((issue) => issue.level === "error")
   };
@@ -311,6 +347,58 @@ async function loadImageEnvironmentByRef(dockerBin, inventory, options = {}) {
   return environmentByRef;
 }
 
+async function loadContainerStats(dockerBin, inventory, options = {}) {
+  const containerIds = inventory
+    .map((inspect) => inspect.Id)
+    .filter(Boolean);
+
+  if (!containerIds.length) {
+    return {
+      byContainerId: new Map(),
+      byContainerName: new Map()
+    };
+  }
+
+  const result = await runCommand(dockerBin, ["stats", "--no-stream", "--format", "{{json .}}", ...containerIds], {
+    logger: options.logger
+  });
+
+  if (!result.ok) {
+    return {
+      byContainerId: new Map(),
+      byContainerName: new Map()
+    };
+  }
+
+  const byContainerId = new Map();
+  const byContainerName = new Map();
+
+  for (const line of result.stdout.split("\n")) {
+    try {
+      const parsed = parseDockerStatsLine(line);
+
+      if (!parsed) {
+        continue;
+      }
+
+      if (parsed.containerId) {
+        byContainerId.set(parsed.containerId, parsed);
+      }
+
+      if (parsed.containerName) {
+        byContainerName.set(parsed.containerName, parsed);
+      }
+    } catch {
+      // Ignore malformed lines from docker stats and keep the rest of the inventory usable.
+    }
+  }
+
+  return {
+    byContainerId,
+    byContainerName
+  };
+}
+
 export function shouldIncludeInventoryItem(item) {
   if (!item?.containerName) {
     return false;
@@ -326,9 +414,12 @@ export function shouldIncludeInventoryItem(item) {
 export async function scanDockerInventory(settings, options = {}) {
   const inventory = await loadContainerInventory(settings.dockerBin, options);
   const imageEnvironmentByRef = await loadImageEnvironmentByRef(settings.dockerBin, inventory, options);
+  const stats = await loadContainerStats(settings.dockerBin, inventory, options);
   const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect, {
     ...options,
-    imageEnvironmentByRef
+    imageEnvironmentByRef,
+    statsByContainerId: stats.byContainerId,
+    statsByContainerName: stats.byContainerName
   })));
   const visibleItems = items.filter((item) => shouldIncludeInventoryItem(item));
   const sortedItems = [...visibleItems].sort((left, right) => {

@@ -75,6 +75,13 @@ test("buildDashboardState monitors a detected live container before Stackarr own
           imageId: "sha256:trailarrimage123",
           status: "running",
           healthStatus: "healthy",
+          resourceUsage: {
+            cpuPercent: 2.35,
+            cpuPercentDisplay: "2.35%",
+            memoryUsageDisplay: "311.5MiB / 7.663GiB",
+            memoryPercent: 3.97,
+            memoryPercentDisplay: "3.97%"
+          },
           ports: [{ hostPort: "7889", display: "0.0.0.0:7889->7889/tcp" }],
           networks: [{ name: "bridge", address: "203.0.113.7" }],
           restartPolicy: "unless-stopped",
@@ -99,6 +106,7 @@ test("buildDashboardState monitors a detected live container before Stackarr own
   assert.equal(service.observedContainerName, "trailarr");
   assert.equal(service.observedImage, "nandyalu/trailarr:latest");
   assert.equal(service.observedImageId, "sha256:trailarrimage123");
+  assert.equal(service.resourceUsage?.cpuPercentDisplay, "2.35%");
   assert.equal(service.updateStatus, "unmanaged");
 });
 
@@ -155,6 +163,13 @@ test("buildDashboardState keeps imported drafts out of managed upgrade mode unti
           imageId: "sha256:trailarrimage123",
           status: "running",
           healthStatus: null,
+          resourceUsage: {
+            cpuPercent: 2.35,
+            cpuPercentDisplay: "2.35%",
+            memoryUsageDisplay: "311.5MiB / 7.663GiB",
+            memoryPercent: 3.97,
+            memoryPercentDisplay: "3.97%"
+          },
           ports: [{ hostPort: "7889", display: "0.0.0.0:7889->7889/tcp" }],
           networks: [{ name: "bridge", address: "203.0.113.7" }],
           restartPolicy: "unless-stopped",

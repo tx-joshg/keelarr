@@ -152,6 +152,7 @@ function buildRenderService(id) {
     observedContainerId: live?.observedContainerId || null,
     observedContainerName: live?.observedContainerName || live?.containerName || id,
     observedNetworkMode: live?.observedNetworkMode || live?.networkMode || "default",
+    resourceUsage: live?.resourceUsage || null,
     publishings: Array.isArray(live?.publishings) ? live.publishings : [],
     networks: Array.isArray(live?.networks) ? live.networks : [],
     lastError: live?.lastError || null
@@ -201,6 +202,26 @@ function shortImageId(imageId = "") {
   }
 
   return trimmed.replace(/^sha256:/, "").slice(0, 12);
+}
+
+function formatUsageSummary(service) {
+  const usage = service.resourceUsage;
+
+  if (!usage) {
+    return {
+      primary: "No Data",
+      secondary: ""
+    };
+  }
+
+  const cpu = usage.cpuPercentDisplay || (usage.cpuPercent != null ? `${usage.cpuPercent.toFixed(2)}%` : "CPU n/a");
+  const memory = usage.memoryUsageDisplay || "Memory n/a";
+  const memoryPercent = usage.memoryPercentDisplay ? ` · ${usage.memoryPercentDisplay}` : "";
+
+  return {
+    primary: `CPU ${cpu}`,
+    secondary: `${memory}${memoryPercent}`
+  };
 }
 
 function managementStateMeta(service) {
@@ -769,6 +790,7 @@ function renderStackView() {
       const versionDetail = imageIdTag
         ? `ref ${versionTag} · image ${imageIdTag} · ${managementMeta.detail}`
         : `${versionTag} · ${managementMeta.detail}`;
+      const usage = formatUsageSummary(service);
       const openUrl = resolveServiceOpenUrl(service);
       let primaryAction = "deploy";
       let primaryTitle = "Deploy";
@@ -803,6 +825,10 @@ function renderStackView() {
           <td>${escapeHtml(String(service.port))}</td>
           <td>${composeLabel}</td>
           <td>${runtimeLabel}</td>
+          <td class="cell-truncate">
+            <div>${escapeHtml(usage.primary)}</div>
+            <div class="secondary-copy">${escapeHtml(usage.secondary)}</div>
+          </td>
           <td class="cell-truncate">
             ${healthLabel}
             <div class="secondary-copy">${service.httpStatus ? `${escapeHtml(String(service.httpStatus))}${service.latencyMs ? ` · ${escapeHtml(String(service.latencyMs))} ms` : ""}` : escapeHtml(managementMeta.label)}</div>
@@ -853,8 +879,9 @@ function renderStackView() {
             <th style="width:8%;">Port</th>
             <th style="width:10%;">Compose</th>
             <th style="width:10%;">Runtime</th>
+            <th style="width:14%;">Usage</th>
             <th style="width:12%;">Health</th>
-            <th style="width:10%;">Update</th>
+            <th style="width:8%;">Update</th>
             <th style="width:4%;"></th>
           </tr>
         </thead>

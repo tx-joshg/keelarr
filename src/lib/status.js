@@ -266,6 +266,7 @@ export async function buildDashboardState(settings, dependencies = {}) {
       observedContainerName: inventoryItem?.containerName || service.sourceContainerName || service.containerName,
       observedRestartPolicy: inventoryItem?.restartPolicy || service.restartPolicy,
       observedNetworkMode: inventoryItem?.networkMode || service.networkMode,
+      resourceUsage: inventoryItem?.resourceUsage || null,
       lastError: probe.error || composeStatus.error || null,
       updateStatus: deriveUpdateStatus(service, generated, runtimeSource, updateState[service.id]?.status || null),
       updateCheckedAt: updateState[service.id]?.checkedAt || null
