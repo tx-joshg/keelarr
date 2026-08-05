@@ -96,6 +96,33 @@ clears it, so a rolled-back service will not silently jump forward on the next
 deploy — and upgrading always clears the pin first, so it can still move
 forward when you want it to.
 
+### Configuration snapshots
+
+Reverting the image alone is not always enough. A major upgrade often migrates
+the application's database forward, and the older version may then refuse to
+read it. So every backup also captures the service's `/config` — database and
+settings — into `config-snapshot.tar.gz` beside the image record.
+
+Rollback can then optionally restore that snapshot:
+
+```json
+{ "confirmContainerName": "tautulli", "restoreConfig": true }
+```
+
+This is **opt-in and destructive**: it rewinds the application's data to the
+moment before the upgrade, discarding anything recorded since. The dashboard
+presents it as an unchecked box with that warning spelled out, and only when a
+snapshot actually exists for the rollback point.
+
+Snapshots work for both bind mounts and named volumes, since they run through a
+helper container rather than the controller's own filesystem. Regenerable
+directories (`logs`, `MediaCover`, `Backups`, `cache`) are excluded, which keeps
+a typical capture to tens of megabytes.
+
+The service is stopped before its configuration is replaced, because restoring
+a database under a running app would leave it holding stale handles. If the
+restore fails, the service is brought back up before the failure is reported.
+
 ## Cutover
 
 A cutover moves one detected container from manual Docker management to a Stackarr-managed Compose stack. Because the managed draft reuses the live container's name, the original container has to release that name first — so the cutover stops it, renames it to `<name>-stackarr-rollback`, and only then starts the Compose service.
