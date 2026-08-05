@@ -398,3 +398,159 @@ test("rollback refuses up front when the config mount cannot be found", async (t
   // Nothing touched: it failed in preflight.
   assert.deepEqual(calls, []);
 });
+
+/* --- Upgrade All must behave exactly like the per-service upgrade --- */
+
+async function settleJobById(service, jobId) {
+  for (let i = 0; i < 500; i += 1) {
+    const job = service.jobs.get(jobId);
+    if (job.status === JOB_STATUS.SUCCEEDED || job.status === JOB_STATUS.FAILED) {
+      return job;
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error("job never settled");
+}
+
+function createStackWith(t, ids) {
+  return createStack(t).then(async (stack) => {
+    const { mkdir: md, writeFile: wf } = await import("node:fs/promises");
+    const settings = normalizeSettings({
+      initialized: true,
+      stackRoot: stack.root,
+      selectedServiceIds: ids,
+      serviceOverrides: Object.fromEntries(ids.map((id) => [id, { mode: "imported", containerName: id }]))
+    });
+    for (const id of ids) {
+      const dir = path.join(stack.root, id);
+      await md(dir, { recursive: true });
+      await wf(path.join(dir, "compose.yml"), `name: ${id}\nservices:\n  ${id}:\n    image: img/${id}:latest\n`, "utf8");
+      await wf(path.join(dir, ".env"), "PUID=0\n", "utf8");
+      settings.services[id].stackDir = dir;
+      settings.services[id].composePath = path.join(dir, "compose.yml");
+      settings.services[id].envPath = path.join(dir, ".env");
+    }
+    return { ...stack, settings };
+  });
+}
+
+test("Upgrade All clears pins and refreshes status for every service, like the single upgrade", async (t) => {
+  const stack = await createStackWith(t, ["radarr", "sonarr"]);
+  // Both start pinned, the state a rollback leaves behind.
+  for (const id of ["radarr", "sonarr"]) {
+    await setComposeImage(stack.settings.services[id], `img/${id}@sha256:pinned`);
+  }
+
+  const updateState = {};
+  const pulled = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async (_s, svc) => {
+      pulled.push(await readComposeImage(svc));
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
+    readUpdateStateImpl: async () => updateState,
+    writeUpdateStateImpl: async (next) => Object.assign(updateState, next),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.equal(job.result.upgraded, 2);
+  // The old Upgrade All never cleared pins, so it would have re-pulled the
+  // digest and the service could never move forward. Each pull must see the
+  // configured tag instead.
+  assert.deepEqual(pulled, [
+    stack.settings.services.radarr.image,
+    stack.settings.services.sonarr.image
+  ]);
+  assert.ok(pulled.every((ref) => !ref.includes("@sha256:")));
+  assert.equal(updateState.radarr.status, "current");
+  assert.equal(updateState.sonarr.status, "current");
+});
+
+test("Upgrade All keeps going when one service fails and reports the split", async (t) => {
+  const stack = await createStackWith(t, ["radarr", "sonarr", "ombi"]);
+  const attempted = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async (_s, svc) => {
+      attempted.push(svc.id);
+      return svc.id === "sonarr"
+        ? { ok: false, stdout: "", stderr: "manifest unknown" }
+        : { ok: true, stdout: "", stderr: "" };
+    },
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
+    readUpdateStateImpl: async () => ({}),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  // A mid-stack failure must not strand the remaining services.
+  assert.deepEqual(attempted, ["radarr", "sonarr", "ombi"]);
+  assert.equal(job.result.upgraded, 2);
+  assert.equal(job.result.failed, 1);
+  assert.equal(job.steps.find((s) => s.name === "sonarr").status, STEP_STATUS.FAILED);
+  assert.equal(job.steps.find((s) => s.name === "ombi").status, STEP_STATUS.SUCCEEDED);
+});
+
+test("Upgrade All reports a service that upgrades but does not come back healthy", async (t) => {
+  const stack = await createStackWith(t, ["radarr"]);
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." }),
+    readUpdateStateImpl: async () => ({}),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  // Pulling successfully is not the same as the app working.
+  assert.equal(job.result.failed, 1);
+  assert.match(job.steps[0].error, /Container is exited/);
+});
+
+test("Upgrade All skips services that were never installed", async (t) => {
+  const stack = await createStackWith(t, ["radarr"]);
+  stack.settings.selectedServiceIds = ["radarr", "bazarr"];
+  stack.settings.services.bazarr = {
+    ...stack.settings.services.radarr,
+    id: "bazarr",
+    name: "Bazarr",
+    containerName: "bazarr",
+    composePath: path.join(stack.root, "bazarr", "compose.yml")
+  };
+
+  const attempted = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async (_s, svc) => {
+      attempted.push(svc.id);
+      return { ok: true, stdout: "", stderr: "" };
+    },
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
+    readUpdateStateImpl: async () => ({}),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  assert.deepEqual(attempted, ["radarr"]);
+  assert.equal(job.result.skipped, 1);
+  assert.equal(job.result.failed, 0);
+});

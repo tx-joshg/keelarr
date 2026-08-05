@@ -185,7 +185,12 @@ export class StackarrAppService {
     return this.managedStackService.checkAllUpdates(context);
   }
 
-  async upgradeAll(context = {}) {
-    return this.managedStackService.upgradeAll(context);
+  async upgradeAll(input = {}, context = {}) {
+    const job = await this.managedStackService.startUpgradeAll(input, context).create();
+
+    return {
+      ok: true,
+      job: buildJobSnapshot(job)
+    };
   }
 }

@@ -239,7 +239,7 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
 
   app.post("/api/services/upgrade-all", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.upgradeAll(requestContext(request)));
+      response.status(202).json(await stackarrApp.upgradeAll(request.body || {}, requestContext(request)));
     } catch (error) {
       next(error);
     }

@@ -1649,6 +1649,17 @@ function jobOutcomeBanner(job) {
     `;
   }
 
+  // Upgrade All completes even when individual services fail, so a plain
+  // success banner would hide the failures.
+  if (job.result?.failed > 0) {
+    return `
+      <div class="job-banner job-banner-warn">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <span>${escapeHtml(job.result.summary || "Some services failed to upgrade.")} Check the steps below.</span>
+      </div>
+    `;
+  }
+
   // Succeeded, but health was never confirmed. Say so plainly rather than
   // showing an unqualified success.
   if (job.result?.outcome === "unverified") {
@@ -1698,7 +1709,9 @@ function renderJobPanel() {
 
   const title = job.kind === "rollback"
     ? "Rollback"
-    : job.kind === "cutover-revert" ? "Revert" : "Cutover";
+    : job.kind === "upgrade-all"
+      ? "Upgrade All"
+      : job.kind === "cutover-revert" ? "Revert" : "Cutover";
   const subject = job.result?.serviceName
     || job.subject?.serviceId
     || job.subject?.containerId
@@ -2229,7 +2242,9 @@ async function pollJob(jobId) {
 
   const label = data.job.kind === "rollback"
     ? "Rollback"
-    : data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
+    : data.job.kind === "upgrade-all"
+      ? "Upgrade All"
+      : data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
   const unverified = data.job.result?.outcome === "unverified";
 
   showToast(
@@ -2375,7 +2390,11 @@ async function upgradeAll() {
     method: "POST"
   });
   setLatestResult("Upgrade All", data);
-  await loadState();
+  // Job-backed: show the per-service checklist and poll rather than leaving
+  // the page frozen for the length of the whole stack upgrade.
+  ui.job = data.job;
+  render();
+  await pollJob(data.job.id);
 }
 
 function clearActivityView() {

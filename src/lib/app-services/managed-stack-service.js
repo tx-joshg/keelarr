@@ -573,17 +573,23 @@ export class ManagedStackService {
     };
   }
 
-  async upgradeManagedService(serviceId, context = {}) {
-    const settings = await this.loadSettings();
-    const service = this.requireService(settings, serviceId);
-    const logger = this.scopedLogger(context);
-    await this.clearRollbackPin(service, logger);
-    const result = await this.upgradeService(settings, service, {
-      logger: logger.child({
-        serviceId: service.id,
-        containerName: service.containerName
-      })
+  /**
+   * The single upgrade path. Both the per-service button and Upgrade All go
+   * through this, so they cannot drift apart again — the previous Upgrade All
+   * had its own loop that never gained pin clearing or status refresh.
+   */
+  async upgradeOne(settings, service, logger, { verify = true } = {}) {
+    const serviceLogger = logger.child({
+      serviceId: service.id,
+      containerName: service.containerName
     });
+
+    if (!(await this.serviceIsDeployed(service))) {
+      return { serviceId: service.id, ok: true, skipped: true, reason: "not-deployed" };
+    }
+
+    await this.clearRollbackPin(service, serviceLogger);
+    const result = await this.upgradeService(settings, service, { logger: serviceLogger });
 
     logger[result.ok ? "info" : "error"]("service.upgrade", {
       serviceId: service.id,
@@ -594,24 +600,61 @@ export class ManagedStackService {
       stderr: result.stderr
     });
 
-    if (result.ok) {
-      await this.recordFreshImageState(service.id);
+    if (!result.ok) {
+      await this.appendActivity({
+        kind: "upgrade",
+        level: "error",
+        message: `Upgrade failed for ${service.name}.`,
+        details: { stdout: result.stdout, stderr: result.stderr }
+      });
+
+      return {
+        serviceId: service.id,
+        ok: false,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        error: (result.stderr || result.stdout || "Upgrade failed.").split("\n").filter(Boolean).pop()
+      };
     }
+
+    await this.recordFreshImageState(service.id);
+
+    // Pulling and recreating is not proof the app came back. Verify the same
+    // way cutover and rollback do.
+    const health = verify
+      ? await this.verifyServiceHealth(settings, service, { ...this.verifyOptions, logger: serviceLogger })
+      : null;
 
     await this.appendActivity({
       kind: "upgrade",
-      level: result.ok ? "info" : "error",
-      message: result.ok ? `Upgraded ${service.name}.` : `Upgrade failed for ${service.name}.`,
-      details: {
-        stdout: result.stdout,
-        stderr: result.stderr
-      }
+      level: health && health.outcome === HEALTH_OUTCOME.FAILED ? "error" : "info",
+      message: health && health.outcome === HEALTH_OUTCOME.FAILED
+        ? `Upgraded ${service.name}, but it did not come back healthy.`
+        : `Upgraded ${service.name}.`,
+      details: { stdout: result.stdout, stderr: result.stderr }
     });
 
     return {
-      ok: result.ok,
+      serviceId: service.id,
+      ok: health ? health.outcome !== HEALTH_OUTCOME.FAILED : true,
+      health,
       stdout: result.stdout,
-      stderr: result.stderr
+      stderr: result.stderr,
+      error: health && health.outcome === HEALTH_OUTCOME.FAILED ? health.reason : null
+    };
+  }
+
+  async upgradeManagedService(serviceId, context = {}) {
+    const settings = await this.loadSettings();
+    const service = this.requireService(settings, serviceId);
+    const result = await this.upgradeOne(settings, service, this.scopedLogger(context));
+
+    return {
+      ok: result.ok,
+      skipped: result.skipped === true,
+      health: result.health || null,
+      stdout: result.stdout || "",
+      stderr: result.stderr || ""
     };
   }
 
@@ -669,30 +712,79 @@ export class ManagedStackService {
     };
   }
 
-  async upgradeAll(context = {}) {
-    const settings = await this.loadSettings();
-    const services = settings.selectedServiceIds.map((serviceId) => this.requireService(settings, serviceId));
-    const logger = this.scopedLogger(context);
-    const results = await this.upgradeAllServices(settings, services, {
-      logger
-    });
-    const ok = results.every((result) => result.ok);
+  startUpgradeAll(input = {}, context = {}) {
+    return {
+      create: async () => {
+        const settings = await this.loadSettings();
+        const services = settings.selectedServiceIds.map((serviceId) => this.requireService(settings, serviceId));
+        const job = this.requireJobs().create({
+          kind: "upgrade-all",
+          subject: { serviceId: "*" },
+          steps: services.map((service) => ({ name: service.id, label: `Upgrade ${service.name}` }))
+        });
 
-    logger[ok ? "info" : "error"]("service.upgrade_all", {
-      ok,
-      results
-    });
+        return this.jobs.start(job, (ctx) => this.runUpgradeAll(ctx, settings, services, context));
+      }
+    };
+  }
+
+  async runUpgradeAll(ctx, settings, services, context) {
+    const logger = this.scopedLogger(context);
+    const results = [];
+
+    for (const service of services) {
+      try {
+        const result = await ctx.step(service.id, async () => {
+          const outcome = await this.upgradeOne(settings, service, logger);
+
+          if (!outcome.ok) {
+            throw new StackarrError(outcome.error || `Upgrade failed for ${service.name}.`, { statusCode: 500 });
+          }
+
+          return {
+            detail: outcome.skipped
+              ? "Not installed, skipped."
+              : outcome.health
+                ? outcome.health.reason
+                : "Upgraded.",
+            ...outcome
+          };
+        });
+        results.push(result);
+      } catch (error) {
+        // One bad service must not strand the rest of the stack half-upgraded.
+        results.push({ serviceId: service.id, ok: false, error: error.message });
+      }
+    }
+
+    const failed = results.filter((result) => !result.ok);
+    const upgraded = results.filter((result) => result.ok && !result.skipped);
+    const skipped = results.filter((result) => result.skipped);
 
     await this.appendActivity({
       kind: "upgrade-all",
-      level: ok ? "info" : "error",
-      message: ok ? "Upgraded the full selected stack." : "One or more service upgrades failed.",
+      level: failed.length ? "error" : "info",
+      message: failed.length
+        ? `Upgraded ${upgraded.length} of ${services.length} services; ${failed.length} failed.`
+        : `Upgraded the selected stack (${upgraded.length} services).`,
       details: results
     });
 
+    logger[failed.length ? "error" : "info"]("service.upgrade_all", {
+      upgraded: upgraded.length,
+      skipped: skipped.length,
+      failed: failed.length
+    });
+
     return {
-      ok,
-      results
+      upgraded: upgraded.length,
+      skipped: skipped.length,
+      failed: failed.length,
+      total: services.length,
+      results,
+      summary: failed.length
+        ? `${upgraded.length} upgraded, ${failed.length} failed${skipped.length ? `, ${skipped.length} skipped` : ""}.`
+        : `${upgraded.length} upgraded${skipped.length ? `, ${skipped.length} skipped` : ""}.`
     };
   }
 }

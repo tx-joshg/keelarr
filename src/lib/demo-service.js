@@ -761,6 +761,32 @@ export class DemoStackarrAppService {
     };
   }
 
+  async upgradeAllJob() {
+    const settings = normalizeSettings(this.demo.settings);
+    const services = settings.selectedServiceIds.map((id) => settings.services[id]);
+    const job = this.jobs.create({
+      kind: "upgrade-all",
+      subject: { serviceId: "*" },
+      steps: services.map((service) => ({ name: service.id, label: `Upgrade ${service.name}` }))
+    });
+
+    this.jobs.start(job, async (ctx) => {
+      for (const service of services) {
+        await ctx.step(service.id, async () => {
+          const runtime = this.demo.services[service.id] || {};
+          runtime.updateStatus = "current";
+          this.demo.services[service.id] = runtime;
+          return { detail: `Simulated upgrade of ${service.name}.` };
+        });
+      }
+
+      this.pushActivity({ kind: "upgrade-all", level: "info", message: "Upgraded the selected stack." });
+      return { upgraded: services.length, failed: 0, skipped: 0, total: services.length, summary: `${services.length} upgraded.` };
+    });
+
+    return { ok: true, job: buildJobSnapshot(job) };
+  }
+
   async getJob(jobId) {
     return {
       ok: true,
@@ -911,37 +937,7 @@ export class DemoStackarrAppService {
   }
 
   async upgradeAll() {
-    const settings = normalizeSettings(this.demo.settings);
-    const results = [];
-
-    for (const serviceId of settings.selectedServiceIds) {
-      const runtime = this.demo.services[serviceId] || {};
-      runtime.generated = true;
-      runtime.runtimeStatus = "running";
-      runtime.reachable = true;
-      runtime.httpStatus = 200;
-      runtime.latencyMs = runtime.latencyMs || 55;
-      runtime.updateStatus = "current";
-      runtime.updateCheckedAt = nowIso();
-      this.demo.services[serviceId] = runtime;
-      results.push({
-        serviceId,
-        ok: true,
-        stdout: `Upgrade completed for ${serviceId}.`,
-        stderr: ""
-      });
-    }
-
-    this.pushActivity({
-      kind: "upgrade-all",
-      level: "info",
-      message: "Upgraded the full selected stack."
-    });
-
-    return {
-      ok: true,
-      results
-    };
+    return this.upgradeAllJob();
   }
 
   async resetDemo() {
