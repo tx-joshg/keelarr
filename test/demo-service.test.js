@@ -24,3 +24,74 @@ test("demo service can generate a managed draft from an import candidate", async
   assert.match(result.generated.reviewNotesPath, /IMPORT-REVIEW\.md$/);
   assert.equal(scan.items.find((item) => item.containerId === "trailarrdemo")?.adoptedDraft, true);
 });
+
+async function settleJob(service, jobId) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const { job } = await service.getJob(jobId);
+    if (job.status === "succeeded" || job.status === "failed") {
+      return job;
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  throw new Error("Demo job never settled.");
+}
+
+function serviceState(state, id) {
+  return state.services.find((item) => item.id === id);
+}
+
+test("demo dashboard reports the management lifecycle the cutover UI keys off", async () => {
+  const service = new DemoStackarrAppService();
+
+  // Detected: a live container exists, but no draft has been generated.
+  assert.equal(serviceState(await service.buildState(), "trailarr").managementState, "detected");
+
+  await service.adoptImportAsDraft("trailarrdemo");
+  const drafted = serviceState(await service.buildState(), "trailarr");
+  assert.equal(drafted.managementState, "draft");
+  assert.equal(drafted.managedMode, "imported-draft");
+  assert.equal(drafted.rollbackContainerName, null);
+
+  const started = await service.startCutover("trailarrdemo", { confirmContainerName: "trailarr" });
+  await settleJob(service, started.job.id);
+
+  const managed = serviceState(await service.buildState(), "trailarr");
+  assert.equal(managed.managementState, "managed");
+  assert.equal(managed.managedMode, "imported");
+  // The revert control is offered only while the rollback container exists.
+  assert.equal(managed.rollbackContainerName, "trailarr-stackarr-rollback");
+});
+
+test("demo cutover refuses a confirmation that does not match the container", async () => {
+  const service = new DemoStackarrAppService();
+  await service.adoptImportAsDraft("trailarrdemo");
+
+  await assert.rejects(
+    () => service.startCutover("trailarrdemo", { confirmContainerName: "nope" }),
+    /confirmation does not match/
+  );
+});
+
+test("demo cutover requires a generated draft first", async () => {
+  const service = new DemoStackarrAppService();
+
+  await assert.rejects(
+    () => service.startCutover("trailarrdemo", { confirmContainerName: "trailarr" }),
+    /Generate the managed draft/
+  );
+});
+
+test("demo revert clears the rollback container and returns the service to draft", async () => {
+  const service = new DemoStackarrAppService();
+  await service.adoptImportAsDraft("trailarrdemo");
+  const started = await service.startCutover("trailarrdemo", { confirmContainerName: "trailarr" });
+  await settleJob(service, started.job.id);
+
+  const reverted = await service.startCutoverRevert("trailarr", { confirmContainerName: "trailarr" });
+  await settleJob(service, reverted.job.id);
+
+  const after = serviceState(await service.buildState(), "trailarr");
+  assert.equal(after.managementState, "draft");
+  assert.equal(after.rollbackContainerName, null);
+});

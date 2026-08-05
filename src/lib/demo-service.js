@@ -415,10 +415,32 @@ export class DemoStackarrAppService {
         updateStatus: "unchecked"
       };
 
+      // Mirror the derivation in status.js so the demo dashboard shows the
+      // same management lifecycle the live one does.
+      const inventoryItem = this.demo.importItems?.find(
+        (item) => item.recognized && item.serviceId === serviceId
+      ) || null;
+      const managementState = runtime.managed
+        ? "managed"
+        : runtime.generated && inventoryItem
+          ? "draft"
+          : inventoryItem
+            ? "detected"
+            : runtime.generated
+              ? "generated"
+              : "catalog";
+
       return {
         ...service,
         appUrl: `/demo/apps/${service.id}`,
         generated: runtime.generated,
+        managementState,
+        managedMode: runtime.managed ? "imported" : inventoryItem && runtime.generated ? "imported-draft" : "catalog",
+        runtimeSource: runtime.managed ? "compose" : inventoryItem ? "inventory" : "none",
+        rollbackContainerName: runtime.rollbackContainerName || null,
+        cutoverAt: runtime.cutoverAt || null,
+        observedContainerId: inventoryItem?.containerId || null,
+        observedContainerName: inventoryItem?.containerName || service.containerName,
         runtimeStatus: runtime.runtimeStatus,
         publishings: runtime.publishings || [],
         reachable: runtime.reachable,
@@ -657,6 +679,8 @@ export class DemoStackarrAppService {
         runtime.runtimeStatus = "running";
         runtime.reachable = true;
         runtime.updateStatus = "unchecked";
+        runtime.rollbackContainerName = rollbackName;
+        runtime.cutoverAt = nowIso();
         this.demo.services[item.serviceId] = runtime;
         item.cutOver = true;
 
@@ -710,6 +734,8 @@ export class DemoStackarrAppService {
       await ctx.step("finalize", async () => {
         const runtime = this.demo.services[serviceId] || {};
         runtime.managed = false;
+        runtime.rollbackContainerName = null;
+        runtime.cutoverAt = null;
         this.demo.services[serviceId] = runtime;
 
         this.pushActivity({

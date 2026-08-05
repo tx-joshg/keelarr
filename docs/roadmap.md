@@ -235,13 +235,15 @@ inspect and image-identity backup, tiered health verification, automatic revert
 on failure, and an explicit revert entry point. See the Cutover section of the
 README for the contract.
 
+Cutover and revert are also wired into the dashboard, driven by job polling,
+with a typed-name confirmation and a live step checklist.
+
 What remains:
 
-1. surface cutover and revert in the dashboard UI, driven by job polling
-2. validate the workflow on a live service, starting with Ombi and then Tautulli
-3. migrate the remaining host-network and custom-network services
-4. improve update/version reporting for imported and externally managed services
+1. validate the workflow on a live service, starting with Ombi and then Tautulli
+2. migrate the remaining host-network and custom-network services
+3. improve update/version reporting for imported and externally managed services
 
-Step 2 is the real test. The sequencing is covered by unit tests and by an
-end-to-end test against a stub Docker binary, but it has not yet run against the
-live QNAP stack.
+Step 1 is the real test. The sequencing is covered by unit tests and by an
+end-to-end test against a stub Docker binary, and the UI has been exercised in
+demo mode, but none of it has run against the live QNAP stack.

@@ -69,13 +69,15 @@ The dashboard can also run a read-only adoption scan:
 - Compose runtime checks via `docker compose ps`
 - Pre-upgrade backups of compose files and container inspect output
 - Each backup also writes `rollback.json` recording the image id and repo digest the container was running before the operation, so a rollback can pin the previous image instead of re-pulling a mutable tag
-- API-driven per-service cutover and revert, run as background jobs (see [Cutover](#cutover))
+- Per-service cutover and revert from the dashboard, run as background jobs with a live step checklist (see [Cutover](#cutover))
 
 ## Cutover
 
 A cutover moves one detected container from manual Docker management to a Stackarr-managed Compose stack. Because the managed draft reuses the live container's name, the original container has to release that name first — so the cutover stops it, renames it to `<name>-stackarr-rollback`, and only then starts the Compose service.
 
 The original container is **renamed, never removed**. That is what makes revert cheap: it is a rename back, not a rebuild from the inspect backup. Stackarr never deletes it, on success or failure; removing it is your call once the replacement has been used.
+
+In the dashboard: open `Adoption`, scan, preview a recognized container, and generate its managed draft. `Cut Over To Compose` then appears. The confirmation dialog requires typing the container name, and progress renders as a live step checklist. Once a service is cut over, a revert button appears on its row in `Stack` for as long as the rollback container exists.
 
 Cutover runs as a background job because it is destructive and can outlive a request:
 
@@ -113,7 +115,6 @@ Outcomes:
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control
-- Cutover and revert controls in the dashboard UI (the API is in place; the buttons are not)
 - Full rollback to previous images
 - App-to-app API provisioning
 - Reverse proxy and certificate automation

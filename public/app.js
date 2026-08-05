@@ -34,7 +34,13 @@ const ui = {
   toastTimer: null,
   pathPicker: null,
   selectedImportContainerId: null,
-  pendingServices: new Set()
+  pendingServices: new Set(),
+  // Confirmation dialog for a cutover or revert, mirroring the server-side
+  // gate: the operator has to type the container name being replaced.
+  cutover: null,
+  // Latest cutover/revert job snapshot, polled while it runs.
+  job: null,
+  jobTimer: null
 };
 
 const appNode = document.querySelector("#app");
@@ -155,8 +161,15 @@ function buildRenderService(id) {
     resourceUsage: live?.resourceUsage || null,
     publishings: Array.isArray(live?.publishings) ? live.publishings : [],
     networks: Array.isArray(live?.networks) ? live.networks : [],
+    cutoverAt: live?.cutoverAt || null,
+    rollbackContainerName: live?.rollbackContainerName || null,
     lastError: live?.lastError || null
   };
+}
+
+/** A preserved pre-cutover container is what makes revert possible. */
+function canRevertCutover(service) {
+  return Boolean(service.rollbackContainerName) && service.managementState === "managed";
 }
 
 function selectedServices() {
@@ -886,6 +899,21 @@ function renderStackView() {
             >
               <i class="${escapeHtml(primaryIcon)}"></i>
             </button>
+            ${canRevertCutover(service)
+              ? `
+                <button
+                  type="button"
+                  class="row-icon-button"
+                  data-stack-action="revert-cutover"
+                  data-service-id="${escapeHtml(service.id)}"
+                  style="color:var(--warning-color);"
+                  title="Revert to ${escapeHtml(service.rollbackContainerName)}"
+                  ${pending ? "disabled" : ""}
+                >
+                  <i class="fa-solid fa-rotate-left"></i>
+                </button>
+              `
+              : ""}
             <a
               class="row-icon-link"
               href="${escapeHtml(openUrl)}"
@@ -1045,23 +1073,45 @@ function renderImportPreview() {
     `Env Keys: ${preview.draft?.envKeys?.length || 0}`
   ].join(" \u00b7 ");
 
+  // Cutover only becomes available once a reviewed draft exists for this
+  // service, which the dashboard reports as the `draft` management state.
+  const liveService = selectedServices().find((service) => service.id === preview.target.serviceId);
+  const readyForCutover = preview.adoptable && liveService?.managementState === "draft";
+
   return `
     <div class="preview-card">
       <div class="preview-toolbar">
         <h3 class="preview-title">${escapeHtml(preview.source.containerName)} -> ${escapeHtml(preview.target.serviceName)}</h3>
-        ${preview.adoptable
-          ? `
-            <button
-              type="button"
-              class="button-success"
-              data-preview-action="adopt-draft"
-              data-container-id="${escapeHtml(preview.source.containerId)}"
-            >
-              Generate Managed Draft
-            </button>
-          `
-          : ""}
+        <div class="preview-toolbar-actions">
+          ${preview.adoptable
+            ? `
+              <button
+                type="button"
+                class="button-default"
+                data-preview-action="adopt-draft"
+                data-container-id="${escapeHtml(preview.source.containerId)}"
+              >
+                ${readyForCutover ? "Regenerate Draft" : "Generate Managed Draft"}
+              </button>
+            `
+            : ""}
+          ${readyForCutover
+            ? `
+              <button
+                type="button"
+                class="button-success"
+                data-preview-action="cutover"
+                data-container-id="${escapeHtml(preview.source.containerId)}"
+              >
+                Cut Over To Compose
+              </button>
+            `
+            : ""}
+        </div>
       </div>
+      ${readyForCutover
+        ? '<div class="muted-paragraph" style="margin-bottom:12px;">A reviewed draft exists. Cutover stops this container, keeps it as a rollback, and starts the Compose stack in its place.</div>'
+        : ""}
       <div class="preview-copy" style="margin-bottom:12px;">${escapeHtml(summary)}</div>
       <pre class="json-panel preview-code">${escapeHtml(yaml)}</pre>
       ${generatedPaths
@@ -1499,8 +1549,8 @@ function renderPathPicker() {
     .join("");
 
   return `
-    <div class="modal-backdrop" data-path-close="true">
-      <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="Browse host directories" onclick="event.stopPropagation()">
+    <div class="modal-backdrop" data-modal-backdrop="path">
+      <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="Browse host directories">
         <div class="path-picker-header">
           <div>
             <div class="path-picker-title">${escapeHtml(`Browse ${picker.label || "Directory"}`)}</div>
@@ -1519,6 +1569,166 @@ function renderPathPicker() {
         </div>
         <div class="path-picker-list">
           ${directories || '<div class="muted-paragraph">No subdirectories are visible from this location.</div>'}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+const JOB_STEP_ICONS = {
+  pending: { icon: "fa-regular fa-circle", tone: "idle" },
+  running: { icon: "fa-solid fa-spinner fa-spin", tone: "info" },
+  succeeded: { icon: "fa-solid fa-circle-check", tone: "good" },
+  failed: { icon: "fa-solid fa-circle-xmark", tone: "danger" },
+  skipped: { icon: "fa-solid fa-circle-minus", tone: "idle" }
+};
+
+function jobOutcomeBanner(job) {
+  if (job.status === "running" || job.status === "pending") {
+    return `<div class="job-banner job-banner-info"><i class="fa-solid fa-spinner fa-spin"></i> <span>Working. This can take a minute; you can leave this page open.</span></div>`;
+  }
+
+  if (job.status === "failed") {
+    return `
+      <div class="job-banner job-banner-danger">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <span>
+          ${escapeHtml(job.error?.message || "The job failed.")}
+          ${job.error?.details?.reverted ? " The original container was restored." : ""}
+        </span>
+      </div>
+    `;
+  }
+
+  // Succeeded, but health was never confirmed. Say so plainly rather than
+  // showing an unqualified success.
+  if (job.result?.outcome === "unverified") {
+    return `
+      <div class="job-banner job-banner-warn">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <span>
+          ${escapeHtml(job.result.serviceName || "The service")} is running under Compose, but its health could not be confirmed
+          (${escapeHtml(job.result.health?.reason || "no healthcheck or app response")}).
+          Check the app, then remove the rollback container yourself or revert.
+        </span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="job-banner job-banner-good">
+      <i class="fa-solid fa-circle-check"></i>
+      <span>${escapeHtml(job.result?.cleanupHint || "Done.")}</span>
+    </div>
+  `;
+}
+
+function renderJobPanel() {
+  const job = ui.job;
+
+  if (!job) {
+    return "";
+  }
+
+  const steps = (job.steps || [])
+    .map((step) => {
+      const meta = JOB_STEP_ICONS[step.status] || JOB_STEP_ICONS.pending;
+      const note = step.error || step.detail;
+
+      return `
+        <li class="job-step job-step-${escapeHtml(step.status)}">
+          <i class="${escapeHtml(meta.icon)} job-step-icon job-step-icon-${escapeHtml(meta.tone)}"></i>
+          <div>
+            <div class="job-step-label">${escapeHtml(step.label || step.name)}</div>
+            ${note ? `<div class="job-step-note">${escapeHtml(note)}</div>` : ""}
+          </div>
+        </li>
+      `;
+    })
+    .join("");
+
+  const title = job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const subject = job.result?.serviceName
+    || job.subject?.serviceId
+    || job.subject?.containerId
+    || "";
+
+  return `
+    <div class="job-panel">
+      <div class="job-panel-header">
+        <div>
+          <div class="job-panel-title">${escapeHtml(title)}${subject ? ` &middot; ${escapeHtml(subject)}` : ""}</div>
+          <div class="job-panel-copy">${escapeHtml(job.status)}</div>
+        </div>
+        ${job.status === "succeeded" || job.status === "failed"
+          ? '<button type="button" class="toast-dismiss" data-job-action="dismiss" aria-label="Dismiss job"><i class="fa-solid fa-xmark"></i></button>'
+          : ""}
+      </div>
+      ${jobOutcomeBanner(job)}
+      <ol class="job-steps">${steps}</ol>
+    </div>
+  `;
+}
+
+function renderCutoverModal() {
+  const dialog = ui.cutover;
+
+  if (!dialog?.open) {
+    return "";
+  }
+
+  const reverting = dialog.mode === "revert";
+  const confirmed = dialog.confirmText.trim() === dialog.containerName;
+  const heading = reverting
+    ? `Revert ${dialog.serviceName}`
+    : `Cut over ${dialog.serviceName} to Compose`;
+
+  const explanation = reverting
+    ? `Stackarr will stop and remove the Compose container, then rename <code>${escapeHtml(dialog.rollbackContainerName || "")}</code> back to <code>${escapeHtml(dialog.containerName)}</code> and start it.`
+    : `Stackarr will back up the container, stop it, rename it to <code>${escapeHtml(dialog.containerName)}-stackarr-rollback</code>, then start the managed Compose stack. The original container is kept, not deleted, so this can be reverted.`;
+
+  return `
+    <div class="modal-backdrop" data-modal-backdrop="cutover">
+      <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="${escapeHtml(heading)}">
+        <div class="path-picker-header">
+          <div>
+            <div class="path-picker-title">${escapeHtml(heading)}</div>
+            <div class="path-picker-copy">${escapeHtml(dialog.containerName)}</div>
+          </div>
+          <button type="button" class="toast-dismiss" data-cutover-close="true" aria-label="Cancel">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="muted-paragraph" style="margin:12px 0;">${explanation}</div>
+
+        ${dialog.error
+          ? `<div class="result-list result-list-danger"><strong>Could not start</strong><ul><li>${escapeHtml(dialog.error)}</li></ul></div>`
+          : ""}
+
+        <label class="cutover-label" for="cutover-confirm">
+          Type <strong>${escapeHtml(dialog.containerName)}</strong> to confirm
+        </label>
+        <input
+          id="cutover-confirm"
+          class="text-input"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          value="${escapeHtml(dialog.confirmText)}"
+          data-cutover-input="true"
+        />
+
+        <div class="path-picker-actions" style="justify-content:flex-end;">
+          <button type="button" class="button-default" data-cutover-close="true">Cancel</button>
+          <button
+            type="button"
+            class="${reverting ? "button-default" : "button-success"}"
+            data-cutover-action="submit"
+            ${confirmed && !dialog.submitting ? "" : "disabled"}
+          >
+            ${dialog.submitting ? "Starting..." : reverting ? "Revert" : "Cut Over"}
+          </button>
         </div>
       </div>
     </div>
@@ -1590,6 +1800,7 @@ function render() {
         <div class="scroll-shell">
           <div class="page-content">
             ${renderWarningBanner()}
+            ${renderJobPanel()}
             ${renderResultPanel()}
             ${renderCurrentView()}
           </div>
@@ -1599,8 +1810,19 @@ function render() {
         </div>
         ${renderToast()}
         ${renderPathPicker()}
+        ${renderCutoverModal()}
       </div>
     `;
+
+    // Re-focus the confirmation field after the full re-render so typing is
+    // not interrupted by each keystroke rebuilding the DOM.
+    if (ui.cutover?.open) {
+      const input = appNode.querySelector("[data-cutover-input]");
+      if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    }
     window.__stackarrRenderError = null;
   } catch (error) {
     window.__stackarrRenderError = error?.message || "Render failed.";
@@ -1800,6 +2022,110 @@ async function adoptImportDraft(containerId) {
   await loadState();
   if (state.importScan) {
     await scanImports(true);
+  }
+}
+
+function openCutoverDialog({ mode, containerId, serviceId, serviceName, containerName, rollbackContainerName }) {
+  ui.cutover = {
+    open: true,
+    mode,
+    containerId: containerId || null,
+    serviceId: serviceId || null,
+    serviceName: serviceName || containerName,
+    containerName,
+    rollbackContainerName: rollbackContainerName || null,
+    confirmText: "",
+    submitting: false,
+    error: null
+  };
+  render();
+}
+
+function closeCutoverDialog() {
+  ui.cutover = null;
+  render();
+}
+
+function stopJobPolling() {
+  if (ui.jobTimer) {
+    clearTimeout(ui.jobTimer);
+    ui.jobTimer = null;
+  }
+}
+
+/**
+ * Polls a running job until it reaches a terminal state, then refreshes the
+ * dashboard so managed state and the revert button reflect the outcome.
+ */
+async function pollJob(jobId) {
+  stopJobPolling();
+
+  let data;
+  try {
+    data = await request(`/api/jobs/${jobId}`);
+  } catch (error) {
+    ui.job = null;
+    render();
+    throw error;
+  }
+
+  ui.job = data.job;
+  render();
+
+  if (data.job.status === "pending" || data.job.status === "running") {
+    ui.jobTimer = setTimeout(() => {
+      pollJob(jobId).catch(showError);
+    }, 1200);
+    return;
+  }
+
+  await loadState();
+  if (state.importScan) {
+    await scanImports(true);
+  }
+
+  showToast(
+    data.job.status === "succeeded"
+      ? data.job.result?.outcome === "unverified"
+        ? "Cutover finished, but health was not confirmed."
+        : "Cutover finished."
+      : "The job failed. See the step list for details.",
+    data.job.status === "succeeded" && data.job.result?.outcome !== "unverified" ? "success" : "danger"
+  );
+}
+
+async function submitCutoverDialog() {
+  const dialog = ui.cutover;
+
+  if (!dialog || dialog.confirmText.trim() !== dialog.containerName) {
+    return;
+  }
+
+  dialog.submitting = true;
+  dialog.error = null;
+  render();
+
+  const url = dialog.mode === "revert"
+    ? `/api/services/${dialog.serviceId}/revert-cutover`
+    : `/api/import/${dialog.containerId}/cutover`;
+
+  try {
+    const data = await request(url, {
+      method: "POST",
+      body: JSON.stringify({ confirmContainerName: dialog.containerName })
+    });
+
+    ui.cutover = null;
+    ui.job = data.job;
+    render();
+    await pollJob(data.job.id);
+  } catch (error) {
+    // Keep the dialog open so the reason stays attached to the action.
+    if (ui.cutover) {
+      ui.cutover.submitting = false;
+      ui.cutover.error = error.message;
+    }
+    render();
   }
 }
 
@@ -2022,6 +2348,20 @@ appNode.addEventListener("click", (event) => {
     return;
   }
 
+  // Backdrop dismissal matches only when the backdrop itself is the target.
+  // Modal content must not stopPropagation: every click handler in this app is
+  // delegated on #app, so a swallowed click disables the whole dialog.
+  const backdropKind = event.target.dataset?.modalBackdrop;
+  if (backdropKind === "path") {
+    closePathPicker();
+    return;
+  }
+
+  if (backdropKind === "cutover") {
+    closeCutoverDialog();
+    return;
+  }
+
   if (event.target.closest("[data-path-close]")) {
     closePathPicker();
     return;
@@ -2038,6 +2378,25 @@ appNode.addEventListener("click", (event) => {
     return;
   }
 
+  if (event.target.closest("[data-cutover-close]")) {
+    closeCutoverDialog();
+    return;
+  }
+
+  const cutoverActionTarget = event.target.closest("[data-cutover-action]");
+  if (cutoverActionTarget) {
+    submitCutoverDialog().catch(showError);
+    return;
+  }
+
+  const jobTarget = event.target.closest("[data-job-action]");
+  if (jobTarget) {
+    stopJobPolling();
+    ui.job = null;
+    render();
+    return;
+  }
+
   const stackTarget = event.target.closest("[data-stack-action]");
   if (stackTarget) {
     const serviceId = stackTarget.dataset.serviceId;
@@ -2046,6 +2405,20 @@ appNode.addEventListener("click", (event) => {
 
     if (stackAction === "review-adoption") {
       reviewServiceAdoption(containerId).catch(showError);
+      return;
+    }
+
+    if (stackAction === "revert-cutover") {
+      const service = selectedServices().find((candidate) => candidate.id === serviceId);
+      if (service) {
+        openCutoverDialog({
+          mode: "revert",
+          serviceId,
+          serviceName: service.name,
+          containerName: service.observedContainerName,
+          rollbackContainerName: service.rollbackContainerName
+        });
+      }
       return;
     }
 
@@ -2069,7 +2442,21 @@ appNode.addEventListener("click", (event) => {
 
   const previewTarget = event.target.closest("[data-preview-action]");
   if (previewTarget) {
-    adoptImportDraft(previewTarget.dataset.containerId).catch(showError);
+    const containerId = previewTarget.dataset.containerId;
+
+    if (previewTarget.dataset.previewAction === "cutover") {
+      const preview = state.importPreview;
+      openCutoverDialog({
+        mode: "cutover",
+        containerId,
+        serviceId: preview?.target?.serviceId || null,
+        serviceName: preview?.target?.serviceName || preview?.source?.containerName,
+        containerName: preview?.source?.containerName
+      });
+      return;
+    }
+
+    adoptImportDraft(containerId).catch(showError);
     return;
   }
 
@@ -2115,6 +2502,13 @@ appNode.addEventListener("input", (event) => {
     return;
   }
 
+  if (target.dataset.cutoverInput && ui.cutover) {
+    ui.cutover.confirmText = target.value;
+    // Re-render so the confirm button enables the moment the name matches.
+    render();
+    return;
+  }
+
   if (!target.name) {
     return;
   }
@@ -2136,6 +2530,22 @@ appNode.addEventListener("change", (event) => {
   }
 
   updateSettingValue(target.name, target.value);
+});
+
+appNode.addEventListener("keydown", (event) => {
+  if (!ui.cutover?.open) {
+    return;
+  }
+
+  if (event.key === "Escape") {
+    closeCutoverDialog();
+    return;
+  }
+
+  if (event.key === "Enter" && event.target.dataset?.cutoverInput) {
+    event.preventDefault();
+    submitCutoverDialog().catch(showError);
+  }
 });
 
 loadState().catch(showError);

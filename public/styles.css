@@ -1293,3 +1293,139 @@ table {
     max-width: none;
   }
 }
+
+/* Cutover job progress */
+
+.job-panel {
+  margin-bottom: 18px;
+  border: 1px solid var(--default-border);
+  border-radius: 6px;
+  background: var(--header-background);
+  padding: 16px 18px;
+}
+
+.job-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-panel-title {
+  color: var(--text-color);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.job-panel-copy {
+  margin-top: 2px;
+  color: var(--help-text);
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.job-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
+  border: 1px solid var(--alert-info-border);
+  border-radius: 4px;
+  background: var(--alert-info-background);
+  padding: 10px 12px;
+  color: var(--text-color);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.job-banner-good {
+  border-color: var(--success-border);
+  background: rgba(39, 194, 76, 0.1);
+}
+
+.job-banner-warn {
+  border-color: var(--alert-warning-border);
+  background: var(--alert-warning-background);
+}
+
+.job-banner-danger {
+  border-color: var(--danger-color);
+  background: rgba(240, 80, 80, 0.1);
+}
+
+.job-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.job-step-icon {
+  margin-top: 2px;
+  width: 14px;
+  text-align: center;
+}
+
+.job-step-icon-good {
+  color: var(--success-background);
+}
+
+.job-step-icon-danger {
+  color: var(--danger-color);
+}
+
+.job-step-icon-info {
+  color: var(--primary-color);
+}
+
+.job-step-icon-idle {
+  color: var(--gray-icon);
+}
+
+.job-step-pending .job-step-label,
+.job-step-skipped .job-step-label {
+  color: var(--help-text);
+}
+
+.job-step-label {
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.job-step-note {
+  margin-top: 2px;
+  color: var(--help-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.preview-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cutover-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-color);
+  font-size: 13px;
+}
+
+.cutover-label strong {
+  color: var(--warning-color);
+}
+
+/* The confirm button stays visibly inert until the typed name matches. */
+.path-picker-modal button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

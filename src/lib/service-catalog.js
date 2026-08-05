@@ -220,7 +220,11 @@ export function buildServiceFromCatalog(baseSettings, id, override = {}) {
     sourceImage: override.sourceImage || null,
     reviewSummaryPath: override.reviewSummaryPath || null,
     reviewNotesPath: override.reviewNotesPath || null,
-    importedAt: override.importedAt || null
+    importedAt: override.importedAt || null,
+    cutoverAt: override.cutoverAt || null,
+    // Present only while a preserved pre-cutover container still exists, so
+    // the dashboard knows whether revert is available.
+    rollbackContainerName: override.rollbackContainerName || null
   };
 
   return service;
