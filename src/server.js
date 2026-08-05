@@ -26,6 +26,10 @@ const app = createHttpApp({
   logger
 });
 
+if (typeof stackarrApp.initialize === "function") {
+  await stackarrApp.initialize();
+}
+
 app.listen(port, () => {
   logger.info("server.listen", {
     mode: process.env.STACKARR_DEMO === "1" ? "demo" : "live",

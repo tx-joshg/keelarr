@@ -76,7 +76,7 @@ export class CutoverService {
     this.containerExists = containerExistsImpl;
     this.generateAndDeploy = generateAndDeployImpl;
     this.hostProfileService = hostProfileService;
-    this.jobs = jobs || new JobRegistry({ logger });
+    this.jobs = jobs || new JobRegistry({ logger, persist: true });
     this.loadSettingsImpl = loadSettingsImpl;
     this.logger = logger.child({ component: "cutover-service" });
     this.readFile = readFileImpl;

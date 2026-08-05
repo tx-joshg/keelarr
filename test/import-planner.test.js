@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import {
   buildImportDraftArtifacts,
   buildImportPreview,
-  buildImportReviewArtifacts
+  buildImportReviewArtifacts,
+  buildImportedPorts
 } from "../src/lib/import-planner.js";
 import { normalizeSettings } from "../src/lib/store.js";
 
@@ -182,4 +183,41 @@ test("builds safe review artifacts for an import draft", async () => {
   assert.match(review.markdown, /Import Review: trailarr -> Trailarr/);
   assert.match(review.markdown, /import-summary\.json/);
   assert.match(review.markdown, /Env Keys: PUID, PGID, TZ/);
+});
+
+test("collapses the duplicate IPv4/IPv6 publish Docker reports for one port", () => {
+  // `docker run -p 3579:80` inspects as two entries. Emitting both makes
+  // Compose bind 3579 twice and the second bind fails.
+  const ports = buildImportedPorts([
+    { containerPort: "80/tcp", hostIp: "0.0.0.0", hostPort: "3579" },
+    { containerPort: "80/tcp", hostIp: "::", hostPort: "3579" }
+  ]);
+
+  assert.deepEqual(ports, ["3579:80/tcp"]);
+});
+
+test("keeps a specific host binding and brackets a literal IPv6 address", () => {
+  assert.deepEqual(
+    buildImportedPorts([{ containerPort: "80/tcp", hostIp: "198.51.100.9", hostPort: "3579" }]),
+    ["198.51.100.9:3579:80/tcp"]
+  );
+  assert.deepEqual(
+    buildImportedPorts([{ containerPort: "80/tcp", hostIp: "::1", hostPort: "3579" }]),
+    ["[::1]:3579:80/tcp"]
+  );
+});
+
+test("keeps distinct ports distinct while deduping", () => {
+  assert.deepEqual(
+    buildImportedPorts([
+      { containerPort: "80/tcp", hostIp: "0.0.0.0", hostPort: "3579" },
+      { containerPort: "80/tcp", hostIp: "::", hostPort: "3579" },
+      { containerPort: "443/tcp", hostIp: "0.0.0.0", hostPort: "8443" }
+    ]),
+    ["3579:80/tcp", "8443:443/tcp"]
+  );
+});
+
+test("an unpublished port keeps only the container side", () => {
+  assert.deepEqual(buildImportedPorts([{ containerPort: "9000/tcp" }]), ["9000/tcp"]);
 });

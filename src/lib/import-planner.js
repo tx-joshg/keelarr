@@ -85,7 +85,11 @@ function buildEnvironmentSpec(environment = {}, fallbackKeys = []) {
   };
 }
 
-function buildImportedPort(port) {
+// Docker reports a wildcard publish once per address family, so `::` means
+// "any interface" exactly as `0.0.0.0` does. Neither belongs in the mapping.
+const WILDCARD_HOST_IPS = new Set(["", "0.0.0.0", "::"]);
+
+export function buildImportedPort(port) {
   const containerValue = String(port.containerPort || "");
   const [containerPort, protocol = null] = containerValue.split("/");
   const protocolSuffix = protocol ? `/${protocol}` : "";
@@ -94,11 +98,24 @@ function buildImportedPort(port) {
     return `${containerPort}${protocolSuffix}`;
   }
 
-  if (port.hostIp && port.hostIp !== "0.0.0.0") {
-    return `${port.hostIp}:${port.hostPort}:${containerPort}${protocolSuffix}`;
+  const hostIp = String(port.hostIp || "");
+
+  if (!WILDCARD_HOST_IPS.has(hostIp)) {
+    // A literal IPv6 address has to be bracketed to separate it from the port.
+    const host = hostIp.includes(":") ? `[${hostIp}]` : hostIp;
+    return `${host}:${port.hostPort}:${containerPort}${protocolSuffix}`;
   }
 
   return `${port.hostPort}:${containerPort}${protocolSuffix}`;
+}
+
+/**
+ * A single `-p 3579:80` shows up twice in `docker inspect`, once bound to
+ * 0.0.0.0 and once to ::. Emitting both makes Compose bind the port twice and
+ * the second bind fails with "address already in use", so they collapse here.
+ */
+export function buildImportedPorts(ports = []) {
+  return [...new Set(ports.map((port) => buildImportedPort(port)))];
 }
 
 function volumeAlias(serviceId, mount, index) {
@@ -201,7 +218,7 @@ export function buildImportDraftArtifacts(settings, item) {
   }
 
   if (item.networkMode !== "host" && item.ports?.length) {
-    composeService.ports = item.ports.map((port) => buildImportedPort(port));
+    composeService.ports = buildImportedPorts(item.ports);
   }
 
   if (Array.isArray(item.entrypoint) && item.entrypoint.length) {

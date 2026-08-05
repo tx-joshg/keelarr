@@ -135,11 +135,24 @@ The pre-cutover state is preserved under
 records the exact image id and repo digest the container was running, which is
 what you need if the image tag has since moved.
 
+## If the controller restarts mid-cutover
+
+Jobs are persisted to `data/jobs.json`, so they survive a controller restart.
+A job that was still running when the process died cannot be resumed — the
+Docker work it was driving is gone with the process — so on startup it is
+marked failed with `interrupted: true` and a message pointing at the rollback
+container. Its step list shows exactly how far it got.
+
+That step list is the thing to read. A job interrupted after `deploy` but
+before `verify` means the Compose container is up but was never checked; a job
+interrupted after `rename` but before `deploy` means nothing is serving.
+
+Recovery has been tested from an interrupted state: the in-app revert works,
+because it falls back to the conventional rollback name when the interrupted
+job never recorded one. If it does not, use the manual escape hatch above.
+
 ## Known risks
 
-- **Jobs are held in memory.** If the Stackarr container restarts mid-cutover,
-  the job record is lost and the service may be left between states. Check
-  `docker ps -a --filter name=stackarr-rollback` and use the escape hatch above.
 - **Preflight is strict about drift.** If the live container changed since the
   draft was reviewed, cutover refuses with a 409. That is deliberate — the fix
   is to regenerate the draft and review it again, not to bypass the check.
@@ -154,8 +167,21 @@ what you need if the image tag has since moved.
 
 ## What has and has not been verified
 
-- sequencing, argument construction, and revert paths: covered by
-  `test/cutover-service.test.js` and `test/cutover-e2e.test.js` (the latter
-  against a stub `docker` binary)
-- the dashboard flow: exercised in demo mode
-- **against a real Docker daemon: not yet.** That is what Step 1 is for.
+Run against a real Docker daemon (Docker 29.4.1, Compose v5.1.3) using the
+Step 1 rehearsal above:
+
+- cutover to `verified`, with Compose taking ownership and the original
+  container preserved as `ombi-stackarr-rollback`
+- `rollback.json` capturing the real pre-cutover image id and repo digest
+- revert restoring the original container under its original name
+- automatic revert after a genuinely failed `compose up`
+- `unverified` when the container runs but the app URL does not answer, without
+  tearing down a working container
+- a `kill -9` mid-verify, then restart: the job is reported as interrupted with
+  an accurate step list, and the in-app revert recovers from that state
+
+Not yet verified:
+
+- **the live QNAP stack.** Container Station's Docker and Compose versions,
+  host networking, and the custom SABnzbd network are all still unexercised.
+- upgrade and rollback of an already cut-over service over time.

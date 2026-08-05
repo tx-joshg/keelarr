@@ -147,3 +147,128 @@ test("prune drops finished jobs once the registry is over its cap", async () => 
 
   assert.ok(registry.list().length <= 2);
 });
+
+function createPersistentRegistry(store, overrides = {}) {
+  let counter = 0;
+  return new JobRegistry({
+    logger: silentLogger,
+    persist: true,
+    createId: () => `job-${++counter}`,
+    now: () => "2026-08-05T00:00:00.000Z",
+    readJobsImpl: async () => store.jobs,
+    writeJobsImpl: async (jobs) => {
+      store.jobs = jobs;
+      store.writes += 1;
+    },
+    ...overrides
+  });
+}
+
+test("a completed job survives a restart", async () => {
+  const store = { jobs: [], writes: 0 };
+  const first = createPersistentRegistry(store);
+  const job = first.create({ kind: "cutover", subject: { containerId: "abc" }, steps: ["stop"] });
+
+  first.start(job, async (ctx) => {
+    await ctx.step("stop", async () => ({ detail: "stopped" }));
+    return { outcome: "verified" };
+  });
+  await settle(job);
+  await first.flush();
+
+  const second = createPersistentRegistry(store);
+  await second.hydrate();
+  const restored = second.get("job-1");
+
+  assert.equal(restored.status, JOB_STATUS.SUCCEEDED);
+  assert.deepEqual(restored.result, { outcome: "verified" });
+  assert.equal(restored.steps[0].detail, "stopped");
+});
+
+test("a job still marked running after a restart is reported as interrupted, not live", async () => {
+  const store = { jobs: [], writes: 0 };
+
+  // Simulate a process that died mid-step: the record is left mid-flight.
+  store.jobs = [{
+    id: "job-9",
+    kind: "cutover",
+    subject: { containerId: "abc" },
+    status: JOB_STATUS.RUNNING,
+    steps: [
+      { name: "stop", label: "Stop", status: STEP_STATUS.SUCCEEDED, detail: null, error: null, startedAt: null, finishedAt: null },
+      { name: "deploy", label: "Deploy", status: STEP_STATUS.RUNNING, detail: null, error: null, startedAt: null, finishedAt: null }
+    ],
+    result: null,
+    error: null,
+    createdAt: "2026-08-05T00:00:00.000Z",
+    startedAt: "2026-08-05T00:00:00.000Z",
+    finishedAt: null
+  }];
+
+  const registry = createPersistentRegistry(store);
+  await registry.hydrate();
+  const restored = registry.get("job-9");
+
+  assert.equal(restored.status, JOB_STATUS.FAILED);
+  assert.equal(restored.error.details.interrupted, true);
+  assert.match(restored.error.message, /restarted while this job was running/);
+  // The step that was mid-flight must not stay "running" forever.
+  assert.equal(restored.steps[1].status, STEP_STATUS.FAILED);
+  assert.equal(restored.steps[0].status, STEP_STATUS.SUCCEEDED);
+  // The reconciled state is written back so the next restart is consistent.
+  assert.equal(store.jobs.find((entry) => entry.id === "job-9").status, JOB_STATUS.FAILED);
+});
+
+test("an interrupted subject can be retried after hydration", async () => {
+  const store = { jobs: [] };
+  store.jobs = [{
+    id: "job-9",
+    kind: "cutover",
+    subject: { containerId: "abc" },
+    status: JOB_STATUS.RUNNING,
+    steps: [],
+    result: null,
+    error: null,
+    createdAt: "2026-08-05T00:00:00.000Z",
+    startedAt: "2026-08-05T00:00:00.000Z",
+    finishedAt: null
+  }];
+
+  const registry = createPersistentRegistry(store);
+  await registry.hydrate();
+
+  // The stale job is terminal, so the concurrency guard must not block a retry.
+  registry.create({ kind: "cutover", subject: { containerId: "abc" }, steps: ["stop"] });
+});
+
+test("persistence failures never break a running job", async () => {
+  const store = { jobs: [], writes: 0 };
+  const registry = createPersistentRegistry(store, {
+    writeJobsImpl: async () => {
+      throw new Error("disk full");
+    }
+  });
+
+  const job = registry.create({ kind: "cutover", subject: { containerId: "abc" }, steps: ["stop"] });
+  registry.start(job, async (ctx) => {
+    await ctx.step("stop", async () => ({ detail: "stopped" }));
+    return { outcome: "verified" };
+  });
+  await settle(job);
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+});
+
+test("a registry without persistence never touches the store", async () => {
+  const store = { jobs: [], writes: 0 };
+  const registry = createPersistentRegistry(store, { persist: false });
+  const job = registry.create({ kind: "cutover", subject: { containerId: "abc" }, steps: ["stop"] });
+
+  registry.start(job, async (ctx) => {
+    await ctx.step("stop", async () => ({ detail: "stopped" }));
+  });
+  await settle(job);
+  await registry.flush();
+
+  assert.equal(store.writes, 0);
+});

@@ -1,5 +1,6 @@
 import { StackarrError } from "./errors.js";
 import { defaultLogger } from "./logger.js";
+import { readJobs, writeJobs } from "./store.js";
 
 export const JOB_STATUS = Object.freeze({
   PENDING: "pending",
@@ -59,13 +60,98 @@ export class JobRegistry {
     logger = defaultLogger,
     maxJobs = 50,
     now = () => new Date().toISOString(),
-    createId = () => crypto.randomUUID()
+    createId = () => crypto.randomUUID(),
+    // Opt-in so tests and demo runs never touch the controller's data dir.
+    persist = false,
+    readJobsImpl = readJobs,
+    writeJobsImpl = writeJobs
   } = {}) {
     this.logger = logger.child({ component: "job-registry" });
     this.maxJobs = maxJobs;
     this.now = now;
     this.createId = createId;
+    this.persist = persist;
+    this.readJobs = readJobsImpl;
+    this.writeJobs = writeJobsImpl;
+    this.writeQueue = Promise.resolve();
     this.jobs = new Map();
+  }
+
+  /**
+   * Restores jobs written by a previous process.
+   *
+   * A job still marked running cannot actually be running: the process that
+   * owned it is gone. It is reported as interrupted rather than left to look
+   * live forever, because the operator needs to know a destructive action may
+   * have stopped halfway.
+   */
+  async hydrate() {
+    if (!this.persist) {
+      return;
+    }
+
+    let stored = [];
+
+    try {
+      stored = await this.readJobs();
+    } catch (error) {
+      this.logger.warn("job.hydrate_failed", { message: error.message });
+      return;
+    }
+
+    let interrupted = 0;
+
+    for (const job of stored) {
+      if (!job?.id) {
+        continue;
+      }
+
+      if (!TERMINAL_JOB_STATUSES.has(job.status)) {
+        interrupted += 1;
+        job.status = JOB_STATUS.FAILED;
+        job.finishedAt = this.now();
+        job.error = {
+          message: "Stackarr restarted while this job was running. The service may be part-way through migration — check for a leftover rollback container before retrying.",
+          details: { interrupted: true }
+        };
+
+        for (const step of job.steps || []) {
+          if (step.status === STEP_STATUS.RUNNING) {
+            step.status = STEP_STATUS.FAILED;
+            step.error = "Interrupted by a controller restart.";
+            step.finishedAt = job.finishedAt;
+          }
+        }
+      }
+
+      this.jobs.set(job.id, job);
+    }
+
+    this.logger.info("job.hydrated", { restored: this.jobs.size, interrupted });
+
+    if (interrupted > 0) {
+      await this.flush();
+    }
+  }
+
+  schedulePersist() {
+    if (!this.persist) {
+      return this.writeQueue;
+    }
+
+    this.writeQueue = this.writeQueue
+      .then(() => this.writeJobs(this.list().map((job) => buildJobSnapshot(job))))
+      .catch((error) => {
+        // Losing the record must never take down a running job.
+        this.logger.warn("job.persist_failed", { message: error.message });
+      });
+
+    return this.writeQueue;
+  }
+
+  /** Awaits any queued write. Used by hydrate and by tests. */
+  flush() {
+    return this.schedulePersist();
   }
 
   /**
@@ -98,6 +184,7 @@ export class JobRegistry {
 
     this.jobs.set(job.id, job);
     this.prune();
+    this.schedulePersist();
     return job;
   }
 
@@ -108,6 +195,7 @@ export class JobRegistry {
   start(job, handler) {
     job.status = JOB_STATUS.RUNNING;
     job.startedAt = this.now();
+    this.schedulePersist();
 
     const controller = this.buildController(job);
 
@@ -117,6 +205,7 @@ export class JobRegistry {
         job.result = result ?? null;
         job.status = JOB_STATUS.SUCCEEDED;
         job.finishedAt = this.now();
+        this.schedulePersist();
         this.logger.info("job.succeeded", { jobId: job.id, kind: job.kind, subject: job.subject });
       })
       .catch((error) => {
@@ -135,6 +224,7 @@ export class JobRegistry {
             step.finishedAt = job.finishedAt;
           }
         }
+        this.schedulePersist();
         this.logger.error("job.failed", {
           jobId: job.id,
           kind: job.kind,
@@ -170,17 +260,22 @@ export class JobRegistry {
         const step = findStep(name);
         step.status = STEP_STATUS.RUNNING;
         step.startedAt = this.now();
+        // Persist before running so a crash mid-step leaves a record pointing
+        // at the step that was in flight.
+        this.schedulePersist();
 
         try {
           const outcome = await run();
           step.status = STEP_STATUS.SUCCEEDED;
           step.detail = outcome?.detail ?? null;
           step.finishedAt = this.now();
+          this.schedulePersist();
           return outcome;
         } catch (error) {
           step.status = STEP_STATUS.FAILED;
           step.error = error?.message || "Step failed.";
           step.finishedAt = this.now();
+          this.schedulePersist();
           throw error;
         }
       },
@@ -189,9 +284,11 @@ export class JobRegistry {
         step.status = STEP_STATUS.SKIPPED;
         step.detail = reason || null;
         step.finishedAt = this.now();
+        this.schedulePersist();
       },
       note: (name, detail) => {
         findStep(name).detail = detail;
+        this.schedulePersist();
       }
     };
   }

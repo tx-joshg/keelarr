@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import {
   activityPath,
   dataDir,
+  jobsPath,
   settingsPath,
   updatesPath
 } from "./data-paths.js";
@@ -178,4 +179,14 @@ export async function readUpdateState() {
 export async function writeUpdateState(nextState) {
   await writeJson(updatesPath, nextState);
   return nextState;
+}
+
+export async function readJobs() {
+  const stored = await readJson(jobsPath, []);
+  return Array.isArray(stored) ? stored : [];
+}
+
+export async function writeJobs(jobs) {
+  await writeJson(jobsPath, jobs);
+  return jobs;
 }

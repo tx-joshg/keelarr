@@ -34,6 +34,14 @@ export class StackarrAppService {
     });
   }
 
+  /**
+   * Restores persisted jobs before the server accepts traffic, so a job
+   * interrupted by a restart is reported rather than silently forgotten.
+   */
+  async initialize() {
+    await this.cutoverService.jobs.hydrate();
+  }
+
   async loadSettings() {
     return this.hostProfileService.loadSettings();
   }

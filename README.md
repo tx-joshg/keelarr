@@ -104,7 +104,7 @@ Verification is tiered, because "running" is not "working":
 - with no healthcheck, an acceptable HTTP response from the app URL verifies it
 - a container that is running but proves nothing either way is reported as `unverified` rather than success
 
-The job panel reattaches after a page reload, so refreshing mid-cutover does not orphan it, and a job that finished while the page was away is still shown. Jobs live in the controller; the panel is only a view of them.
+Jobs are persisted to `data/jobs.json` and survive a controller restart. A job that was still running when the process died is reported as interrupted rather than left looking live, with a step list showing how far it got. The job panel reattaches after a page reload, so refreshing mid-cutover does not orphan it, and a job that finished while the page was away is still shown.
 
 To try this against a real Docker daemon before touching a live stack, see [docs/live-cutover-test.md](docs/live-cutover-test.md).
 
@@ -206,6 +206,7 @@ For the current live status, the validated Trailarr cutover, and the recommended
 Stackarr now keeps two different operational records:
 
 - `data/activity.json`: user-facing activity feed with summarized action history
+- `data/jobs.json`: cutover and revert job records, including their step-by-step outcome
 - `data/stackarr.log`: structured JSONL operation log for requests, Docker commands, setup/import actions, upgrades, and failures
 
 When Stackarr runs in Docker, the same log entries are also emitted to container stdout, so `docker logs stackarr` stays useful.
