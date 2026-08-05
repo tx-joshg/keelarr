@@ -195,3 +195,92 @@ test("buildDashboardState keeps imported drafts out of managed upgrade mode unti
   assert.equal(service.managementState, "draft");
   assert.equal(service.updateStatus, "cutover-pending");
 });
+
+test("buildDashboardState reports a cut-over service as managed once Compose owns it", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const composePath = path.join(tempRoot, "compose.yml");
+  const envPath = path.join(tempRoot, ".env");
+  await writeFile(composePath, "name: trailarr\n", "utf8");
+  await writeFile(envPath, "TZ=America/Chicago\n", "utf8");
+
+  const settings = {
+    initialized: true,
+    selectedServiceIds: ["trailarr"],
+    services: {
+      trailarr: {
+        id: "trailarr",
+        name: "Trailarr",
+        image: "nandyalu/trailarr:latest",
+        containerName: "trailarr",
+        composePath,
+        envPath,
+        appUrl: "http://localhost:7889",
+        port: 7889,
+        managedMode: "imported",
+        restartPolicy: "unless-stopped",
+        networkMode: "bridge"
+      }
+    },
+    downloadsRoot: "/share/Media/Downloads",
+    mediaRoot: "/share/Media",
+    plexLogsRoot: "/share/Container/plex/Logs",
+    hostUrl: "http://localhost"
+  };
+
+  const dependencies = {
+    readActivityImpl: async () => [],
+    readUpdateStateImpl: async () => ({ trailarr: { status: "current", checkedAt: "2026-08-05T00:00:00.000Z" } }),
+    scanDockerInventoryImpl: async () => ({ items: [] }),
+    composePsImpl: async () => ({ ok: true, data: [{ Name: "trailarr", State: "running" }] }),
+    probeServiceImpl: async () => ({ reachable: true, latencyMs: 12, httpStatus: 200, error: null })
+  };
+
+  const state = await buildDashboardState(settings, dependencies);
+  const [service] = state.services;
+
+  assert.equal(service.managementState, "managed");
+  assert.equal(service.updateStatus, "current");
+});
+
+test("buildDashboardState does not invite a second cutover when an imported service is down", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const composePath = path.join(tempRoot, "compose.yml");
+  const envPath = path.join(tempRoot, ".env");
+  await writeFile(composePath, "name: trailarr\n", "utf8");
+  await writeFile(envPath, "TZ=America/Chicago\n", "utf8");
+
+  const settings = {
+    initialized: true,
+    selectedServiceIds: ["trailarr"],
+    services: {
+      trailarr: {
+        id: "trailarr",
+        name: "Trailarr",
+        image: "nandyalu/trailarr:latest",
+        containerName: "trailarr",
+        composePath,
+        envPath,
+        appUrl: "http://localhost:7889",
+        port: 7889,
+        managedMode: "imported",
+        restartPolicy: "unless-stopped",
+        networkMode: "bridge"
+      }
+    },
+    downloadsRoot: "/share/Media/Downloads",
+    mediaRoot: "/share/Media",
+    plexLogsRoot: "/share/Container/plex/Logs",
+    hostUrl: "http://localhost"
+  };
+
+  const state = await buildDashboardState(settings, {
+    readActivityImpl: async () => [],
+    readUpdateStateImpl: async () => ({}),
+    scanDockerInventoryImpl: async () => ({ items: [] }),
+    composePsImpl: async () => ({ ok: true, data: [] }),
+    probeServiceImpl: async () => ({ reachable: false, latencyMs: null, httpStatus: null, error: "down" })
+  });
+  const [service] = state.services;
+
+  assert.equal(service.updateStatus, "unmanaged");
+});

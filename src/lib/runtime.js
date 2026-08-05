@@ -155,6 +155,78 @@ export async function backupService(settings, service, options = {}) {
   };
 }
 
+export async function stopContainer(settings, containerName, options = {}) {
+  return runCommand(settings.dockerBin, ["stop", containerName], {
+    logger: options.logger
+  });
+}
+
+export async function startContainer(settings, containerName, options = {}) {
+  return runCommand(settings.dockerBin, ["start", containerName], {
+    logger: options.logger
+  });
+}
+
+/**
+ * Renaming rather than removing is what makes a cutover reversible: the
+ * original container object survives, so revert is a rename back instead of a
+ * reconstruction from the inspect backup.
+ */
+export async function renameContainer(settings, fromName, toName, options = {}) {
+  return runCommand(settings.dockerBin, ["rename", fromName, toName], {
+    logger: options.logger
+  });
+}
+
+export async function removeContainer(settings, containerName, options = {}) {
+  return runCommand(settings.dockerBin, ["rm", "-f", containerName], {
+    logger: options.logger
+  });
+}
+
+export async function containerExists(settings, containerName, options = {}) {
+  const result = await runCommand(settings.dockerBin, ["inspect", containerName, "--format", "{{.Id}}"], {
+    logger: options.logger
+  });
+
+  return result.ok;
+}
+
+export async function inspectContainerState(settings, containerName, options = {}) {
+  const result = await runCommand(
+    settings.dockerBin,
+    ["inspect", containerName, "--format", "{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}"],
+    {
+      logger: options.logger
+    }
+  );
+
+  if (!result.ok) {
+    return {
+      exists: false,
+      status: null,
+      healthStatus: null
+    };
+  }
+
+  const [status, healthStatus] = String(result.stdout || "").trim().split("|");
+
+  return {
+    exists: true,
+    status: status || null,
+    // Empty when the image declares no HEALTHCHECK, which is common across
+    // this catalog. Callers must not read that as unhealthy.
+    healthStatus: healthStatus || null
+  };
+}
+
+/** `down` without `-v` so named volumes backing /config are never removed. */
+export async function composeDown(settings, service, options = {}) {
+  return runCommand(settings.dockerBin, composeArgs(service, "down"), {
+    logger: options.logger
+  });
+}
+
 export async function composePs(settings, service, options = {}) {
   const result = await runCommand(settings.dockerBin, composeArgs(service, "ps", "--format", "json"), {
     logger: options.logger

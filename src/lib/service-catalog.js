@@ -1,5 +1,22 @@
 const stripTrailingSlash = (value) => value.replace(/\/+$/, "");
 
+export const MANAGED_MODE = Object.freeze({
+  /** Generated from the Stackarr catalog. Safe to regenerate at any time. */
+  CATALOG: "catalog",
+  /** Draft built from a live container, reviewed but not yet cut over. */
+  IMPORTED_DRAFT: "imported-draft",
+  /** Draft that has been cut over and is now Compose-managed. */
+  IMPORTED: "imported"
+});
+
+/**
+ * Imported stacks are shaped by the live container they came from, so their
+ * generated files must never be overwritten with catalog defaults.
+ */
+export function isImportedMode(mode) {
+  return mode === MANAGED_MODE.IMPORTED_DRAFT || mode === MANAGED_MODE.IMPORTED;
+}
+
 const baseLsio = (id, name, description, image, defaultPort, family) => ({
   id,
   name,

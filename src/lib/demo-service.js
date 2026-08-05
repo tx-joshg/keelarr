@@ -7,6 +7,8 @@ import { APP_NAME, APP_VERSION } from "./app-meta.js";
 import { normalizeSettings } from "./store.js";
 import { listServices } from "./service-catalog.js";
 import { StackarrError } from "./errors.js";
+import { JobRegistry, buildJobSnapshot } from "./jobs.js";
+import { CUTOVER_STEPS, REVERT_STEPS, rollbackNameFor } from "./app-services/cutover-service.js";
 
 function clone(value) {
   return structuredClone(value);
@@ -390,6 +392,9 @@ function buildDemoDiagnostics(settings) {
 
 export class DemoStackarrAppService {
   constructor() {
+    // The demo drives the real registry so the job polling contract is
+    // identical to live mode; only the Docker work underneath is simulated.
+    this.jobs = new JobRegistry();
     this.resetScenario();
   }
 
@@ -612,6 +617,135 @@ export class DemoStackarrAppService {
         reviewNotesPath: `${draft.stackDir}/IMPORT-REVIEW.md`
       },
       state: await this.buildState()
+    };
+  }
+
+  async startCutover(containerId, input = {}) {
+    const item = this.findImportCandidate(containerId);
+
+    if (!item.adoptedDraft) {
+      throw new StackarrError("Generate the managed draft before running a demo cutover.", {
+        statusCode: 409
+      });
+    }
+
+    if (input.confirmContainerName !== item.containerName) {
+      throw new StackarrError(
+        `Cutover confirmation does not match. Expected the container name ${item.containerName}.`,
+        { statusCode: 400 }
+      );
+    }
+
+    const rollbackName = rollbackNameFor(item.containerName);
+    const job = this.jobs.create({
+      kind: "cutover",
+      subject: { containerId },
+      steps: CUTOVER_STEPS
+    });
+
+    this.jobs.start(job, async (ctx) => {
+      for (const name of ["preflight", "backup", "stop", "rename", "deploy", "verify"]) {
+        await ctx.step(name, async () => ({ detail: `Simulated ${name} for ${item.containerName}.` }));
+      }
+
+      ctx.skip("revert", "Not needed.");
+
+      await ctx.step("finalize", async () => {
+        const runtime = this.demo.services[item.serviceId] || {};
+        runtime.generated = true;
+        runtime.managed = true;
+        runtime.runtimeStatus = "running";
+        runtime.reachable = true;
+        runtime.updateStatus = "unchecked";
+        this.demo.services[item.serviceId] = runtime;
+        item.cutOver = true;
+
+        this.pushActivity({
+          kind: "cutover",
+          level: "info",
+          message: `Cut over ${item.serviceName} to Compose management.`
+        });
+
+        return { detail: `${item.serviceName} is now Compose-managed.` };
+      });
+
+      return {
+        outcome: "verified",
+        serviceId: item.serviceId,
+        serviceName: item.serviceName,
+        containerName: item.containerName,
+        rollbackContainerName: rollbackName,
+        cleanupHint: `The original container is preserved as ${rollbackName}.`
+      };
+    });
+
+    return {
+      ok: true,
+      job: buildJobSnapshot(job)
+    };
+  }
+
+  async startCutoverRevert(serviceId, input = {}) {
+    const settings = normalizeSettings(this.demo.settings);
+    const service = this.requireService(settings, serviceId);
+
+    if (input.confirmContainerName !== service.containerName) {
+      throw new StackarrError(
+        `Revert confirmation does not match. Expected the container name ${service.containerName}.`,
+        { statusCode: 400 }
+      );
+    }
+
+    const job = this.jobs.create({
+      kind: "cutover-revert",
+      subject: { serviceId },
+      steps: REVERT_STEPS
+    });
+
+    this.jobs.start(job, async (ctx) => {
+      for (const name of ["preflight", "compose-down", "restore", "verify"]) {
+        await ctx.step(name, async () => ({ detail: `Simulated ${name} for ${service.containerName}.` }));
+      }
+
+      await ctx.step("finalize", async () => {
+        const runtime = this.demo.services[serviceId] || {};
+        runtime.managed = false;
+        this.demo.services[serviceId] = runtime;
+
+        this.pushActivity({
+          kind: "cutover-revert",
+          level: "warn",
+          message: `Reverted ${service.name} to the original container.`
+        });
+
+        return { detail: `${service.name} is back on the original container.` };
+      });
+
+      return {
+        outcome: "verified",
+        serviceId,
+        serviceName: service.name,
+        containerName: service.containerName
+      };
+    });
+
+    return {
+      ok: true,
+      job: buildJobSnapshot(job)
+    };
+  }
+
+  async getJob(jobId) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.jobs.get(jobId))
+    };
+  }
+
+  async listJobs() {
+    return {
+      ok: true,
+      jobs: this.jobs.list().map((job) => buildJobSnapshot(job))
     };
   }
 

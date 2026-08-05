@@ -69,11 +69,51 @@ The dashboard can also run a read-only adoption scan:
 - Compose runtime checks via `docker compose ps`
 - Pre-upgrade backups of compose files and container inspect output
 - Each backup also writes `rollback.json` recording the image id and repo digest the container was running before the operation, so a rollback can pin the previous image instead of re-pulling a mutable tag
+- API-driven per-service cutover and revert, run as background jobs (see [Cutover](#cutover))
+
+## Cutover
+
+A cutover moves one detected container from manual Docker management to a Stackarr-managed Compose stack. Because the managed draft reuses the live container's name, the original container has to release that name first — so the cutover stops it, renames it to `<name>-stackarr-rollback`, and only then starts the Compose service.
+
+The original container is **renamed, never removed**. That is what makes revert cheap: it is a rename back, not a rebuild from the inspect backup. Stackarr never deletes it, on success or failure; removing it is your call once the replacement has been used.
+
+Cutover runs as a background job because it is destructive and can outlive a request:
+
+```text
+POST /api/import/:containerId/cutover   -> 202 { job }
+POST /api/services/:serviceId/revert-cutover -> 202 { job }
+GET  /api/jobs/:jobId                   -> { job }
+GET  /api/jobs                          -> { jobs }
+```
+
+Both POST bodies require `confirmContainerName` matching the container being replaced. A mismatch is rejected before anything is touched.
+
+The job reports a fixed step plan (`preflight`, `backup`, `stop`, `rename`, `deploy`, `verify`, `revert`, `finalize`) from the moment it is created, so progress can be polled and rendered as a checklist.
+
+Preflight refuses the cutover when:
+
+- the host profile is not configured, or the service has no reviewed import draft
+- the live container no longer matches the reviewed draft — a container recreated or reconfigured since the draft was written would otherwise be silently rolled back to the older shape
+- a rollback container from an earlier attempt still exists
+
+Verification is tiered, because "running" is not "working":
+
+- a container healthcheck reporting `healthy` is decisive
+- with no healthcheck, an acceptable HTTP response from the app URL verifies it
+- a container that is running but proves nothing either way is reported as `unverified` rather than success
+
+Outcomes:
+
+| Outcome | Job status | What happens |
+| --- | --- | --- |
+| `verified` | succeeded | Service is recorded as Compose-managed. Rollback container kept. |
+| `unverified` | succeeded | Same, but health was never confirmed. Rollback container kept so you can revert. |
+| Container exited, or Compose failed to start | failed | Automatically reverted to the original container. |
 
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control
-- Fully automated one-click import cutover and rollback flow inside the UI
+- Cutover and revert controls in the dashboard UI (the API is in place; the buttons are not)
 - Full rollback to previous images
 - App-to-app API provisioning
 - Reverse proxy and certificate automation

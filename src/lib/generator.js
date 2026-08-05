@@ -3,7 +3,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 
 import YAML from "yaml";
 
-import { buildComposeSpec } from "./service-catalog.js";
+import { buildComposeSpec, isImportedMode } from "./service-catalog.js";
 import { StackarrError } from "./errors.js";
 
 async function fileExists(filePath) {
@@ -105,7 +105,7 @@ export async function writeStacks(settings, serviceIds = settings.selectedServic
       continue;
     }
 
-    if (service.managedMode === "imported-draft") {
+    if (isImportedMode(service.managedMode)) {
       const composeExists = await fileExists(service.composePath);
       const envExists = await fileExists(service.envPath);
 

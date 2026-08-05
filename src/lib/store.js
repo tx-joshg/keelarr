@@ -96,7 +96,9 @@ function sanitizeServiceOverrides(value) {
       sourceImage: typeof item.sourceImage === "string" ? item.sourceImage : null,
       reviewSummaryPath: typeof item.reviewSummaryPath === "string" ? item.reviewSummaryPath : null,
       reviewNotesPath: typeof item.reviewNotesPath === "string" ? item.reviewNotesPath : null,
-      importedAt: typeof item.importedAt === "string" ? item.importedAt : null
+      importedAt: typeof item.importedAt === "string" ? item.importedAt : null,
+      cutoverAt: typeof item.cutoverAt === "string" ? item.cutoverAt : null,
+      rollbackContainerName: typeof item.rollbackContainerName === "string" ? item.rollbackContainerName : null
     };
   }
 

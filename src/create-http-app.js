@@ -134,6 +134,43 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.post("/api/import/:containerId/cutover", async (request, response, next) => {
+    try {
+      // 202: the job is registered, not finished. Poll /api/jobs/:jobId.
+      response.status(202).json(
+        await stackarrApp.startCutover(request.params.containerId, request.body || {}, requestContext(request))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/services/:serviceId/revert-cutover", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await stackarrApp.startCutoverRevert(request.params.serviceId, request.body || {}, requestContext(request))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/jobs", async (_request, response, next) => {
+    try {
+      response.json(await stackarrApp.listJobs());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/jobs/:jobId", async (request, response, next) => {
+    try {
+      response.json(await stackarrApp.getJob(request.params.jobId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/demo/reset", async (_request, response, next) => {
     try {
       if (typeof stackarrApp.resetDemo !== "function") {

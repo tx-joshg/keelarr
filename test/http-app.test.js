@@ -108,6 +108,84 @@ test("http app serves demo state through the API facade", async () => {
   }
 });
 
+test("cutover returns 202 with a pollable job instead of blocking the request", async () => {
+  const demo = new DemoStackarrAppService();
+  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger() });
+  const server = await startServer(app);
+
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    // A draft has to exist before the container can be cut over.
+    const scan = await (await fetch(`${base}/api/import/scan`)).json();
+    const candidate = scan.items.find((item) => item.adoptable && item.serviceId);
+    await fetch(`${base}/api/import/${candidate.containerId}/adopt-draft`, { method: "POST" });
+
+    const started = await fetch(`${base}/api/import/${candidate.containerId}/cutover`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmContainerName: candidate.containerName })
+    });
+    const startedBody = await started.json();
+
+    assert.equal(started.status, 202);
+    assert.equal(typeof startedBody.job.id, "string");
+    // The full step plan is visible immediately, before any step has run.
+    assert.ok(startedBody.job.steps.length > 0);
+
+    let job = startedBody.job;
+    for (let attempt = 0; attempt < 50 && (job.status === "pending" || job.status === "running"); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      job = (await (await fetch(`${base}/api/jobs/${startedBody.job.id}`)).json()).job;
+    }
+
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.result.outcome, "verified");
+    assert.equal(job.steps.find((step) => step.name === "revert").status, "skipped");
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test("cutover rejects a request whose confirmation does not match", async () => {
+  const demo = new DemoStackarrAppService();
+  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger() });
+  const server = await startServer(app);
+
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const scan = await (await fetch(`${base}/api/import/scan`)).json();
+    const candidate = scan.items.find((item) => item.adoptable && item.serviceId);
+    await fetch(`${base}/api/import/${candidate.containerId}/adopt-draft`, { method: "POST" });
+
+    const response = await fetch(`${base}/api/import/${candidate.containerId}/cutover`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmContainerName: "not-the-container" })
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.ok, false);
+    assert.match(body.error, /confirmation does not match/);
+  } finally {
+    await stopServer(server);
+  }
+});
+
+test("an unknown job id is a 404 rather than an empty success", async () => {
+  const app = createHttpApp({ publicDir, stackarrApp: new DemoStackarrAppService(), logger: createTestLogger() });
+  const server = await startServer(app);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/jobs/nope`);
+
+    assert.equal(response.status, 404);
+  } finally {
+    await stopServer(server);
+  }
+});
+
 test("http app logs request failures with request ids", async () => {
   const logger = createTestLogger();
   const app = createHttpApp({

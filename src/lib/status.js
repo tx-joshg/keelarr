@@ -3,10 +3,7 @@ import { access } from "node:fs/promises";
 import { scanDockerInventory } from "./import-scanner.js";
 import { readActivity, readUpdateState } from "./store.js";
 import { composePs } from "./runtime.js";
-
-function isHealthyStatus(status, accepted) {
-  return accepted.includes(status);
-}
+import { probeAppUrl } from "./health.js";
 
 async function fileExists(filePath) {
   try {
@@ -14,31 +11,6 @@ async function fileExists(filePath) {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function probeService(service) {
-  try {
-    const startedAt = Date.now();
-    const response = await fetch(service.appUrl, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(2500)
-    });
-
-    const latencyMs = Date.now() - startedAt;
-
-    return {
-      reachable: isHealthyStatus(response.status, service.healthStatuses),
-      latencyMs,
-      httpStatus: response.status
-    };
-  } catch (error) {
-    return {
-      reachable: false,
-      latencyMs: null,
-      httpStatus: null,
-      error: error.message
-    };
   }
 }
 
@@ -158,6 +130,12 @@ function deriveManagementState(service, generated, runtimeSource, inventoryItem)
 
 function deriveUpdateStatus(service, generated, runtimeSource, storedStatus) {
   if (runtimeSource !== "compose") {
+    // An already cut-over service that is not running under Compose is simply
+    // down. Reporting it as `cutover-pending` would invite a second cutover.
+    if (service.managedMode === "imported") {
+      return "unmanaged";
+    }
+
     return service.managedMode === "imported-draft" || generated
       ? "cutover-pending"
       : "unmanaged";
@@ -196,7 +174,7 @@ function buildDiagnostics(settings) {
 export async function buildDashboardState(settings, dependencies = {}) {
   const {
     composePsImpl = composePs,
-    probeServiceImpl = probeService,
+    probeServiceImpl = probeAppUrl,
     readActivityImpl = readActivity,
     readUpdateStateImpl = readUpdateState,
     scanDockerInventoryImpl = scanDockerInventory

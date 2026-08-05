@@ -1,10 +1,13 @@
+import { CutoverService } from "./app-services/cutover-service.js";
 import { DashboardService } from "./app-services/dashboard-service.js";
 import { HostProfileService } from "./app-services/host-profile-service.js";
 import { ImportService } from "./app-services/import-service.js";
 import { ManagedStackService } from "./app-services/managed-stack-service.js";
+import { buildJobSnapshot } from "./jobs.js";
 
 export class StackarrAppService {
   constructor({
+    cutoverService = null,
     dashboardService = null,
     hostProfileService = null,
     importService = null,
@@ -22,6 +25,10 @@ export class StackarrAppService {
       logger
     });
     this.managedStackService = managedStackService || new ManagedStackService({
+      hostProfileService: this.hostProfileService,
+      logger
+    });
+    this.cutoverService = cutoverService || new CutoverService({
       hostProfileService: this.hostProfileService,
       logger
     });
@@ -104,6 +111,39 @@ export class StackarrAppService {
     return {
       ...result,
       state: await this.buildState()
+    };
+  }
+
+  /**
+   * Returns as soon as the job is registered. Cutover is destructive and can
+   * outlive a request, so progress is polled rather than streamed back on the
+   * connection that started it.
+   */
+  async startCutover(containerId, input = {}, context = {}) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.cutoverService.startCutover(containerId, input, context))
+    };
+  }
+
+  async startCutoverRevert(serviceId, input = {}, context = {}) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.cutoverService.startRevert(serviceId, input, context))
+    };
+  }
+
+  async getJob(jobId) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.cutoverService.getJob(jobId))
+    };
+  }
+
+  async listJobs() {
+    return {
+      ok: true,
+      jobs: this.cutoverService.listJobs().map((job) => buildJobSnapshot(job))
     };
   }
 

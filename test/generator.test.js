@@ -155,3 +155,47 @@ test("writeStacks preserves imported draft files instead of regenerating catalog
   assert.match(composeText, /trailarr:custom/);
   assert.doesNotMatch(composeText, /trailarr:latest/);
 });
+
+test("writeStacks preserves files for a service that has already been cut over", async () => {
+  const stackDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-cutover-stack-"));
+  const composePath = path.join(stackDir, "compose.yml");
+  const envPath = path.join(stackDir, ".env");
+  const envExamplePath = path.join(stackDir, ".env.example");
+
+  await writeDraftFiles({
+    serviceId: "trailarr",
+    stackDir,
+    composePath,
+    envPath,
+    envExamplePath,
+    composeYaml: "name: trailarr\nservices:\n  trailarr:\n    image: nandyalu/trailarr:custom\n",
+    envText: "PUID=1000\n",
+    envExampleText: "PUID=\n"
+  });
+
+  const settings = normalizeSettings({
+    stackRoot: path.dirname(stackDir),
+    selectedServiceIds: ["trailarr"],
+    serviceOverrides: {
+      trailarr: {
+        mode: "imported",
+        image: "nandyalu/trailarr:custom",
+        port: 7889,
+        containerName: "trailarr"
+      }
+    }
+  });
+
+  settings.services.trailarr.stackDir = stackDir;
+  settings.services.trailarr.composePath = composePath;
+  settings.services.trailarr.envPath = envPath;
+  settings.services.trailarr.envExamplePath = envExamplePath;
+
+  await writeStacks(settings, ["trailarr"]);
+  const composeText = await readFile(composePath, "utf8");
+
+  // Regenerating catalog defaults here would silently revert a live service
+  // to the stock image and mounts.
+  assert.match(composeText, /trailarr:custom/);
+  assert.doesNotMatch(composeText, /trailarr:latest/);
+});
