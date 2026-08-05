@@ -159,6 +159,20 @@ export class ManagedStackService {
     }
   }
 
+  /**
+   * A deploy or upgrade has just resolved the tag, so whatever the previous
+   * update status was is stale. Leaving it would report an upgraded service as
+   * still needing an update, or keep showing "rolled-back" after moving on.
+   */
+  async recordFreshImageState(serviceId) {
+    const updateState = await this.readUpdateState();
+    updateState[serviceId] = {
+      status: "current",
+      checkedAt: new Date().toISOString()
+    };
+    await this.writeUpdateState(updateState);
+  }
+
   requireJobs() {
     if (!this.jobs) {
       this.jobs = new JobRegistry({ logger: this.logger, persist: true });
@@ -441,6 +455,10 @@ export class ManagedStackService {
       stderr: result.stderr
     });
 
+    if (result.ok) {
+      await this.recordFreshImageState(service.id);
+    }
+
     await this.appendActivity({
       kind: "install",
       level: result.ok ? "info" : "error",
@@ -520,6 +538,10 @@ export class ManagedStackService {
       stdout: result.stdout,
       stderr: result.stderr
     });
+
+    if (result.ok) {
+      await this.recordFreshImageState(service.id);
+    }
 
     await this.appendActivity({
       kind: "upgrade",

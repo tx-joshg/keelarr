@@ -225,3 +225,22 @@ test("upgrading clears a rollback pin so the service can move forward again", as
   // pinned digest and never move forward.
   assert.deepEqual(upgraded, ["linuxserver/radarr:latest"]);
 });
+
+test("a successful upgrade clears a stale update status", async (t) => {
+  const stack = await createStack(t);
+  const stored = { radarr: { status: "rolled-back", checkedAt: "2026-08-05T00:00:00.000Z" } };
+
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    loadSettingsImpl: async () => stack.settings,
+    upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+    readUpdateStateImpl: async () => stored,
+    writeUpdateStateImpl: async (next) => Object.assign(stored, next),
+    appendActivityImpl: async () => {}
+  });
+
+  await service.upgradeManagedService("radarr");
+
+  // Reporting "rolled-back" after moving forward would be plainly wrong.
+  assert.equal(stored.radarr.status, "current");
+});
