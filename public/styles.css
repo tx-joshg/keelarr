@@ -602,6 +602,29 @@ table {
   cursor: wait;
 }
 
+.usage-metrics {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.usage-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--help-text);
+}
+
+.usage-metric i {
+  color: var(--theme-blue);
+  font-size: 12px;
+}
+
+.usage-metric-empty {
+  display: inline-block;
+}
+
 .summary-line {
   margin-top: 14px;
   color: var(--help-text);

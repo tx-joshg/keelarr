@@ -204,24 +204,66 @@ function shortImageId(imageId = "") {
   return trimmed.replace(/^sha256:/, "").slice(0, 12);
 }
 
+function formatCompactPercent(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const absolute = Math.abs(numeric);
+
+  if (absolute >= 10) {
+    return `${Math.round(numeric)}%`;
+  }
+
+  if (absolute >= 1) {
+    return `${numeric.toFixed(1).replace(/\.0$/, "")}%`;
+  }
+
+  return `${numeric.toFixed(1)}%`;
+}
+
 function formatUsageSummary(service) {
   const usage = service.resourceUsage;
 
   if (!usage) {
-    return {
-      primary: "No Data",
-      secondary: ""
-    };
+    return null;
   }
 
-  const cpu = usage.cpuPercentDisplay || (usage.cpuPercent != null ? `${usage.cpuPercent.toFixed(2)}%` : "CPU n/a");
-  const memory = usage.memoryUsageDisplay || "Memory n/a";
-  const memoryPercent = usage.memoryPercentDisplay ? ` · ${usage.memoryPercentDisplay}` : "";
+  const cpuPercent = formatCompactPercent(usage.cpuPercent);
+  const memoryPercent = formatCompactPercent(usage.memoryPercent);
+  const cpuDetail = usage.cpuPercentDisplay || (cpuPercent || "n/a");
+  const memoryDetail = usage.memoryPercentDisplay || (memoryPercent || "n/a");
+  const memoryUsageDetail = usage.memoryUsageDisplay || "n/a";
 
   return {
-    primary: `CPU ${cpu}`,
-    secondary: `${memory}${memoryPercent}`
+    cpuPercent,
+    memoryPercent,
+    cpuTitle: `CPU ${cpuDetail}`,
+    memoryTitle: `Memory ${memoryDetail} (${memoryUsageDetail})`
   };
+}
+
+function renderUsageMetrics(service) {
+  const usage = formatUsageSummary(service);
+
+  if (!usage) {
+    return '<span class="usage-metric-empty secondary-copy">-</span>';
+  }
+
+  return `
+    <div class="usage-metrics">
+      <span class="usage-metric" title="${escapeHtml(usage.cpuTitle)}" aria-label="${escapeHtml(usage.cpuTitle)}">
+        <i class="fa-solid fa-microchip"></i>
+        <span>${escapeHtml(usage.cpuPercent || "-")}</span>
+      </span>
+      <span class="usage-metric" title="${escapeHtml(usage.memoryTitle)}" aria-label="${escapeHtml(usage.memoryTitle)}">
+        <i class="fa-solid fa-memory"></i>
+        <span>${escapeHtml(usage.memoryPercent || "-")}</span>
+      </span>
+    </div>
+  `;
 }
 
 function managementStateMeta(service) {
@@ -790,7 +832,7 @@ function renderStackView() {
       const versionDetail = imageIdTag
         ? `ref ${versionTag} · image ${imageIdTag} · ${managementMeta.detail}`
         : `${versionTag} · ${managementMeta.detail}`;
-      const usage = formatUsageSummary(service);
+      const usageMarkup = renderUsageMetrics(service);
       const openUrl = resolveServiceOpenUrl(service);
       let primaryAction = "deploy";
       let primaryTitle = "Deploy";
@@ -825,10 +867,7 @@ function renderStackView() {
           <td>${escapeHtml(String(service.port))}</td>
           <td>${composeLabel}</td>
           <td>${runtimeLabel}</td>
-          <td class="cell-truncate">
-            <div>${escapeHtml(usage.primary)}</div>
-            <div class="secondary-copy">${escapeHtml(usage.secondary)}</div>
-          </td>
+          <td>${usageMarkup}</td>
           <td class="cell-truncate">
             ${healthLabel}
             <div class="secondary-copy">${service.httpStatus ? `${escapeHtml(String(service.httpStatus))}${service.latencyMs ? ` · ${escapeHtml(String(service.latencyMs))} ms` : ""}` : escapeHtml(managementMeta.label)}</div>
