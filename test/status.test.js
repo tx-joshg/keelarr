@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildDashboardState, selectInventoryItemForService } from "../src/lib/status.js";
+import { buildDashboardState, isComposeManagedBy, selectInventoryItemForService } from "../src/lib/status.js";
 
 test("selectInventoryItemForService prefers imported source identifiers before generic matches", () => {
   const service = {
@@ -230,8 +230,24 @@ test("buildDashboardState reports a cut-over service as managed once Compose own
   const dependencies = {
     readActivityImpl: async () => [],
     readUpdateStateImpl: async () => ({ trailarr: { status: "current", checkedAt: "2026-08-05T00:00:00.000Z" } }),
-    scanDockerInventoryImpl: async () => ({ items: [] }),
-    composePsImpl: async () => ({ ok: true, data: [{ Name: "trailarr", State: "running" }] }),
+    // Compose ownership is read from the container's own labels now, which the
+    // inventory scan already fetches — no `docker compose ps` per service.
+    scanDockerInventoryImpl: async () => ({
+      items: [{
+        recognized: true,
+        serviceId: "trailarr",
+        containerId: "abc123",
+        containerName: "trailarr",
+        image: "nandyalu/trailarr:latest",
+        status: "running",
+        healthStatus: null,
+        compose: {
+          project: "trailarr",
+          service: "trailarr",
+          configFiles: composePath
+        }
+      }]
+    }),
     probeServiceImpl: async () => ({ reachable: true, latencyMs: 12, httpStatus: 200, error: null })
   };
 
@@ -327,4 +343,18 @@ test("a catalog service with files but no container is not reported as cutover-p
   // "cutover-pending" is import language; a failed catalog install has
   // nothing to cut over.
   assert.equal(state.services[0].updateStatus, "not-deployed");
+});
+
+test("compose ownership is matched by the container's own labels", () => {
+  const service = { id: "radarr", composePath: "/share/Container/docker/radarr/compose.yml" };
+
+  assert.equal(isComposeManagedBy({ compose: { project: "radarr", configFiles: service.composePath } }, service), true);
+  // A container from a different project that happens to share a name is not ours.
+  assert.equal(isComposeManagedBy({ compose: { project: "radarr", configFiles: "/somewhere/else/compose.yml" } }, service), false);
+  // Older Compose versions omit config_files; fall back to the project name.
+  assert.equal(isComposeManagedBy({ compose: { project: "radarr", configFiles: null } }, service), true);
+  assert.equal(isComposeManagedBy({ compose: { project: "other", configFiles: null } }, service), false);
+  // A plain `docker run` container carries no compose labels at all.
+  assert.equal(isComposeManagedBy({ compose: null }, service), false);
+  assert.equal(isComposeManagedBy(null, service), false);
 });

@@ -52,6 +52,25 @@ export function selectInventoryItemForService(service, inventoryItems = []) {
     || candidates[0];
 }
 
+/**
+ * A container is Compose-managed when its labels point at the stack file
+ * Stackarr generated for it. Reading the labels the inventory scan already
+ * fetched replaces a `docker compose ps` process per service per refresh.
+ */
+export function isComposeManagedBy(inventoryItem, service) {
+  const compose = inventoryItem?.compose;
+
+  if (!compose) {
+    return false;
+  }
+
+  if (compose.configFiles) {
+    return compose.configFiles.split(",").some((file) => file.trim() === service.composePath);
+  }
+
+  return compose.project === service.id;
+}
+
 function deriveRuntimeStatus(runtime, inventoryItem, composeStatusOk) {
   if (runtime?.State) {
     return runtime.State;
@@ -211,16 +230,10 @@ export async function buildDashboardState(settings, dependencies = {}) {
     ]);
     const generated = composeExists && envExists;
 
-    const composeStatus =
-      shouldProbe && generated
-        ? await composePsImpl(settings, service)
-        : {
-            ok: true,
-            data: []
-          };
-
-    const runtime = composeStatus.ok ? composeStatus.data[0] || null : null;
-    const runtimeSource = runtime
+    const composeManaged = generated && isComposeManagedBy(inventoryItem, service);
+    const composeStatus = { ok: true, data: [] };
+    const runtime = null;
+    const runtimeSource = composeManaged
       ? "compose"
       : inventoryItem
         ? "inventory"

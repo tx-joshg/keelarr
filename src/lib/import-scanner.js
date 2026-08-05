@@ -53,6 +53,24 @@ export function readImageVersionLabel(labels = null) {
   return null;
 }
 
+export function readComposeLabels(labels = null) {
+  if (!labels || typeof labels !== "object") {
+    return null;
+  }
+
+  const project = labels["com.docker.compose.project"];
+
+  if (!project) {
+    return null;
+  }
+
+  return {
+    project,
+    service: labels["com.docker.compose.service"] || null,
+    configFiles: labels["com.docker.compose.project.config_files"] || null
+  };
+}
+
 function sanitizeContainerName(name = "") {
   return name.replace(/^\//, "");
 }
@@ -283,6 +301,9 @@ async function buildInventoryItem(inspect, options = {}) {
     // The human-readable release the image was built from. A `:latest` tag and
     // a truncated digest say nothing about what is actually running.
     appVersion: readImageVersionLabel(inspect.Config?.Labels),
+    // Compose ownership is already in the labels. Reading it here avoids
+    // spawning a `docker compose ps` per service on every dashboard refresh.
+    compose: readComposeLabels(inspect.Config?.Labels),
     recognized: Boolean(serviceMatch),
     serviceId: serviceMatch?.serviceId || null,
     serviceName: serviceMatch?.serviceName || null,
@@ -376,6 +397,16 @@ async function loadImageEnvironmentByRef(dockerBin, inventory, options = {}) {
   return environmentByRef;
 }
 
+// `docker stats --no-stream` has to sample every container and takes seconds
+// on a NAS. CPU and memory are decorative, and stale-by-a-few-seconds numbers
+// are fine, so the dashboard should not pay that cost on every refresh.
+const STATS_CACHE_TTL_MS = 15_000;
+let statsCache = null;
+
+export function clearContainerStatsCache() {
+  statsCache = null;
+}
+
 async function loadContainerStats(dockerBin, inventory, options = {}) {
   const containerIds = inventory
     .map((inspect) => inspect.Id)
@@ -386,6 +417,13 @@ async function loadContainerStats(dockerBin, inventory, options = {}) {
       byContainerId: new Map(),
       byContainerName: new Map()
     };
+  }
+
+  const cacheKey = containerIds.slice().sort().join(",");
+  const now = options.nowImpl ? options.nowImpl() : Date.now();
+
+  if (statsCache && statsCache.key === cacheKey && now - statsCache.at < STATS_CACHE_TTL_MS) {
+    return statsCache.value;
   }
 
   const result = await runCommand(dockerBin, ["stats", "--no-stream", "--format", "{{json .}}", ...containerIds], {
@@ -401,6 +439,7 @@ async function loadContainerStats(dockerBin, inventory, options = {}) {
 
   const byContainerId = new Map();
   const byContainerName = new Map();
+  const cachedAt = now;
 
   for (const line of result.stdout.split("\n")) {
     try {
@@ -422,10 +461,9 @@ async function loadContainerStats(dockerBin, inventory, options = {}) {
     }
   }
 
-  return {
-    byContainerId,
-    byContainerName
-  };
+  const value = { byContainerId, byContainerName };
+  statsCache = { key: cacheKey, at: cachedAt, value };
+  return value;
 }
 
 export function shouldIncludeInventoryItem(item) {

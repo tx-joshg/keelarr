@@ -10,6 +10,7 @@ import {
   matchSupportedService,
   normalizeImageRepository,
   parseDockerStatsLine,
+  readComposeLabels,
   readImageVersionLabel,
   shouldIncludeInventoryItem
 } from "../src/lib/import-scanner.js";
@@ -165,4 +166,19 @@ test("readImageVersionLabel ignores branch names that say nothing about the rele
   assert.equal(readImageVersionLabel({ "org.opencontainers.image.version": "  " }), null);
   assert.equal(readImageVersionLabel(null), null);
   assert.equal(readImageVersionLabel({}), null);
+});
+
+test("readComposeLabels extracts compose ownership, and ignores plain containers", () => {
+  assert.deepEqual(
+    readComposeLabels({
+      "com.docker.compose.project": "radarr",
+      "com.docker.compose.service": "radarr",
+      "com.docker.compose.project.config_files": "/share/Container/docker/radarr/compose.yml"
+    }),
+    { project: "radarr", service: "radarr", configFiles: "/share/Container/docker/radarr/compose.yml" }
+  );
+
+  // A `docker run` container has no compose labels.
+  assert.equal(readComposeLabels({ "org.opencontainers.image.version": "1.0" }), null);
+  assert.equal(readComposeLabels(null), null);
 });
