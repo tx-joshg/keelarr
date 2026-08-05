@@ -1528,3 +1528,50 @@ table {
 .manage-description-deprecated {
   color: var(--warning-color);
 }
+
+.button-danger {
+  border: 1px solid var(--danger-color);
+  border-radius: 4px;
+  background: var(--danger-color);
+  padding: 8px 16px;
+  color: #fff;
+  cursor: pointer;
+}
+
+.button-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.removal-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-color);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.removal-path {
+  color: var(--help-text);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.removal-preserved {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 14px 0;
+  border: 1px solid var(--success-border);
+  border-radius: 4px;
+  background: rgba(39, 194, 76, 0.08);
+  padding: 12px;
+  color: var(--text-color);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.removal-preserved i {
+  margin-top: 2px;
+  color: var(--success-background);
+}

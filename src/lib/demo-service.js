@@ -787,6 +787,71 @@ export class DemoStackarrAppService {
     return { ok: true, job: buildJobSnapshot(job) };
   }
 
+  async describeRemoval(serviceId) {
+    const settings = normalizeSettings(this.demo.settings);
+    const service = this.requireService(settings, serviceId);
+    return {
+      ok: true,
+      serviceId,
+      serviceName: service.name,
+      containerName: service.containerName,
+      imported: false,
+      targets: {
+        container: { label: `Container ${service.containerName}`, always: true },
+        stack: { label: "Generated stack files", path: service.stackDir, always: true },
+        config: { label: "Configuration and database", path: service.configDir, type: "bind", size: "412M" },
+        image: { label: service.image },
+        backups: { label: "Stackarr backups and config snapshots", path: `${settings.stackRoot}/.stackarr-backups/${serviceId}` }
+      },
+      preserved: [
+        { label: "Media library", path: settings.mediaRoot, reason: "Shared by every app in the stack." },
+        { label: "Downloads", path: settings.downloadsRoot, reason: "Shared by every app in the stack." }
+      ],
+      warnings: serviceId === "prowlarr"
+        ? [{ level: "warn", message: "These apps get their indexers from Prowlarr and will stop finding releases. Affected: radarr, sonarr." }]
+        : []
+    };
+  }
+
+  async startRemoval(serviceId, input = {}) {
+    const settings = normalizeSettings(this.demo.settings);
+    const service = this.requireService(settings, serviceId);
+
+    if (input.confirmContainerName !== service.containerName) {
+      throw new StackarrError(`Removal confirmation does not match. Expected the container name ${service.containerName}.`, { statusCode: 400 });
+    }
+
+    const job = this.jobs.create({
+      kind: "remove",
+      subject: { serviceId },
+      steps: [
+        { name: "preflight", label: "Check what will be removed" },
+        { name: "stop", label: "Stop and remove the container" },
+        { name: "stack", label: "Delete the generated stack files" },
+        { name: "finalize", label: "Remove from the dashboard" }
+      ]
+    });
+
+    this.jobs.start(job, async (ctx) => {
+      for (const name of ["preflight", "stop", "stack"]) {
+        await ctx.step(name, async () => ({ detail: `Simulated ${name} for ${service.name}.` }));
+      }
+      await ctx.step("finalize", async () => {
+        this.demo.settings = normalizeSettings({
+          ...this.demo.settings,
+          selectedServiceIds: settings.selectedServiceIds.filter((id) => id !== serviceId)
+        });
+        delete this.demo.services[serviceId];
+        this.pushActivity({ kind: "remove", level: "warn", message: `Removed ${service.name}.` });
+        return { detail: `${service.name} removed from the dashboard.` };
+      });
+      const kept = ["config", "image", "backups"].filter((k) => !input[`remove${k[0].toUpperCase()}${k.slice(1)}`]);
+      return { serviceId, serviceName: service.name, removed: ["container", "stack"], kept, summary: kept.length ? `${service.name} removed. Kept: ${kept.join(", ")}.` : `${service.name} and all of its data were removed.` };
+    });
+
+    return { ok: true, job: buildJobSnapshot(job) };
+  }
+
   async getJob(jobId) {
     return {
       ok: true,

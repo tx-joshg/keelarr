@@ -3,6 +3,7 @@ import { DashboardService } from "./app-services/dashboard-service.js";
 import { HostProfileService } from "./app-services/host-profile-service.js";
 import { ImportService } from "./app-services/import-service.js";
 import { ManagedStackService } from "./app-services/managed-stack-service.js";
+import { RemovalService } from "./app-services/removal-service.js";
 import { buildJobSnapshot } from "./jobs.js";
 
 export class StackarrAppService {
@@ -32,8 +33,13 @@ export class StackarrAppService {
       hostProfileService: this.hostProfileService,
       logger
     });
-    // One registry across both services so /api/jobs shows every job kind.
+    this.removalService = new RemovalService({
+      hostProfileService: this.hostProfileService,
+      logger
+    });
+    // One registry across all services so /api/jobs shows every job kind.
     this.managedStackService.jobs = this.cutoverService.jobs;
+    this.removalService.jobs = this.cutoverService.jobs;
     this.dashboardService.managedStackService = this.managedStackService;
   }
 
@@ -172,6 +178,17 @@ export class StackarrAppService {
 
   async upgradeManagedService(serviceId, context = {}) {
     return this.managedStackService.upgradeManagedService(serviceId, context);
+  }
+
+  async describeRemoval(serviceId, context = {}) {
+    return this.removalService.describeRemoval(serviceId, context);
+  }
+
+  async startRemoval(serviceId, input = {}, context = {}) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.removalService.startRemoval(serviceId, input, context))
+    };
   }
 
   async startRollback(serviceId, input = {}, context = {}) {

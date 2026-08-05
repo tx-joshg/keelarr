@@ -405,6 +405,48 @@ export async function imageExistsLocally(settings, imageRef, options = {}) {
   return result.ok;
 }
 
+/** `down -v` would also destroy named volumes, so volume removal is explicit. */
+export async function composeDownRemovingVolumes(settings, service, options = {}) {
+  return runCommand(settings.dockerBin, composeArgs(service, "down", "-v"), {
+    logger: options.logger
+  });
+}
+
+export async function removeImage(settings, imageRef, options = {}) {
+  const result = await runCommand(settings.dockerBin, ["image", "rm", imageRef], {
+    logger: options.logger
+  });
+
+  // Another service on the same image keeps it alive; that is not a failure.
+  if (!result.ok && /image is being used|conflict/i.test(`${result.stdout}${result.stderr}`)) {
+    return { ok: true, removed: false, reason: "Image is still used by another container." };
+  }
+
+  return { ok: result.ok, removed: result.ok, reason: result.ok ? null : result.stderr || "Could not remove image." };
+}
+
+/**
+ * Measures what a removal would delete, so the confirmation can show real
+ * paths and sizes instead of asking the operator to trust a checkbox.
+ */
+export async function measurePath(settings, targetPath, options = {}) {
+  if (!targetPath) {
+    return null;
+  }
+
+  const result = await runCommand(
+    settings.dockerBin,
+    [
+      "run", "--rm", "-v", `${targetPath}:/target:ro`,
+      options.helperImage || "alpine:latest",
+      "sh", "-c", "du -sh /target 2>/dev/null | cut -f1"
+    ],
+    { logger: options.logger, timeoutMs: 60_000 }
+  );
+
+  return result.ok ? (result.stdout.trim() || null) : null;
+}
+
 export async function composePs(settings, service, options = {}) {
   const result = await runCommand(settings.dockerBin, composeArgs(service, "ps", "--format", "json"), {
     logger: options.logger

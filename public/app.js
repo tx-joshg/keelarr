@@ -33,6 +33,7 @@ const ui = {
   toast: null,
   toastTimer: null,
   pathPicker: null,
+  removal: null,
   busy: null,
   selectedImportContainerId: null,
   pendingServices: new Set(),
@@ -979,6 +980,21 @@ function renderStackView() {
             >
               <i class="${escapeHtml(primaryIcon)}"></i>
             </button>
+            ${service.managementState !== "catalog"
+              ? `
+                <button
+                  type="button"
+                  class="row-icon-button"
+                  data-stack-action="remove"
+                  data-service-id="${escapeHtml(service.id)}"
+                  style="color:var(--danger-color);"
+                  title="Remove ${escapeHtml(service.name)}"
+                  ${pending ? "disabled" : ""}
+                >
+                  <i class="fa-solid fa-trash-can"></i>
+                </button>
+              `
+              : ""}
             ${canRollbackImage(service)
               ? `
                 <button
@@ -1759,8 +1775,10 @@ function renderJobPanel() {
     })
     .join("");
 
-  const title = job.kind === "rollback"
-    ? "Rollback"
+  const title = job.kind === "remove"
+    ? "Remove"
+    : job.kind === "rollback"
+      ? "Rollback"
     : job.kind === "upgrade-all"
       ? "Upgrade All"
       : job.kind === "cutover-revert" ? "Revert" : "Cutover";
@@ -1955,16 +1973,18 @@ function render() {
         ${renderBusyBanner()}
         ${renderPathPicker()}
         ${renderCutoverModal()}
+        ${renderRemovalModal()}
       </div>
     `;
 
     // Re-focus the confirmation field after the full re-render so typing is
     // not interrupted by each keystroke rebuilding the DOM.
-    if (ui.cutover?.open) {
-      const input = appNode.querySelector("[data-cutover-input]");
+    for (const selector of ["[data-cutover-input]", "[data-removal-input]"]) {
+      const input = appNode.querySelector(selector);
       if (input) {
         input.focus();
         input.setSelectionRange(input.value.length, input.value.length);
+        break;
       }
     }
     const scroller = appNode.querySelector(".scroll-shell");
@@ -2194,6 +2214,156 @@ function openCutoverDialog({ mode, containerId, serviceId, serviceName, containe
   render();
 }
 
+/**
+ * Loads a real preview before asking anything. The operator sees actual paths
+ * and sizes rather than guessing what a checkbox will delete.
+ */
+async function openRemovalDialog(serviceId) {
+  const preview = await request(`/api/services/${serviceId}/removal-preview`);
+  ui.removal = {
+    open: true,
+    preview,
+    confirmText: "",
+    removeConfig: false,
+    removeImage: false,
+    removeBackups: false,
+    submitting: false,
+    error: null
+  };
+  render();
+}
+
+function closeRemovalDialog() {
+  ui.removal = null;
+  render();
+}
+
+async function submitRemoval() {
+  const dialog = ui.removal;
+
+  if (!dialog || dialog.confirmText.trim() !== dialog.preview.containerName) {
+    return;
+  }
+
+  dialog.submitting = true;
+  dialog.error = null;
+  render();
+
+  try {
+    const data = await request(`/api/services/${dialog.preview.serviceId}/remove`, {
+      method: "POST",
+      body: JSON.stringify({
+        confirmContainerName: dialog.preview.containerName,
+        removeConfig: dialog.removeConfig,
+        removeImage: dialog.removeImage,
+        removeBackups: dialog.removeBackups
+      })
+    });
+
+    ui.removal = null;
+    ui.job = data.job;
+    render();
+    await pollJob(data.job.id);
+  } catch (error) {
+    if (ui.removal) {
+      ui.removal.submitting = false;
+      ui.removal.error = error.message;
+    }
+    render();
+  }
+}
+
+function renderRemovalModal() {
+  const dialog = ui.removal;
+
+  if (!dialog?.open) {
+    return "";
+  }
+
+  const p = dialog.preview;
+  const confirmed = dialog.confirmText.trim() === p.containerName;
+  const t = p.targets;
+
+  const choice = (key, label, note, checked) => `
+    <label class="cutover-check">
+      <input type="checkbox" data-removal-option="${key}" ${checked ? "checked" : ""} />
+      <span>
+        <strong>${escapeHtml(label)}</strong>
+        <span class="cutover-check-note">${note}</span>
+      </span>
+    </label>
+  `;
+
+  return `
+    <div class="modal-backdrop" data-modal-backdrop="removal">
+      <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="Remove ${escapeHtml(p.serviceName)}">
+        <div class="path-picker-header">
+          <div>
+            <div class="path-picker-title">Remove ${escapeHtml(p.serviceName)}</div>
+            <div class="path-picker-copy">${escapeHtml(p.containerName)}</div>
+          </div>
+          <button type="button" class="toast-dismiss" data-removal-close="true" aria-label="Cancel">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        ${p.warnings.map((w) => `
+          <div class="result-list result-list-warning"><strong>Other apps depend on this</strong><ul><li>${escapeHtml(w.message)}</li></ul></div>
+        `).join("")}
+
+        ${p.imported
+          ? '<div class="result-list result-list-warning"><strong>Imported service</strong><ul><li>This container existed before Stackarr managed it. Removing it deletes a container you created yourself.</li></ul></div>'
+          : ""}
+
+        <div class="muted-paragraph" style="margin:12px 0 6px;">Always removed:</div>
+        <ul class="removal-list">
+          <li>${escapeHtml(t.container.label)}</li>
+          <li>${escapeHtml(t.stack.label)} <span class="removal-path">${escapeHtml(t.stack.path)}</span></li>
+        </ul>
+
+        <div class="muted-paragraph" style="margin:14px 0 6px;">Choose what else to delete:</div>
+        ${t.config
+          ? choice("removeConfig", `Delete ${t.config.label.toLowerCase()}`,
+              `${escapeHtml(t.config.path)}${t.config.size ? ` &middot; ${escapeHtml(t.config.size)}` : ""}. This is the app's database and settings. Keeping it lets you reinstall exactly where you left off.`,
+              dialog.removeConfig)
+          : ""}
+        ${choice("removeImage", `Delete the image ${t.image.label}`,
+            "Only affects disk space. It is re-pulled on the next install, and is kept automatically if another service still uses it.",
+            dialog.removeImage)}
+        ${choice("removeBackups", "Delete Stackarr backups",
+            `${escapeHtml(t.backups.path)}. Includes config snapshots taken before upgrades, which are what make a rollback possible.`,
+            dialog.removeBackups)}
+
+        <div class="removal-preserved">
+          <i class="fa-solid fa-shield-halved"></i>
+          <span>
+            <strong>Never touched:</strong>
+            ${p.preserved.map((item) => `${escapeHtml(item.label)} (<code>${escapeHtml(item.path)}</code>)`).join(" and ")}.
+            ${escapeHtml(p.preserved[0].reason)}
+          </span>
+        </div>
+
+        ${dialog.error
+          ? `<div class="result-list result-list-danger"><strong>Could not remove</strong><ul><li>${escapeHtml(dialog.error)}</li></ul></div>`
+          : ""}
+
+        <label class="cutover-label" for="removal-confirm">
+          Type <strong>${escapeHtml(p.containerName)}</strong> to confirm
+        </label>
+        <input id="removal-confirm" class="text-input" type="text" autocomplete="off" spellcheck="false"
+          value="${escapeHtml(dialog.confirmText)}" data-removal-input="true" />
+
+        <div class="path-picker-actions" style="justify-content:flex-end;">
+          <button type="button" class="button-default" data-removal-close="true">Cancel</button>
+          <button type="button" class="button-danger" data-removal-action="submit" ${confirmed && !dialog.submitting ? "" : "disabled"}>
+            ${dialog.submitting ? "Removing..." : "Remove"}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function closeCutoverDialog() {
   ui.cutover = null;
   render();
@@ -2302,11 +2472,13 @@ async function pollJob(jobId) {
     await scanImports(true);
   }
 
-  const label = data.job.kind === "rollback"
-    ? "Rollback"
-    : data.job.kind === "upgrade-all"
-      ? "Upgrade All"
-      : data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const label = data.job.kind === "remove"
+    ? "Removal"
+    : data.job.kind === "rollback"
+      ? "Rollback"
+      : data.job.kind === "upgrade-all"
+        ? "Upgrade All"
+        : data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
   const unverified = data.job.result?.outcome === "unverified";
 
   showToast(
@@ -2614,6 +2786,21 @@ appNode.addEventListener("click", (event) => {
     return;
   }
 
+  if (backdropKind === "removal") {
+    closeRemovalDialog();
+    return;
+  }
+
+  if (event.target.closest("[data-removal-close]")) {
+    closeRemovalDialog();
+    return;
+  }
+
+  if (event.target.closest("[data-removal-action]")) {
+    submitRemoval().catch(showError);
+    return;
+  }
+
   if (event.target.closest("[data-path-close]")) {
     closePathPicker();
     return;
@@ -2661,6 +2848,11 @@ appNode.addEventListener("click", (event) => {
 
     if (stackAction === "review-adoption") {
       reviewServiceAdoption(containerId).catch(showError);
+      return;
+    }
+
+    if (stackAction === "remove") {
+      runBusy("Checking what would be removed...", () => openRemovalDialog(serviceId)).catch(showError);
       return;
     }
 
@@ -2784,6 +2976,18 @@ appNode.addEventListener("click", (event) => {
 appNode.addEventListener("input", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  if (target.dataset.removalOption && ui.removal) {
+    ui.removal[target.dataset.removalOption] = target.checked;
+    render();
+    return;
+  }
+
+  if (target.dataset.removalInput && ui.removal) {
+    ui.removal.confirmText = target.value;
+    render();
     return;
   }
 

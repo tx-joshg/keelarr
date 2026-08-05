@@ -165,6 +165,24 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.get("/api/services/:serviceId/removal-preview", async (request, response, next) => {
+    try {
+      response.json(await stackarrApp.describeRemoval(request.params.serviceId, requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/services/:serviceId/remove", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await stackarrApp.startRemoval(request.params.serviceId, request.body || {}, requestContext(request))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/jobs", async (_request, response, next) => {
     try {
       response.json(await stackarrApp.listJobs());
