@@ -104,6 +104,10 @@ Verification is tiered, because "running" is not "working":
 - with no healthcheck, an acceptable HTTP response from the app URL verifies it
 - a container that is running but proves nothing either way is reported as `unverified` rather than success
 
+The job panel reattaches after a page reload, so refreshing mid-cutover does not orphan it, and a job that finished while the page was away is still shown. Jobs live in the controller; the panel is only a view of them.
+
+To try this against a real Docker daemon before touching a live stack, see [docs/live-cutover-test.md](docs/live-cutover-test.md).
+
 Outcomes:
 
 | Outcome | Job status | What happens |

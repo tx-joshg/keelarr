@@ -2053,6 +2053,71 @@ function stopJobPolling() {
   }
 }
 
+const DISMISSED_JOBS_KEY = "stackarr.dismissedJobs";
+// A job that finished while the page was away is still worth showing: the
+// operator needs the outcome of a destructive action they did not watch.
+const REATTACH_RECENT_MS = 10 * 60 * 1000;
+
+function isJobLive(job) {
+  return job.status === "pending" || job.status === "running";
+}
+
+function readDismissedJobIds() {
+  try {
+    return new Set(JSON.parse(window.localStorage.getItem(DISMISSED_JOBS_KEY)) || []);
+  } catch {
+    return new Set();
+  }
+}
+
+function rememberDismissedJob(jobId) {
+  try {
+    const ids = readDismissedJobIds();
+    ids.add(jobId);
+    // Bound the list so it cannot grow without limit.
+    window.localStorage.setItem(DISMISSED_JOBS_KEY, JSON.stringify([...ids].slice(-50)));
+  } catch {
+    // Storage being unavailable only costs us dismissal memory.
+  }
+}
+
+/**
+ * Reattaches the job panel after a page load so a refresh during a cutover
+ * does not orphan it. Jobs live in the controller, not the page.
+ */
+async function reattachJob() {
+  const data = await request("/api/jobs");
+  const dismissed = readDismissedJobIds();
+  const now = Date.now();
+  const candidate = [...(data.jobs || [])]
+    .reverse()
+    .find((job) => {
+      if (dismissed.has(job.id)) {
+        return false;
+      }
+
+      if (isJobLive(job)) {
+        return true;
+      }
+
+      const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : NaN;
+      return Number.isFinite(finishedAt) && now - finishedAt < REATTACH_RECENT_MS;
+    });
+
+  if (!candidate) {
+    return;
+  }
+
+  ui.job = candidate;
+
+  if (isJobLive(candidate)) {
+    await pollJob(candidate.id);
+    return;
+  }
+
+  render();
+}
+
 /**
  * Polls a running job until it reaches a terminal state, then refreshes the
  * dashboard so managed state and the revert button reflect the outcome.
@@ -2084,13 +2149,16 @@ async function pollJob(jobId) {
     await scanImports(true);
   }
 
+  const label = data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const unverified = data.job.result?.outcome === "unverified";
+
   showToast(
     data.job.status === "succeeded"
-      ? data.job.result?.outcome === "unverified"
-        ? "Cutover finished, but health was not confirmed."
-        : "Cutover finished."
-      : "The job failed. See the step list for details.",
-    data.job.status === "succeeded" && data.job.result?.outcome !== "unverified" ? "success" : "danger"
+      ? unverified
+        ? `${label} finished, but health was not confirmed.`
+        : `${label} finished.`
+      : `${label} failed. See the step list for details.`,
+    data.job.status === "succeeded" && !unverified ? "success" : "danger"
   );
 }
 
@@ -2392,6 +2460,10 @@ appNode.addEventListener("click", (event) => {
   const jobTarget = event.target.closest("[data-job-action]");
   if (jobTarget) {
     stopJobPolling();
+    if (ui.job) {
+      // Remember the dismissal so a refresh does not resurrect the panel.
+      rememberDismissedJob(ui.job.id);
+    }
     ui.job = null;
     render();
     return;
@@ -2548,4 +2620,7 @@ appNode.addEventListener("keydown", (event) => {
   }
 });
 
-loadState().catch(showError);
+loadState()
+  // A failed reattach must not block the dashboard from rendering.
+  .then(() => reattachJob().catch((error) => console.warn("Job reattach failed.", error)))
+  .catch(showError);
