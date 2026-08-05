@@ -101,7 +101,117 @@ async function readTaggedImageId(settings, service, options = {}) {
   return normalizeImageId(result.stdout);
 }
 
-export function buildRollbackRecord(service, { imageId, imageRepoDigest, backedUpAt }) {
+// Regenerated on demand by the apps themselves, and large enough to dominate a
+// snapshot. Excluding them keeps a config capture to seconds and megabytes.
+const CONFIG_SNAPSHOT_EXCLUDES = ["./logs", "./MediaCover", "./Backups", "./cache", "./Cache"];
+const SNAPSHOT_HELPER_IMAGE = "alpine:latest";
+export const CONFIG_SNAPSHOT_FILE = "config-snapshot.tar.gz";
+
+/**
+ * Finds whatever is mounted at /config, which may be a bind path or a named
+ * volume depending on how the container was originally created.
+ */
+export async function readConfigMountSource(settings, service, options = {}) {
+  const result = await runCommand(
+    settings.dockerBin,
+    [
+      "inspect",
+      service.containerName,
+      "--format",
+      '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Type}}|{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}{{end}}{{end}}'
+    ],
+    { logger: options.logger }
+  );
+
+  if (!result.ok) {
+    return null;
+  }
+
+  const [type, source] = String(result.stdout || "").trim().split("|");
+
+  if (!type || !source) {
+    return null;
+  }
+
+  return { type, source };
+}
+
+/**
+ * Captures the service's configuration and database so a rollback can restore
+ * the state the app had *before* an upgrade migrated it forward. Rolling the
+ * image back alone is not enough once a schema migration has run.
+ *
+ * Runs through a helper container because a named volume is not reachable from
+ * the controller's own filesystem.
+ */
+export async function snapshotConfig(settings, service, backupDir, options = {}) {
+  const mount = options.mount ?? (await readConfigMountSource(settings, service, options));
+
+  if (!mount) {
+    return { ok: false, skipped: true, reason: "No /config mount found." };
+  }
+
+  const excludes = CONFIG_SNAPSHOT_EXCLUDES.flatMap((entry) => [`--exclude=${entry}`]);
+  const result = await runCommand(
+    settings.dockerBin,
+    [
+      "run", "--rm",
+      "-v", `${mount.source}:/src:ro`,
+      "-v", `${backupDir}:/backup`,
+      options.helperImage || SNAPSHOT_HELPER_IMAGE,
+      "tar", "czf", `/backup/${CONFIG_SNAPSHOT_FILE}`, "-C", "/src", ...excludes, "."
+    ],
+    { logger: options.logger, timeoutMs: options.timeoutMs || 300_000 }
+  );
+
+  if (!result.ok) {
+    return { ok: false, skipped: false, reason: result.stderr || "Snapshot failed." };
+  }
+
+  return {
+    ok: true,
+    skipped: false,
+    mountType: mount.type,
+    mountSource: mount.source,
+    excluded: CONFIG_SNAPSHOT_EXCLUDES
+  };
+}
+
+/**
+ * Replaces the live /config with a snapshot. Destructive by design: anything
+ * the app wrote after the snapshot is discarded, which is the point when an
+ * upgrade has migrated a database beyond what the old version can read.
+ */
+export async function restoreConfigSnapshot(settings, service, backupDir, options = {}) {
+  const mount = options.mount ?? (await readConfigMountSource(settings, service, options));
+
+  if (!mount) {
+    return { ok: false, reason: "No /config mount found." };
+  }
+
+  const result = await runCommand(
+    settings.dockerBin,
+    [
+      "run", "--rm",
+      "-v", `${mount.source}:/dst`,
+      "-v", `${backupDir}:/backup:ro`,
+      options.helperImage || SNAPSHOT_HELPER_IMAGE,
+      "sh", "-c",
+      // Clear first so files created after the snapshot do not survive a
+      // restore and confuse the older version.
+      `set -e; rm -rf /dst/* /dst/.[!.]* 2>/dev/null || true; tar xzf /backup/${CONFIG_SNAPSHOT_FILE} -C /dst`
+    ],
+    { logger: options.logger, timeoutMs: options.timeoutMs || 300_000 }
+  );
+
+  return {
+    ok: result.ok,
+    reason: result.ok ? null : result.stderr || "Restore failed.",
+    mountSource: mount.source
+  };
+}
+
+export function buildRollbackRecord(service, { imageId, imageRepoDigest, backedUpAt, configSnapshot = null }) {
   return {
     serviceId: service.id,
     containerName: service.containerName,
@@ -112,6 +222,9 @@ export function buildRollbackRecord(service, { imageId, imageRepoDigest, backedU
     // fetch the new image again.
     imageId: imageId || null,
     imageRepoDigest: imageRepoDigest || null,
+    // Present when the app's /config was captured alongside the image, which
+    // is what makes a rollback survive a forward database migration.
+    configSnapshot,
     backedUpAt
   };
 }
@@ -134,10 +247,16 @@ export async function backupService(settings, service, options = {}) {
 
   // Capture the running image identity before anything pulls or recreates it.
   const imageId = await readContainerImageId(settings, service, options);
+  const snapshot = options.snapshotConfig === false
+    ? { ok: false, skipped: true, reason: "Config snapshot disabled." }
+    : await (options.snapshotConfigImpl || snapshotConfig)(settings, service, backupDir, options);
   const rollback = buildRollbackRecord(service, {
     imageId,
     imageRepoDigest: await readImageRepoDigest(settings, imageId, options),
-    backedUpAt
+    backedUpAt,
+    configSnapshot: snapshot.ok
+      ? { file: CONFIG_SNAPSHOT_FILE, mountType: snapshot.mountType, mountSource: snapshot.mountSource, excluded: snapshot.excluded }
+      : null
   });
   await writeFile(path.join(backupDir, "rollback.json"), `${JSON.stringify(rollback, null, 2)}\n`, "utf8");
 
@@ -146,12 +265,14 @@ export async function backupService(settings, service, options = {}) {
     containerName: service.containerName,
     backupDir,
     imageId: rollback.imageId,
-    imageRepoDigest: rollback.imageRepoDigest
+    imageRepoDigest: rollback.imageRepoDigest,
+    configSnapshot: rollback.configSnapshot ? "captured" : (snapshot.reason || "unavailable")
   });
 
   return {
     backupDir,
-    rollback
+    rollback,
+    configSnapshot: snapshot
   };
 }
 
@@ -268,7 +389,8 @@ export async function findRollbackPoint(settings, service, options = {}) {
       imageRef,
       imageId: record.imageId || null,
       imageRepoDigest: record.imageRepoDigest || null,
-      taggedImage: record.image || null
+      taggedImage: record.image || null,
+      configSnapshot: record.configSnapshot || null
     };
   }
 

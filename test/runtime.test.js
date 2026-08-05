@@ -59,6 +59,7 @@ test("buildRollbackRecord pins the running image id rather than the mutable tag"
     image: "nandyalu/trailarr:latest",
     imageId: "sha256:old",
     imageRepoDigest: "nandyalu/trailarr@sha256:olddigest",
+    configSnapshot: null,
     backedUpAt: "2026-08-05T00:00:00.000Z"
   });
 });
@@ -76,4 +77,16 @@ test("buildRollbackRecord degrades to nulls when the image identity cannot be re
   assert.equal(record.image, null);
   assert.equal(record.imageId, null);
   assert.equal(record.imageRepoDigest, null);
+});
+
+test("buildRollbackRecord carries the config snapshot when one was captured", () => {
+  const record = buildRollbackRecord({ id: "radarr", containerName: "radarr", image: "linuxserver/radarr:latest" }, {
+    imageId: "sha256:old",
+    imageRepoDigest: "linuxserver/radarr@sha256:old",
+    backedUpAt: "2026-08-05T00:00:00.000Z",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "volume", mountSource: "radarr_config" }
+  });
+
+  assert.equal(record.configSnapshot.file, "config-snapshot.tar.gz");
+  assert.equal(record.configSnapshot.mountType, "volume");
 });

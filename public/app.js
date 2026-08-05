@@ -1762,6 +1762,24 @@ function renderCutoverModal() {
           ? `<div class="result-list result-list-danger"><strong>Could not start</strong><ul><li>${escapeHtml(dialog.error)}</li></ul></div>`
           : ""}
 
+        ${rollingBack && dialog.hasConfigSnapshot
+          ? `
+            <label class="cutover-check">
+              <input type="checkbox" data-cutover-restore-config="true" ${dialog.restoreConfig ? "checked" : ""} />
+              <span>
+                <strong>Also restore the saved configuration</strong>
+                <span class="cutover-check-note">
+                  Restores the database and settings captured ${escapeHtml(formatDate(dialog.snapshotTakenAt))}.
+                  Needed when the newer version already migrated the database beyond what the older one can read.
+                  <strong>Anything the app recorded since then is discarded.</strong>
+                </span>
+              </span>
+            </label>
+          `
+          : rollingBack
+            ? '<div class="muted-paragraph" style="margin-bottom:12px;">No configuration snapshot was captured for this rollback point, so only the image is reverted. If the newer version already migrated the database, the older image may not start.</div>'
+            : ""}
+
         <label class="cutover-label" for="cutover-confirm">
           Type <strong>${escapeHtml(dialog.containerName)}</strong> to confirm
         </label>
@@ -2081,7 +2099,7 @@ async function adoptImportDraft(containerId) {
   }
 }
 
-function openCutoverDialog({ mode, containerId, serviceId, serviceName, containerName, rollbackContainerName, rollbackImage }) {
+function openCutoverDialog({ mode, containerId, serviceId, serviceName, containerName, rollbackContainerName, rollbackImage, hasConfigSnapshot, snapshotTakenAt }) {
   ui.cutover = {
     open: true,
     mode,
@@ -2091,6 +2109,9 @@ function openCutoverDialog({ mode, containerId, serviceId, serviceName, containe
     containerName,
     rollbackContainerName: rollbackContainerName || null,
     rollbackImage: rollbackImage || null,
+    hasConfigSnapshot: hasConfigSnapshot === true,
+    snapshotTakenAt: snapshotTakenAt || null,
+    restoreConfig: false,
     confirmText: "",
     submitting: false,
     error: null
@@ -2241,7 +2262,10 @@ async function submitCutoverDialog() {
   try {
     const data = await request(url, {
       method: "POST",
-      body: JSON.stringify({ confirmContainerName: dialog.containerName })
+      body: JSON.stringify({
+        confirmContainerName: dialog.containerName,
+        restoreConfig: dialog.mode === "rollback" && dialog.restoreConfig === true
+      })
     });
 
     ui.cutover = null;
@@ -2550,7 +2574,9 @@ appNode.addEventListener("click", (event) => {
           serviceId,
           serviceName: service.name,
           containerName: service.observedContainerName,
-          rollbackImage: service.rollbackPoint?.taggedImage || service.rollbackPoint?.imageRef
+          rollbackImage: service.rollbackPoint?.taggedImage || service.rollbackPoint?.imageRef,
+          hasConfigSnapshot: service.rollbackPoint?.hasConfigSnapshot === true,
+          snapshotTakenAt: service.rollbackPoint?.backedUpAt || null
         });
       }
       return;
@@ -2647,6 +2673,12 @@ appNode.addEventListener("click", (event) => {
 appNode.addEventListener("input", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLInputElement)) {
+    return;
+  }
+
+  if (target.dataset.cutoverRestoreConfig && ui.cutover) {
+    ui.cutover.restoreConfig = target.checked;
+    render();
     return;
   }
 

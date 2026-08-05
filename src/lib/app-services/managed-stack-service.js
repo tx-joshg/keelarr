@@ -3,9 +3,11 @@ import { access } from "node:fs/promises";
 import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
 import {
   backupService,
+  composeDown,
   ensureSharedNetwork,
   findRollbackPoint,
-  imageExistsLocally
+  imageExistsLocally,
+  restoreConfigSnapshot
 } from "../runtime.js";
 import { SHARED_NETWORK, isImportedMode } from "../service-catalog.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
@@ -29,6 +31,7 @@ import { defaultLogger } from "../logger.js";
 export const ROLLBACK_STEPS = [
   { name: "preflight", label: "Find the previous image" },
   { name: "backup", label: "Back up the current state" },
+  { name: "restore-config", label: "Restore the saved configuration" },
   { name: "pin", label: "Pin the stack to the previous image" },
   { name: "deploy", label: "Recreate the container on that image" },
   { name: "verify", label: "Confirm the service is healthy" },
@@ -46,6 +49,8 @@ export class ManagedStackService {
     generateAndDeployImpl = generateAndDeploy,
     hostProfileService = null,
     imageExistsLocallyImpl = imageExistsLocally,
+    composeDownImpl = composeDown,
+    restoreConfigSnapshotImpl = restoreConfigSnapshot,
     installServiceImpl = installService,
     jobs = null,
     loadSettingsImpl = loadSettings,
@@ -64,6 +69,8 @@ export class ManagedStackService {
     this.ensureSharedNetwork = ensureSharedNetworkImpl;
     this.findRollbackPoint = findRollbackPointImpl;
     this.imageExistsLocally = imageExistsLocallyImpl;
+    this.restoreConfigSnapshot = restoreConfigSnapshotImpl;
+    this.composeDown = composeDownImpl;
     this.jobs = jobs;
     this.readComposeImage = readComposeImageImpl;
     this.setComposeImage = setComposeImageImpl;
@@ -199,7 +206,9 @@ export class ManagedStackService {
     return {
       backedUpAt: point.backedUpAt,
       imageRef: point.imageRef,
-      taggedImage: point.taggedImage
+      taggedImage: point.taggedImage,
+      // Lets the dashboard offer a config restore only when one was captured.
+      hasConfigSnapshot: Boolean(point.configSnapshot)
     };
   }
 
@@ -264,6 +273,27 @@ export class ManagedStackService {
       const result = await this.backupService(settings, service, { logger: stepLogger });
       return { detail: `Backed up to ${result.backupDir}.`, ...result };
     });
+
+    if (input.restoreConfig && point.configSnapshot) {
+      await ctx.step("restore-config", async () => {
+        // Stop first: restoring the database under a running app would leave
+        // it holding stale handles and half-written state.
+        await this.composeDown(settings, service, { logger: stepLogger });
+        const restored = await this.restoreConfigSnapshot(settings, service, point.backupDir, { logger: stepLogger });
+
+        if (!restored.ok) {
+          throw new StackarrError(`Unable to restore the saved configuration for ${service.name}: ${restored.reason}`, {
+            statusCode: 500
+          });
+        }
+
+        return { detail: `Restored configuration captured ${point.backedUpAt}.` };
+      });
+    } else {
+      ctx.skip("restore-config", input.restoreConfig
+        ? "No configuration snapshot was captured for this rollback point."
+        : "Keeping current configuration.");
+    }
 
     await ctx.step("pin", async () => {
       await this.setComposeImage(service, point.imageRef);
@@ -333,6 +363,7 @@ export class ManagedStackService {
       containerName: service.containerName,
       rolledBackTo: point.imageRef,
       rolledBackFrom: currentImage,
+      configRestored: Boolean(input.restoreConfig && point.configSnapshot),
       backupDir: backup.backupDir,
       health,
       pinNote: `${service.name} is pinned to ${point.imageRef}. Running an upgrade clears the pin and moves it forward again.`

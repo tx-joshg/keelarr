@@ -244,3 +244,73 @@ test("a successful upgrade clears a stale update status", async (t) => {
   // Reporting "rolled-back" after moving forward would be plainly wrong.
   assert.equal(stored.radarr.status, "current");
 });
+
+test("rollback restores the config snapshot only when asked and one exists", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "volume", mountSource: "radarr_config" }
+  });
+
+  const restored = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async (_s, _svc, dir) => {
+        restored.push(dir);
+        return { ok: true };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.equal(job.result.configRestored, true);
+  assert.equal(restored.length, 1);
+  assert.equal(job.steps.find((s) => s.name === "restore-config").status, STEP_STATUS.SUCCEEDED);
+});
+
+test("rollback leaves configuration alone by default", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz" }
+  });
+
+  const restored = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      restoreConfigSnapshotImpl: async () => {
+        restored.push(1);
+        return { ok: true };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr" }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+  assert.equal(job.result.configRestored, false);
+  assert.deepEqual(restored, []);
+  assert.equal(job.steps.find((s) => s.name === "restore-config").status, STEP_STATUS.SKIPPED);
+});
+
+test("asking to restore config when none was captured is reported, not silently ignored", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous"
+  });
+
+  const { service } = createService(t, stack);
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+  assert.equal(job.result.configRestored, false);
+  const step = job.steps.find((s) => s.name === "restore-config");
+  assert.equal(step.status, STEP_STATUS.SKIPPED);
+  assert.match(step.detail, /No configuration snapshot/);
+});
