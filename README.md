@@ -77,6 +77,41 @@ The dashboard can also run a read-only adoption scan:
 - Pre-upgrade backups of compose files and container inspect output
 - Each backup also writes `rollback.json` recording the image id and repo digest the container was running before the operation, so a rollback can pin the previous image instead of re-pulling a mutable tag
 - Per-service cutover and revert from the dashboard, run as background jobs with a live step checklist (see [Cutover](#cutover))
+- App removal with explicit choices about configuration, image, and backups, and a preview of exactly what will be deleted (see [Removing An App](#removing-an-app))
+
+## Removing An App
+
+Removal is a job like cutover, with a preview first:
+
+```text
+GET  /api/services/:serviceId/removal-preview -> { targets, preserved, warnings }
+POST /api/services/:serviceId/remove          -> 202 { job }
+```
+
+The preview reports real paths and measured sizes so the choice is informed
+rather than a guess about what a checkbox does.
+
+Always removed: the container and the generated stack folder.
+
+Optional, each an explicit choice:
+
+- **Configuration and database** — the app's `/config`, whether that is a bind
+  path or a named volume. Keeping it lets you reinstall exactly where you left
+  off.
+- **The image** — disk space only; it is kept automatically if another service
+  still uses it.
+- **Stackarr backups** — including the config snapshots that make rollback
+  possible.
+
+**Media and downloads are never offered.** They are shared mounts used by every
+app in the stack, not data any one service owns, so deleting them while
+removing a single app would destroy the library and break everything else. The
+dialog says so explicitly rather than staying silent about it.
+
+Two more safeguards: a final config snapshot is taken before the configuration
+is destroyed (unless the backups are being deleted too, which would make it
+pointless), and removing a service other apps depend on — Prowlarr or SABnzbd —
+warns which apps break.
 
 ## Rollback
 
