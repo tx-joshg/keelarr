@@ -7,6 +7,7 @@ import {
   ensureSharedNetwork,
   findRollbackPoint,
   imageExistsLocally,
+  readConfigMountSource,
   restoreConfigSnapshot
 } from "../runtime.js";
 import { SHARED_NETWORK, isImportedMode } from "../service-catalog.js";
@@ -50,6 +51,7 @@ export class ManagedStackService {
     hostProfileService = null,
     imageExistsLocallyImpl = imageExistsLocally,
     composeDownImpl = composeDown,
+    readConfigMountSourceImpl = readConfigMountSource,
     restoreConfigSnapshotImpl = restoreConfigSnapshot,
     installServiceImpl = installService,
     jobs = null,
@@ -71,6 +73,7 @@ export class ManagedStackService {
     this.imageExistsLocally = imageExistsLocallyImpl;
     this.restoreConfigSnapshot = restoreConfigSnapshotImpl;
     this.composeDown = composeDownImpl;
+    this.readConfigMountSource = readConfigMountSourceImpl;
     this.jobs = jobs;
     this.readComposeImage = readComposeImageImpl;
     this.setComposeImage = setComposeImageImpl;
@@ -262,11 +265,25 @@ export class ManagedStackService {
       }
 
       const currentImage = await this.readComposeImage(service);
-      plan = { settings, service, point, currentImage };
+      // Read the /config mount now, while the container still exists. The
+      // restore step removes it first, and a deleted container cannot be
+      // inspected for its mounts.
+      const configMount = input.restoreConfig && point.configSnapshot
+        ? await this.readConfigMountSource(settings, service, { logger })
+        : null;
+
+      if (input.restoreConfig && point.configSnapshot && !configMount) {
+        throw new StackarrError(
+          `Cannot restore configuration for ${service.name}: no /config mount was found on the running container.`,
+          { statusCode: 409 }
+        );
+      }
+
+      plan = { settings, service, point, currentImage, configMount };
       return { detail: `Rolling back to ${point.taggedImage || point.imageRef} from ${point.backedUpAt || "an earlier backup"}.` };
     });
 
-    const { settings, service, point, currentImage } = plan;
+    const { settings, service, point, currentImage, configMount } = plan;
     const stepLogger = logger.child({ serviceId: service.id, containerName: service.containerName });
 
     const backup = await ctx.step("backup", async () => {
@@ -279,11 +296,18 @@ export class ManagedStackService {
         // Stop first: restoring the database under a running app would leave
         // it holding stale handles and half-written state.
         await this.composeDown(settings, service, { logger: stepLogger });
-        const restored = await this.restoreConfigSnapshot(settings, service, point.backupDir, { logger: stepLogger });
+        const restored = await this.restoreConfigSnapshot(settings, service, point.backupDir, {
+          logger: stepLogger,
+          mount: configMount
+        });
 
         if (!restored.ok) {
+          // The service is down at this point. Bring it back before reporting,
+          // rather than leaving it stopped on a failed restore.
+          await this.generateAndDeploy(settings, service, { logger: stepLogger });
           throw new StackarrError(`Unable to restore the saved configuration for ${service.name}: ${restored.reason}`, {
-            statusCode: 500
+            statusCode: 500,
+            details: { serviceRestarted: true }
           });
         }
 

@@ -256,6 +256,7 @@ test("rollback restores the config snapshot only when asked and one exists", asy
   const restored = [];
   const { service } = createService(t, stack, {
     impls: {
+      readConfigMountSourceImpl: async () => ({ type: "volume", source: "radarr_config" }),
       composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
       restoreConfigSnapshotImpl: async (_s, _svc, dir) => {
         restored.push(dir);
@@ -313,4 +314,87 @@ test("asking to restore config when none was captured is reported, not silently 
   const step = job.steps.find((s) => s.name === "restore-config");
   assert.equal(step.status, STEP_STATUS.SKIPPED);
   assert.match(step.detail, /No configuration snapshot/);
+});
+
+test("the config mount is read before the container is removed", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz" }
+  });
+
+  const order = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => {
+        order.push("read-mount");
+        return { type: "volume", source: "radarr_config" };
+      },
+      composeDownImpl: async () => {
+        order.push("compose-down");
+        return { ok: true };
+      },
+      restoreConfigSnapshotImpl: async (_s, _svc, _dir, opts) => {
+        order.push(`restore(mount=${opts?.mount?.source})`);
+        return { ok: true };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // Reading the mount after compose-down would inspect a container that no
+  // longer exists, which is exactly how this failed on the live NAS.
+  assert.deepEqual(order, ["read-mount", "compose-down", "restore(mount=radarr_config)"]);
+});
+
+test("a failed config restore brings the service back up instead of leaving it stopped", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz" }
+  });
+
+  const deploys = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config" }),
+      composeDownImpl: async () => ({ ok: true }),
+      restoreConfigSnapshotImpl: async () => ({ ok: false, reason: "tar failed" }),
+      generateAndDeployImpl: async () => {
+        deploys.push("redeploy");
+        return { ok: true, stdout: "", stderr: "" };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.match(job.error.message, /Unable to restore the saved configuration/);
+  assert.equal(job.error.details.serviceRestarted, true);
+  assert.deepEqual(deploys, ["redeploy"]);
+});
+
+test("rollback refuses up front when the config mount cannot be found", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz" }
+  });
+
+  const { service, calls } = createService(t, stack, {
+    impls: { readConfigMountSourceImpl: async () => null }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.match(job.error.message, /no \/config mount was found/);
+  // Nothing touched: it failed in preflight.
+  assert.deepEqual(calls, []);
 });
