@@ -1480,3 +1480,10 @@ table {
   font-size: 12px;
   line-height: 1.5;
 }
+
+.result-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}

@@ -624,15 +624,28 @@ function renderResultPanel() {
   const errors = validation?.errors || [];
   const warnings = validation?.warnings || [];
   const summary = resultSummaryText();
+  const failed = latest.ok === false;
+
+  // A bare "completed successfully" on every screen is noise: the toast already
+  // confirmed it and the job panel shows the detail. Only stay on screen when
+  // carrying something the user cannot get elsewhere.
+  if (!failed && !errors.length && !warnings.length && !generated) {
+    return "";
+  }
 
   return `
-    <div class="result-panel ${latest.ok === false ? "result-panel-danger" : "result-panel-info"}">
+    <div class="result-panel ${failed ? "result-panel-danger" : "result-panel-info"}">
       <div class="result-panel-header">
         <div>
           <div class="result-panel-title">${escapeHtml(ui.latestResult.title)}</div>
           ${summary ? `<div class="result-panel-copy">${escapeHtml(summary)}</div>` : ""}
         </div>
-        ${renderStatusPill(latest.ok === false ? "Needs Attention" : "Ready", latest.ok === false ? "error" : "info")}
+        <div class="result-panel-actions">
+          ${renderStatusPill(failed ? "Needs Attention" : "Details", failed ? "error" : "info")}
+          <button type="button" class="toast-dismiss" data-result-dismiss="true" aria-label="Dismiss">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
       </div>
       ${errors.length
         ? `
@@ -2415,8 +2428,19 @@ function showError(error) {
 }
 
 appNode.addEventListener("click", (event) => {
+  if (event.target.closest("[data-result-dismiss]")) {
+    ui.latestResult = null;
+    render();
+    return;
+  }
+
   const navTarget = event.target.closest("[data-nav-view]");
   if (navTarget) {
+    if (navTarget.dataset.navView !== ui.view) {
+      // The panel describes what just happened on the screen you were on;
+      // it should not follow you around the app.
+      ui.latestResult = null;
+    }
     ui.view = navTarget.dataset.navView;
     render();
     return;
