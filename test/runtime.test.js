@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildRollbackRecord,
+  explainDeployFailure,
   deriveUpdateStatusFromPullResult,
   normalizeComposePsData,
   normalizeImageId
@@ -89,4 +90,16 @@ test("buildRollbackRecord carries the config snapshot when one was captured", ()
 
   assert.equal(record.configSnapshot.file, "config-snapshot.tar.gz");
   assert.equal(record.configSnapshot.mountType, "volume");
+});
+
+test("explainDeployFailure translates Docker's opaque pull errors", () => {
+  assert.match(
+    explainDeployFailure("Image lscr.io/linuxserver/readarr:develop Pulling\nno matching manifest for linux/amd64 in the manifest list entries"),
+    /no build for linux\/amd64/
+  );
+  assert.match(explainDeployFailure("manifest unknown"), /tag does not exist/);
+  assert.match(explainDeployFailure("Bind for 0.0.0.0:8787 failed: port is already allocated"), /already in use/);
+  assert.match(explainDeployFailure("pull access denied"), /refused the pull/);
+  assert.equal(explainDeployFailure("something else entirely"), null);
+  assert.equal(explainDeployFailure(""), null);
 });

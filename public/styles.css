@@ -1512,3 +1512,19 @@ table {
 .busy-panel i {
   color: var(--primary-color);
 }
+
+.manage-row-tag {
+  margin-left: 8px;
+  border: 1px solid var(--alert-warning-border);
+  border-radius: 3px;
+  padding: 1px 6px;
+  color: var(--warning-color);
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.manage-description-deprecated {
+  color: var(--warning-color);
+}

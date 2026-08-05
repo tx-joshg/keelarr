@@ -284,3 +284,47 @@ test("buildDashboardState does not invite a second cutover when an imported serv
 
   assert.equal(service.updateStatus, "unmanaged");
 });
+
+test("a catalog service with files but no container is not reported as cutover-pending", async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const composePath = path.join(tempRoot, "compose.yml");
+  const envPath = path.join(tempRoot, ".env");
+  await writeFile(composePath, "name: readarr\n", "utf8");
+  await writeFile(envPath, "TZ=America/Chicago\n", "utf8");
+
+  const settings = {
+    initialized: true,
+    selectedServiceIds: ["readarr"],
+    services: {
+      readarr: {
+        id: "readarr",
+        name: "Readarr",
+        image: "lscr.io/linuxserver/readarr:develop",
+        containerName: "readarr",
+        composePath,
+        envPath,
+        appUrl: "http://198.51.100.2:8787",
+        port: 8787,
+        managedMode: "catalog",
+        restartPolicy: "unless-stopped",
+        networkMode: "bridge"
+      }
+    },
+    downloadsRoot: "/share/Media/Downloads",
+    mediaRoot: "/share/Media",
+    plexLogsRoot: "",
+    hostUrl: "http://198.51.100.2"
+  };
+
+  const state = await buildDashboardState(settings, {
+    readActivityImpl: async () => [],
+    readUpdateStateImpl: async () => ({}),
+    scanDockerInventoryImpl: async () => ({ items: [] }),
+    composePsImpl: async () => ({ ok: true, data: [] }),
+    probeServiceImpl: async () => ({ reachable: false, latencyMs: null, httpStatus: null, error: "refused" })
+  });
+
+  // "cutover-pending" is import language; a failed catalog install has
+  // nothing to cut over.
+  assert.equal(state.services[0].updateStatus, "not-deployed");
+});

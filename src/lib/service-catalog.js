@@ -97,7 +97,14 @@ export const SERVICE_CATALOG = {
       "lscr.io/linuxserver/readarr:develop",
       8787,
       "core"
-    )
+    ),
+    // Upstream Readarr was archived and LinuxServer stopped publishing amd64
+    // builds, so `:develop` resolves to a manifest list with no image most
+    // hosts can run. Deploying it fails at pull time with a raw Docker error.
+    deprecated: {
+      reason: "Readarr is no longer maintained upstream, and the published image has no build for most hosts (including x86_64).",
+      since: "2026-08"
+    }
   },
   bazarr: {
     ...baseLsio(

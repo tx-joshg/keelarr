@@ -5,6 +5,7 @@ import {
   backupService,
   composeDown,
   ensureSharedNetwork,
+  explainDeployFailure,
   findRollbackPoint,
   imageExistsLocally,
   readConfigMountSource,
@@ -470,6 +471,20 @@ export class ManagedStackService {
       }
     });
 
+    if (!result.ok) {
+      // Surface something actionable instead of a raw Docker manifest error.
+      const explanation = explainDeployFailure(`${result.stdout}\n${result.stderr}`);
+      throw new StackarrError(
+        explanation
+          ? `Could not deploy ${service.name}. ${explanation}`
+          : `Could not deploy ${service.name}.`,
+        {
+          statusCode: 400,
+          details: { serviceId: service.id, stdout: result.stdout, stderr: result.stderr }
+        }
+      );
+    }
+
     return {
       serviceId: service.id,
       ok: result.ok,
@@ -485,7 +500,18 @@ export class ManagedStackService {
 
     for (const serviceId of serviceIds) {
       const service = this.requireService(settings, serviceId);
-      deployResults.push(await this.deployOne(settings, service, logger));
+
+      try {
+        deployResults.push(await this.deployOne(settings, service, logger));
+      } catch (error) {
+        // One unusable image must not stop the rest of the stack deploying.
+        deployResults.push({
+          serviceId,
+          ok: false,
+          error: error.message,
+          output: error.details?.stderr || ""
+        });
+      }
     }
 
     return deployResults;

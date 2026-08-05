@@ -352,7 +352,7 @@ function updateStatusMeta(service) {
     case "unmanaged":
       return { label: "Not Managed", tone: "manual" };
     case "not-deployed":
-      return { label: "Not Installed", tone: "manual" };
+      return { label: "Not Deployed", tone: "manual" };
     case "unchecked":
       return { label: "Unchecked", tone: "manual" };
     default:
@@ -1337,13 +1337,19 @@ function renderInputRow(field) {
 
 function renderManageRow(service) {
   const checked = selectedServiceIds().includes(service.id);
+  const deprecated = service.deprecated || null;
 
   return `
     <button type="button" class="manage-row" data-manage-toggle="${escapeHtml(service.id)}">
-      <span class="manage-row-label">${escapeHtml(service.name)}</span>
+      <span class="manage-row-label">
+        ${escapeHtml(service.name)}
+        ${deprecated ? '<span class="manage-row-tag">unavailable</span>' : ""}
+      </span>
       <span class="manage-row-body">
         <span class="manage-box ${checked ? "manage-box-checked" : ""}">${checked ? "&#10003;" : ""}</span>
-        <span class="manage-description">${escapeHtml(service.description)}</span>
+        <span class="manage-description${deprecated ? " manage-description-deprecated" : ""}">
+          ${escapeHtml(deprecated ? deprecated.reason : service.description)}
+        </span>
       </span>
     </button>
   `;

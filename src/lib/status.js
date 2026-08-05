@@ -136,9 +136,13 @@ function deriveUpdateStatus(service, generated, runtimeSource, storedStatus) {
       return "unmanaged";
     }
 
-    return service.managedMode === "imported-draft" || generated
-      ? "cutover-pending"
-      : "unmanaged";
+    // `cutover-pending` is import language. A catalog service with generated
+    // files that is simply not running has nothing to cut over.
+    if (service.managedMode === "imported-draft") {
+      return "cutover-pending";
+    }
+
+    return generated ? "not-deployed" : "unmanaged";
   }
 
   return storedStatus || "unchecked";

@@ -453,6 +453,31 @@ export async function ensureSharedNetwork(settings, networkName, options = {}) {
   return { ok: created.ok, created: created.ok, error: created.ok ? null : created.stderr };
 }
 
+// Docker's own wording for this is opaque. Translate the common failures into
+// something that says what to actually do about it.
+export function explainDeployFailure(output = "") {
+  const text = String(output || "");
+
+  if (/no matching manifest for/i.test(text)) {
+    const platform = text.match(/no matching manifest for (\S+)/i)?.[1] || "this host";
+    return `The image has no build for ${platform}. This usually means the project no longer publishes images for this architecture.`;
+  }
+
+  if (/manifest unknown|not found: manifest/i.test(text)) {
+    return "The image tag does not exist in the registry.";
+  }
+
+  if (/port is already allocated|address already in use/i.test(text)) {
+    return "That host port is already in use by another container or service.";
+  }
+
+  if (/pull access denied|authentication required/i.test(text)) {
+    return "The registry refused the pull. The image may be private or the tag may have been removed.";
+  }
+
+  return null;
+}
+
 export async function generateAndDeploy(settings, service, options = {}) {
   return runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
     logger: options.logger
