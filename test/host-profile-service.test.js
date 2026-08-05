@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { HostProfileService } from "../src/lib/app-services/host-profile-service.js";
+import { normalizeSettings } from "../src/lib/store.js";
 
 test("resolveStateSettings keeps initialized settings and returns host inspection", async () => {
   const settings = {
@@ -467,4 +468,68 @@ test("detectHost applies preferred adapter suggestions over stale saved host pat
   assert.equal(result.effectiveSettings.configRoot, "/share/Container");
   assert.equal(result.effectiveSettings.mediaRoot, "/share/Media");
   assert.equal(result.effectiveSettings.downloadsRoot, "/share/Media/Downloads");
+});
+
+test("host detection is cached so a dashboard refresh does not re-probe Docker", async () => {
+  let inspections = 0;
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => normalizeSettings({ initialized: true, dockerBin: "docker" }),
+    detectHostEnvironmentImpl: async () => {
+      inspections += 1;
+      return { selected: { adapterId: "qnap", suggestedSettings: {}, fieldSuggestions: {} }, detections: [] };
+    },
+    validateHostProfileImpl: async () => ({ ok: true, errors: [], warnings: [] }),
+    appendActivityImpl: async () => {},
+    saveSettingsImpl: async (next) => next
+  });
+
+  // Three dashboard refreshes in a row.
+  await service.resolveStateSettings();
+  await service.resolveStateSettings();
+  await service.resolveStateSettings();
+
+  // Probing the Docker binary on every poll cost seconds per refresh.
+  assert.equal(inspections, 1);
+});
+
+test("saving or detecting invalidates the cached host detection", async () => {
+  let inspections = 0;
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => normalizeSettings({ initialized: true, dockerBin: "docker" }),
+    detectHostEnvironmentImpl: async () => {
+      inspections += 1;
+      return { selected: { adapterId: "qnap", suggestedSettings: {}, fieldSuggestions: {} }, detections: [] };
+    },
+    validateHostProfileImpl: async () => ({ ok: true, errors: [], warnings: [] }),
+    appendActivityImpl: async () => {},
+    saveSettingsImpl: async (next) => next
+  });
+
+  await service.resolveStateSettings();
+  assert.equal(inspections, 1);
+
+  // An explicit detect must see the host as it is now, not a cached probe.
+  await service.detectHost();
+  assert.equal(inspections, 2);
+});
+
+test("a changed host profile is not served from the previous cache entry", async () => {
+  let inspections = 0;
+  let dockerBin = "docker";
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => normalizeSettings({ initialized: true, dockerBin }),
+    detectHostEnvironmentImpl: async () => {
+      inspections += 1;
+      return { selected: { adapterId: "qnap", suggestedSettings: {}, fieldSuggestions: {} }, detections: [] };
+    },
+    validateHostProfileImpl: async () => ({ ok: true, errors: [], warnings: [] }),
+    appendActivityImpl: async () => {},
+    saveSettingsImpl: async (next) => next
+  });
+
+  await service.resolveStateSettings();
+  dockerBin = "/some/other/docker";
+  await service.resolveStateSettings();
+
+  assert.equal(inspections, 2);
 });

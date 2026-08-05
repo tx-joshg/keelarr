@@ -31,7 +31,8 @@ export class HostProfileService {
     normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
     validateHostProfileImpl = validateHostProfile,
-    writeStacksImpl = writeStacks
+    writeStacksImpl = writeStacks,
+    hostDetectionTtlMs = 60_000
   } = {}) {
     this.appendActivity = appendActivityImpl;
     this.detectHostEnvironment = detectHostEnvironmentImpl;
@@ -43,6 +44,8 @@ export class HostProfileService {
     this.saveSettings = saveSettingsImpl;
     this.validateHostProfile = validateHostProfileImpl;
     this.writeStacks = writeStacksImpl;
+    this.hostDetectionTtlMs = hostDetectionTtlMs;
+    this.hostDetectionCache = null;
   }
 
   async loadSettings() {
@@ -96,7 +99,45 @@ export class HostProfileService {
     return rawSettings;
   }
 
+  /**
+   * Host detection probes every Docker binary candidate across every adapter,
+   * each spawning `docker version` and `docker compose version`. That is
+   * setup-time work — running it on every dashboard poll cost seconds per
+   * refresh. The result only changes when the host profile does, so it is
+   * cached and explicitly invalidated on save/detect.
+   */
+  hostDetectionCacheKey(rawSettings = {}) {
+    return JSON.stringify([
+      rawSettings.adapterType || null,
+      rawSettings.dockerBin || null,
+      rawSettings.stackRoot || null,
+      rawSettings.configRoot || null,
+      rawSettings.mediaRoot || null,
+      rawSettings.downloadsRoot || null,
+      rawSettings.plexLogsRoot || null,
+      rawSettings.initialized === true,
+      this.resolvePreferredAdapterId(rawSettings) || null
+    ]);
+  }
+
+  invalidateHostDetection() {
+    this.hostDetectionCache = null;
+  }
+
   async inspectHostDraft(rawSettings = {}, context = {}) {
+    const key = this.hostDetectionCacheKey(rawSettings);
+    const cached = this.hostDetectionCache;
+
+    if (cached && cached.key === key && Date.now() - cached.at < this.hostDetectionTtlMs) {
+      return cached.value;
+    }
+
+    const value = await this.runHostInspection(rawSettings, context);
+    this.hostDetectionCache = { key, at: Date.now(), value };
+    return value;
+  }
+
+  async runHostInspection(rawSettings = {}, context = {}) {
     const logger = this.scopedLogger(context);
     const preferredAdapterId = this.resolvePreferredAdapterId(rawSettings);
     const draftSettings = this.extractDraftSettings(rawSettings);
@@ -144,6 +185,7 @@ export class HostProfileService {
   }
 
   async detectHost(input = null, context = {}) {
+    this.invalidateHostDetection();
     const savedSettings = await this.loadSettings();
     const draftSettings = input
       ? {
@@ -165,6 +207,7 @@ export class HostProfileService {
   }
 
   async saveProfile(input = {}, context = {}) {
+    this.invalidateHostDetection();
     const logger = this.scopedLogger(context);
     const savedSettings = await this.loadSettings();
     const rawSettings = this.extractDraftSettings(input);
@@ -219,6 +262,7 @@ export class HostProfileService {
   }
 
   async prepareSetup(input = {}, context = {}) {
+    this.invalidateHostDetection();
     const logger = this.scopedLogger(context);
     const deploy = input?.deploy === true;
     const rawSettings = this.extractDraftSettings(input);
