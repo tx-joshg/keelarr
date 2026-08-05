@@ -72,6 +72,7 @@ test("buildDashboardState monitors a detected live container before Stackarr own
           containerId: "trailarr12345",
           containerName: "trailarr",
           image: "nandyalu/trailarr:latest",
+          imageId: "sha256:trailarrimage123",
           status: "running",
           healthStatus: "healthy",
           ports: [{ hostPort: "7889", display: "0.0.0.0:7889->7889/tcp" }],
@@ -97,6 +98,7 @@ test("buildDashboardState monitors a detected live container before Stackarr own
   assert.equal(service.reachable, true);
   assert.equal(service.observedContainerName, "trailarr");
   assert.equal(service.observedImage, "nandyalu/trailarr:latest");
+  assert.equal(service.observedImageId, "sha256:trailarrimage123");
   assert.equal(service.updateStatus, "unmanaged");
 });
 
@@ -150,6 +152,7 @@ test("buildDashboardState keeps imported drafts out of managed upgrade mode unti
           containerId: "trailarr12345",
           containerName: "trailarr",
           image: "nandyalu/trailarr:latest",
+          imageId: "sha256:trailarrimage123",
           status: "running",
           healthStatus: null,
           ports: [{ hostPort: "7889", display: "0.0.0.0:7889->7889/tcp" }],

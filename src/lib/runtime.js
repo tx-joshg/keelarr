@@ -36,6 +36,51 @@ export function normalizeComposePsData(value) {
   return [];
 }
 
+export function normalizeImageId(value) {
+  const trimmed = String(value || "").trim();
+  return trimmed || null;
+}
+
+export function deriveUpdateStatusFromPullResult(output, runningImageId = null, availableImageId = null) {
+  if (/Downloaded newer image/i.test(output)) {
+    return "ready";
+  }
+
+  if (/Image is up to date|up to date/i.test(output)) {
+    return "current";
+  }
+
+  if (runningImageId && availableImageId) {
+    return runningImageId === availableImageId ? "current" : "ready";
+  }
+
+  return "unknown";
+}
+
+async function readContainerImageId(settings, service, options = {}) {
+  const result = await runCommand(settings.dockerBin, ["inspect", service.containerName, "--format", "{{.Image}}"], {
+    logger: options.logger
+  });
+
+  if (!result.ok) {
+    return null;
+  }
+
+  return normalizeImageId(result.stdout);
+}
+
+async function readTaggedImageId(settings, service, options = {}) {
+  const result = await runCommand(settings.dockerBin, ["image", "inspect", service.image, "--format", "{{.Id}}"], {
+    logger: options.logger
+  });
+
+  if (!result.ok) {
+    return null;
+  }
+
+  return normalizeImageId(result.stdout);
+}
+
 export async function backupService(settings, service, options = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupDir = path.join(settings.stackRoot, ".stackarr-backups", service.id, timestamp);
@@ -114,13 +159,17 @@ export async function checkForUpdates(settings, service, options = {}) {
     logger: options.logger
   });
   const combinedOutput = `${result.stdout}\n${result.stderr}`.trim();
-  let status = "unknown";
+  let runningImageId = null;
+  let availableImageId = null;
 
-  if (/Downloaded newer image/i.test(combinedOutput)) {
-    status = "ready";
-  } else if (/Image is up to date|up to date/i.test(combinedOutput)) {
-    status = "current";
+  if (result.ok) {
+    [runningImageId, availableImageId] = await Promise.all([
+      readContainerImageId(settings, service, options),
+      readTaggedImageId(settings, service, options)
+    ]);
   }
+
+  const status = deriveUpdateStatusFromPullResult(combinedOutput, runningImageId, availableImageId);
 
   return {
     ...result,

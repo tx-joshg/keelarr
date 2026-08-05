@@ -218,6 +218,7 @@ async function buildInventoryItem(inspect, options = {}) {
     containerId: inspect.Id?.slice(0, 12) || null,
     containerName: sanitizeContainerName(inspect.Name || ""),
     image: inspect.Config?.Image || "",
+    imageId: inspect.Image || null,
     recognized: Boolean(serviceMatch),
     serviceId: serviceMatch?.serviceId || null,
     serviceName: serviceMatch?.serviceName || null,

@@ -148,6 +148,7 @@ function buildRenderService(id) {
     updateStatus: live?.updateStatus || "unknown",
     updateCheckedAt: live?.updateCheckedAt || null,
     observedImage: live?.observedImage || live?.image || catalog.defaultImage,
+    observedImageId: live?.observedImageId || null,
     observedContainerId: live?.observedContainerId || null,
     observedContainerName: live?.observedContainerName || live?.containerName || id,
     observedNetworkMode: live?.observedNetworkMode || live?.networkMode || "default",
@@ -190,6 +191,16 @@ function imageTagFromRef(image = "") {
   }
 
   return "latest";
+}
+
+function shortImageId(imageId = "") {
+  const trimmed = String(imageId || "").trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  return trimmed.replace(/^sha256:/, "").slice(0, 12);
 }
 
 function managementStateMeta(service) {
@@ -754,6 +765,10 @@ function renderStackView() {
       const updateLabel = renderStatusPill(updateMeta.label, updateMeta.tone);
       const managementMeta = managementStateMeta(service);
       const versionTag = imageTagFromRef(service.observedImage);
+      const imageIdTag = shortImageId(service.observedImageId);
+      const versionDetail = imageIdTag
+        ? `ref ${versionTag} · image ${imageIdTag} · ${managementMeta.detail}`
+        : `${versionTag} · ${managementMeta.detail}`;
       const openUrl = resolveServiceOpenUrl(service);
       let primaryAction = "deploy";
       let primaryTitle = "Deploy";
@@ -783,7 +798,7 @@ function renderStackView() {
           </td>
           <td class="cell-truncate">
             <div>${escapeHtml(service.observedImage)}</div>
-            <div class="secondary-copy">${escapeHtml(versionTag)} · ${escapeHtml(managementMeta.detail)}</div>
+            <div class="secondary-copy">${escapeHtml(versionDetail)}</div>
           </td>
           <td>${escapeHtml(String(service.port))}</td>
           <td>${composeLabel}</td>
