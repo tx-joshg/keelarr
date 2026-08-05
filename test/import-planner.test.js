@@ -221,3 +221,61 @@ test("keeps distinct ports distinct while deduping", () => {
 test("an unpublished port keeps only the container side", () => {
   assert.deepEqual(buildImportedPorts([{ containerPort: "9000/tcp" }]), ["9000/tcp"]);
 });
+
+test("preserves network_mode bridge so a cutover does not move the container", () => {
+  const draft = buildImportDraftArtifacts(baseSettings, {
+    containerId: "abc",
+    containerName: "ombi",
+    serviceId: "ombi",
+    image: "lscr.io/linuxserver/ombi:development",
+    networkMode: "bridge",
+    networks: [{ name: "bridge", address: "172.17.0.5" }],
+    ports: [{ containerPort: "3579/tcp", hostIp: "0.0.0.0", hostPort: "3579" }],
+    mounts: [{ type: "bind", source: "/share/Container/ombi/config", target: "/config", mode: "rw" }],
+    environment: { PUID: "0" },
+    envKeys: ["PUID"]
+  });
+
+  // Without this, Compose invents an <project>_default network and the
+  // service silently moves off the network it was running on.
+  assert.equal(draft.composeSpec.services.ombi.network_mode, "bridge");
+  assert.equal(draft.composeSpec.services.ombi.networks, undefined);
+  assert.deepEqual(draft.composeSpec.services.ombi.ports, ["3579:3579/tcp"]);
+});
+
+test("host networking still wins over the bridge default", () => {
+  const draft = buildImportDraftArtifacts(baseSettings, {
+    containerId: "abc",
+    containerName: "radarr",
+    serviceId: "radarr",
+    image: "lscr.io/linuxserver/radarr:latest",
+    networkMode: "host",
+    networks: [{ name: "host" }],
+    ports: [],
+    mounts: [{ type: "bind", source: "/share/Container/radarr/config", target: "/config", mode: "rw" }],
+    environment: {},
+    envKeys: []
+  });
+
+  assert.equal(draft.composeSpec.services.radarr.network_mode, "host");
+  assert.equal(draft.composeSpec.services.radarr.ports, undefined);
+});
+
+test("a custom external network is still emitted as a network, not a mode", () => {
+  const draft = buildImportDraftArtifacts(baseSettings, {
+    containerId: "abc",
+    containerName: "sabnzbd",
+    serviceId: "sabnzbd",
+    image: "lscr.io/linuxserver/sabnzbd:latest",
+    networkMode: "qnet-static",
+    networks: [{ name: "qnet-static", address: "198.51.100.40" }],
+    ports: [],
+    mounts: [{ type: "bind", source: "/share/Container/sabnzbd/config", target: "/config", mode: "rw" }],
+    environment: {},
+    envKeys: []
+  });
+
+  assert.equal(draft.composeSpec.services.sabnzbd.network_mode, undefined);
+  assert.deepEqual(draft.composeSpec.services.sabnzbd.networks, { "qnet-static": { ipv4_address: "198.51.100.40" } });
+  assert.equal(draft.composeSpec.networks["qnet-static"].external, true);
+});

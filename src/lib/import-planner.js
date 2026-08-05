@@ -166,8 +166,11 @@ function buildNetworkArtifacts(item) {
   const externalNetworks = (item.networks || []).filter((network) => !["bridge", "host", "none"].includes(network.name));
 
   if (!externalNetworks.length) {
+    // A container on Docker's default bridge has to stay there. Emitting no
+    // network at all makes Compose invent a <project>_default network and
+    // silently move the service off the network it was actually running on.
     return {
-      networkMode: null,
+      networkMode: item.networkMode === "bridge" ? "bridge" : null,
       serviceNetworks: null,
       networks: null
     };
@@ -211,8 +214,8 @@ export function buildImportDraftArtifacts(settings, item) {
     composeService.volumes = volumeArtifacts.serviceVolumes;
   }
 
-  if (item.networkMode === "host" || item.networkMode === "none") {
-    composeService.network_mode = item.networkMode;
+  if (networkArtifacts.networkMode) {
+    composeService.network_mode = networkArtifacts.networkMode;
   } else if (networkArtifacts.serviceNetworks) {
     composeService.networks = networkArtifacts.serviceNetworks;
   }
