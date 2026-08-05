@@ -23,7 +23,8 @@ export async function detectQnapHost(settings = {}, options = {}) {
   const plexLogsRoot = "/share/Container/plex/Logs";
 
   const [
-    qnapDockerExists,
+    qnapDockerBinExists,
+    qnapDockerUsrBinExists,
     stackRootExists,
     stackRootWritable,
     configRootExists,
@@ -32,6 +33,7 @@ export async function detectQnapHost(settings = {}, options = {}) {
     plexLogsExists
   ] = await Promise.all([
     pathExists("/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker"),
+    pathExists("/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker"),
     pathExists(stackRoot),
     pathCreatable(stackRoot),
     pathExists(configRoot),
@@ -39,9 +41,25 @@ export async function detectQnapHost(settings = {}, options = {}) {
     pathExists(downloadsRoot),
     pathExists(plexLogsRoot)
   ]);
+  const qnapDockerExists = qnapDockerBinExists || qnapDockerUsrBinExists;
+  const resolvedDockerBin = dockerProbe.selected?.binaryPath
+    || (qnapDockerBinExists
+      ? "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker"
+      : qnapDockerUsrBinExists
+        ? "/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin/docker"
+        : "docker");
+  const qnapSharesDetected = configRootExists && mediaRootExists;
+  const dockerNote = qnapDockerExists
+    ? "QNAP Container Station docker binary was found."
+    : qnapSharesDetected && dockerProbe.selected?.composeOk
+      ? `QNAP shares were detected and Docker Compose validated via ${resolvedDockerBin}.`
+      : "QNAP Container Station docker binary was not found at the common path.";
 
   let score = 0;
   if (qnapDockerExists) {
+    score += 30;
+  }
+  if (configRootExists && mediaRootExists) {
     score += 30;
   }
   if (configRootExists) {
@@ -69,7 +87,7 @@ export async function detectQnapHost(settings = {}, options = {}) {
     score,
     confidence: confidenceFromScore(score),
     notes: [
-      qnapDockerExists ? "QNAP Container Station docker binary was found." : "QNAP Container Station docker binary was not found at the common path.",
+      dockerNote,
       mediaRootExists ? "QNAP media share was detected." : "QNAP media share was not detected at /share/Media."
     ],
     validation: {
@@ -80,7 +98,7 @@ export async function detectQnapHost(settings = {}, options = {}) {
     suggestedSettings: {
       adapterType: "qnap",
       hostLabel: "QNAP NAS",
-      dockerBin: dockerProbe.selected?.binaryPath || "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
+      dockerBin: resolvedDockerBin,
       stackRoot,
       configRoot,
       mediaRoot,
@@ -88,7 +106,7 @@ export async function detectQnapHost(settings = {}, options = {}) {
       plexLogsRoot: plexLogsExists ? plexLogsRoot : ""
     },
     fieldSuggestions: {
-      dockerBin: field(dockerProbe.selected?.binaryPath || "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker", qnapDockerExists ? "high" : "medium", "qnap-detection"),
+      dockerBin: field(resolvedDockerBin, dockerProbe.selected?.composeOk ? "high" : qnapDockerExists ? "medium" : "low", qnapDockerExists ? "qnap-detection" : "validated-command"),
       stackRoot: field(stackRoot, stackRootExists ? "high" : "medium", stackRootExists ? "existing-qnap-path" : "qnap-default"),
       configRoot: field(configRoot, configRootExists ? "high" : "medium", "qnap-default"),
       mediaRoot: field(mediaRoot, mediaRootExists ? "high" : "medium", "qnap-default"),

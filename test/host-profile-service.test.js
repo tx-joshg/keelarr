@@ -59,6 +59,79 @@ test("resolveStateSettings keeps initialized settings and returns host inspectio
   assert.equal(result.hostDetection.validation.ok, true);
 });
 
+test("resolveStateSettings applies the best detected host profile on first run", async () => {
+  let capturedPreferredAdapterId = "not-set";
+
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => ({
+      initialized: false,
+      adapterType: "generic-docker",
+      hostLabel: "Docker Host",
+      dockerBin: "docker",
+      stackRoot: "/opt/stackarr/stacks",
+      configRoot: "/srv/stackarr/config",
+      mediaRoot: "/srv/media",
+      downloadsRoot: "/srv/media/downloads",
+      plexLogsRoot: "",
+      hostUrl: "http://localhost",
+      tz: "America/Chicago",
+      puid: "1000",
+      pgid: "1000",
+      ombiVersion: "latest",
+      selectedServiceIds: ["trailarr", "tautulli"],
+      services: {}
+    }),
+    detectHostEnvironmentImpl: async (_settings, options = {}) => {
+      capturedPreferredAdapterId = options.preferredAdapterId ?? null;
+      return {
+        selected: {
+          adapterId: "qnap",
+          label: "QNAP / Container Station",
+          suggestedSettings: {
+            adapterType: "qnap",
+            hostLabel: "QNAP NAS",
+            dockerBin: "docker",
+            stackRoot: "/share/Container/docker",
+            configRoot: "/share/Container",
+            mediaRoot: "/share/Media",
+            downloadsRoot: "/share/Media/Downloads",
+            plexLogsRoot: "/share/Container/plex/Logs"
+          }
+        },
+        detections: [
+          { adapterId: "qnap", label: "QNAP / Container Station", score: 95 },
+          { adapterId: "generic-docker", label: "Generic Docker Host", score: 75 }
+        ]
+      };
+    },
+    normalizeSettingsImpl: (input) => input,
+    validateHostProfileImpl: async (settings) => ({
+      ok: true,
+      errors: [],
+      warnings: [],
+      fieldResults: {
+        dockerBin: {
+          ok: true,
+          level: "info",
+          value: settings.dockerBin,
+          message: "Docker and Compose validated."
+        }
+      }
+    })
+  });
+
+  const result = await service.resolveStateSettings();
+
+  assert.equal(capturedPreferredAdapterId, null);
+  assert.equal(result.settings.adapterType, "qnap");
+  assert.equal(result.settings.hostLabel, "QNAP NAS");
+  assert.equal(result.settings.stackRoot, "/share/Container/docker");
+  assert.equal(result.settings.mediaRoot, "/share/Media");
+  assert.equal(result.hostDetection.selected.adapterId, "qnap");
+  assert.equal(result.hostDetection.effectiveSettings.adapterType, "qnap");
+  assert.equal(result.hostDetection.effectiveSettings.stackRoot, "/share/Container/docker");
+});
+
 test("detectHost returns effective settings and validation details", async () => {
   const service = new HostProfileService({
     detectHostEnvironmentImpl: async () => ({
@@ -99,7 +172,7 @@ test("detectHost returns effective settings and validation details", async () =>
     validateHostProfileImpl: async (settings) => ({
       ok: true,
       errors: [],
-      warnings: ["Tautulli is selected but Plex logs path is blank."],
+      warnings: [],
       fieldResults: {
         dockerBin: {
           ok: true,
@@ -118,8 +191,8 @@ test("detectHost returns effective settings and validation details", async () =>
   assert.equal(result.selected.adapterId, "qnap");
   assert.equal(result.validation.ok, true);
   assert.equal(result.effectiveSettings.stackRoot, "/share/Container/docker");
-  assert.equal(result.effectiveSettings.plexLogsRoot, "");
-  assert.deepEqual(result.validation.warnings, ["Tautulli is selected but Plex logs path is blank."]);
+  assert.equal(result.effectiveSettings.plexLogsRoot, "/share/Container/plex/Logs");
+  assert.deepEqual(result.validation.warnings, []);
 });
 
 test("prepareSetup rejects invalid Docker validation before saving settings", async () => {
@@ -260,4 +333,138 @@ test("prepareSetup preserves existing service overrides when saving host setting
   assert.equal(savedPayload.hostUrl, "http://nas.local");
   assert.equal(savedPayload.serviceOverrides.trailarr.mode, "imported-draft");
   assert.equal(savedPayload.serviceOverrides.trailarr.reviewSummaryPath, "/srv/stackarr/stacks/trailarr/import-summary.json");
+});
+
+test("saveProfile persists validated settings without generating stacks", async () => {
+  let savedPayload = null;
+  let writeStacksCalled = false;
+
+  const service = new HostProfileService({
+    appendActivityImpl: async () => [],
+    detectHostEnvironmentImpl: async () => ({
+      selected: {
+        adapterId: "qnap",
+        suggestedSettings: {
+          adapterType: "qnap",
+          hostLabel: "QNAP NAS",
+          dockerBin: "docker",
+          stackRoot: "/share/Container/docker",
+          configRoot: "/share/Container",
+          mediaRoot: "/share/Media",
+          downloadsRoot: "/share/Media/Downloads",
+          plexLogsRoot: "/share/Container/plex/Logs"
+        }
+      },
+      detections: []
+    }),
+    loadSettingsImpl: async () => ({
+      initialized: false,
+      projectName: "Stackarr",
+      hostUrl: "http://nas.local",
+      selectedServiceIds: ["trailarr"]
+    }),
+    normalizeSettingsImpl: (input) => input,
+    saveSettingsImpl: async (input) => {
+      savedPayload = input;
+      return input;
+    },
+    validateHostProfileImpl: async () => ({
+      ok: true,
+      errors: [],
+      warnings: [],
+      fieldResults: {}
+    }),
+    writeStacksImpl: async () => {
+      writeStacksCalled = true;
+      return [];
+    }
+  });
+
+  const result = await service.saveProfile({
+    preferredAdapterId: "qnap",
+    hostUrl: "http://198.51.100.2"
+  });
+
+  assert.equal(result.settings.hostUrl, "http://198.51.100.2");
+  assert.equal(savedPayload.adapterType, "qnap");
+  assert.equal(savedPayload.preferredAdapterId, undefined);
+  assert.equal(writeStacksCalled, false);
+});
+
+test("detectHost applies preferred adapter suggestions over stale saved host paths", async () => {
+  const service = new HostProfileService({
+    detectHostEnvironmentImpl: async () => ({
+      selected: {
+        adapterId: "qnap",
+        suggestedSettings: {
+          adapterType: "qnap",
+          hostLabel: "QNAP NAS",
+          dockerBin: "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker",
+          stackRoot: "/share/Container/docker",
+          configRoot: "/share/Container",
+          mediaRoot: "/share/Media",
+          downloadsRoot: "/share/Media/Downloads",
+          plexLogsRoot: "/share/Container/plex/Logs"
+        }
+      },
+      detections: []
+    }),
+    loadSettingsImpl: async () => ({
+      initialized: true,
+      adapterType: "generic-docker",
+      hostLabel: "Broken Docker Host",
+      dockerBin: "/definitely-not-stackarr/docker",
+      stackRoot: "/tmp/old-stacks",
+      configRoot: "/tmp/old-config",
+      mediaRoot: "/tmp/old-media",
+      downloadsRoot: "/tmp/old-downloads",
+      plexLogsRoot: "",
+      hostUrl: "http://nas.local",
+      tz: "America/Chicago",
+      puid: "1000",
+      pgid: "1000",
+      ombiVersion: "latest",
+      selectedServiceIds: ["trailarr"]
+    }),
+    normalizeSettingsImpl: (input) => input,
+    validateHostProfileImpl: async (settings) => ({
+      ok: true,
+      errors: [],
+      warnings: [],
+      fieldResults: {
+        dockerBin: {
+          ok: true,
+          level: "info",
+          value: settings.dockerBin,
+          message: "Docker and Compose validated."
+        }
+      }
+    })
+  });
+
+  const result = await service.detectHost({
+    preferredAdapterId: "qnap",
+    adapterType: "generic-docker",
+    hostLabel: "Broken Docker Host",
+    dockerBin: "/definitely-not-stackarr/docker",
+    stackRoot: "/tmp/old-stacks",
+    configRoot: "/tmp/old-config",
+    mediaRoot: "/tmp/old-media",
+    downloadsRoot: "/tmp/old-downloads",
+    plexLogsRoot: "",
+    hostUrl: "http://nas.local",
+    tz: "America/Chicago",
+    puid: "1000",
+    pgid: "1000",
+    ombiVersion: "latest",
+    selectedServiceIds: ["trailarr"]
+  });
+
+  assert.equal(result.effectiveSettings.adapterType, "qnap");
+  assert.equal(result.effectiveSettings.hostLabel, "QNAP NAS");
+  assert.equal(result.effectiveSettings.dockerBin, "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker");
+  assert.equal(result.effectiveSettings.stackRoot, "/share/Container/docker");
+  assert.equal(result.effectiveSettings.configRoot, "/share/Container");
+  assert.equal(result.effectiveSettings.mediaRoot, "/share/Media");
+  assert.equal(result.effectiveSettings.downloadsRoot, "/share/Media/Downloads");
 });

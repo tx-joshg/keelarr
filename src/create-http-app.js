@@ -86,9 +86,25 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.post("/api/settings", async (request, response, next) => {
+    try {
+      response.json(await stackarrApp.saveSettings(request.body || {}, requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/setup", async (request, response, next) => {
     try {
       response.json(await stackarrApp.setup(request.body || {}, requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/host/browse", async (request, response, next) => {
+    try {
+      response.json(await stackarrApp.browseDirectories(request.query.path || "/", requestContext(request)));
     } catch (error) {
       next(error);
     }

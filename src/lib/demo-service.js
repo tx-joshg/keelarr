@@ -3,6 +3,7 @@ import {
   buildImportPreview,
   buildImportReviewArtifacts
 } from "./import-planner.js";
+import { APP_NAME, APP_VERSION } from "./app-meta.js";
 import { normalizeSettings } from "./store.js";
 import { listServices } from "./service-catalog.js";
 import { StackarrError } from "./errors.js";
@@ -13,6 +14,13 @@ function clone(value) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sanitizeDemoInput(input = {}) {
+  const next = { ...input };
+  delete next.deploy;
+  delete next.preferredAdapterId;
+  return next;
 }
 
 function summarizeImports(items) {
@@ -130,6 +138,18 @@ function createDemoDetection(draftSettings = {}) {
         diagnostics: []
       }
     ]
+  };
+}
+
+function selectDemoDetection(detection, preferredAdapterId = null) {
+  if (!preferredAdapterId) {
+    return detection;
+  }
+
+  const selected = detection.detections.find((item) => item.adapterId === preferredAdapterId) || detection.selected;
+  return {
+    ...detection,
+    selected
   };
 }
 
@@ -307,6 +327,42 @@ function createDemoScenario() {
   };
 }
 
+const demoBrowseTree = new Map([
+  ["/", ["share", "srv", "opt"]],
+  ["/share", ["Container", "Media"]],
+  ["/share/Container", ["docker", "plex", "trailarr", "ombi", "tautulli"]],
+  ["/share/Container/plex", ["Logs"]],
+  ["/share/Media", ["Downloads", "Movies", "TV"]],
+  ["/srv", ["stackarr", "media"]],
+  ["/srv/stackarr", ["config", "stacks"]],
+  ["/srv/media", ["downloads", "movies", "tv"]]
+]);
+
+function browseDemoDirectories(inputPath = "/") {
+  const targetPath = inputPath === "/" ? "/" : `/${String(inputPath || "").replace(/^\/+|\/+$/g, "")}`;
+  const children = demoBrowseTree.get(targetPath);
+
+  if (!children) {
+    throw new StackarrError(`Unable to browse ${targetPath}.`, {
+      statusCode: 404,
+      details: {
+        code: "ENOENT",
+        path: targetPath
+      }
+    });
+  }
+
+  return {
+    ok: true,
+    path: targetPath,
+    parentPath: targetPath === "/" ? null : targetPath.split("/").slice(0, -1).join("/") || "/",
+    directories: children.map((name) => ({
+      name,
+      path: targetPath === "/" ? `/${name}` : `${targetPath}/${name}`
+    }))
+  };
+}
+
 function buildDemoDiagnostics(settings) {
   const diagnostics = [];
 
@@ -379,6 +435,8 @@ export class DemoStackarrAppService {
       catalog: listServices(),
       hostDetection: clone(this.demo.detection),
       meta: {
+        appName: APP_NAME,
+        version: APP_VERSION,
         mode: "demo",
         label: "Interactive Demo",
         note: "All dashboard actions are simulated. No Docker host is modified."
@@ -387,28 +445,53 @@ export class DemoStackarrAppService {
   }
 
   async detectHost(input = null) {
+    const preferredAdapterId = input?.preferredAdapterId || input?.adapterType || null;
     const nextSettings = input
       ? normalizeSettings({
           ...this.demo.settings,
-          ...input,
+          ...sanitizeDemoInput(input),
           initialized: true
         })
       : this.demo.settings;
 
-    return createDemoDetection(nextSettings);
+    return selectDemoDetection(createDemoDetection(nextSettings), preferredAdapterId);
+  }
+
+  async saveSettings(input = {}) {
+    const preferredAdapterId = input?.preferredAdapterId || input?.adapterType || null;
+    this.demo.settings = normalizeSettings({
+      ...this.demo.settings,
+      ...sanitizeDemoInput(input),
+      initialized: true
+    });
+    this.demo.detection = selectDemoDetection(createDemoDetection(this.demo.settings), preferredAdapterId);
+    this.pushActivity({
+      kind: "settings-save",
+      level: "info",
+      message: "Saved host settings."
+    });
+
+    return {
+      ...(await this.buildState()),
+      generated: [],
+      hostDetection: clone(this.demo.detection),
+      validation: clone(this.demo.detection.validation),
+      effectiveSettings: clone(this.demo.settings),
+      settings: clone(this.demo.settings)
+    };
   }
 
   async setup(input = {}) {
     const deploy = input?.deploy === true;
-    const rawSettings = { ...input };
-    delete rawSettings.deploy;
+    const rawSettings = sanitizeDemoInput(input);
+    const preferredAdapterId = input?.preferredAdapterId || input?.adapterType || null;
 
     this.demo.settings = normalizeSettings({
       ...this.demo.settings,
       ...rawSettings,
       initialized: true
     });
-    this.demo.detection = createDemoDetection(this.demo.settings);
+    this.demo.detection = selectDemoDetection(createDemoDetection(this.demo.settings), preferredAdapterId);
 
     for (const serviceId of this.demo.settings.selectedServiceIds) {
       const runtime = this.demo.services[serviceId] || {
@@ -462,6 +545,10 @@ export class DemoStackarrAppService {
       summary: summarizeImports(items),
       items
     };
+  }
+
+  async browseDirectories(inputPath = "/") {
+    return browseDemoDirectories(inputPath);
   }
 
   async previewImport(containerId) {

@@ -24,6 +24,18 @@ async function backupFileIfPresent(filePath, destinationDir) {
   }
 }
 
+export function normalizeComposePsData(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    return [value];
+  }
+
+  return [];
+}
+
 export async function backupService(settings, service, options = {}) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupDir = path.join(settings.stackRoot, ".stackarr-backups", service.id, timestamp);
@@ -56,7 +68,7 @@ export async function composePs(settings, service, options = {}) {
 
   try {
     const parsed = JSON.parse(result.stdout || "[]");
-    return { ok: true, data: parsed };
+    return { ok: true, data: normalizeComposePsData(parsed) };
   } catch {
     return {
       ok: false,

@@ -6,8 +6,10 @@ import path from "node:path";
 
 import {
   buildAdoptionIssues,
+  diffEnvironment,
   matchSupportedService,
-  normalizeImageRepository
+  normalizeImageRepository,
+  shouldIncludeInventoryItem
 } from "../src/lib/import-scanner.js";
 
 test("normalizes image repositories across registry and tag differences", () => {
@@ -56,4 +58,78 @@ test("flags missing required media mounts for adoptable services", async () => {
   );
 
   assert.equal(issues.some((issue) => issue.message.includes("/Media")), true);
+});
+
+test("does not flag named docker volumes as missing host paths", async () => {
+  const mediaDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-media-"));
+  const serviceMatch = matchSupportedService({
+    Name: "/radarr",
+    Config: {
+      Image: "linuxserver/radarr:latest"
+    }
+  });
+
+  const issues = await buildAdoptionIssues(
+    serviceMatch,
+    {
+      Config: {
+        Image: "linuxserver/radarr:latest"
+      },
+      HostConfig: {
+        NetworkMode: "host"
+      }
+    },
+    [
+      {
+        type: "volume",
+        source: "/var/lib/docker/volumes/radarr-config/_data",
+        target: "/config",
+        name: "radarr-config"
+      },
+      {
+        type: "bind",
+        source: mediaDir,
+        target: "/Media"
+      }
+    ]
+  );
+
+  assert.equal(issues.some((issue) => issue.message.includes("Mount source does not exist")), false);
+});
+
+test("diffEnvironment removes image defaults from imported env keys", () => {
+  const imported = diffEnvironment(
+    {
+      PATH: "/usr/local/bin",
+      PUID: "1000",
+      PGID: "1000",
+      TZ: "America/Chicago",
+      PYTHON_VERSION: "3.12.0"
+    },
+    {
+      PATH: "/usr/local/bin",
+      PYTHON_VERSION: "3.12.0"
+    }
+  );
+
+  assert.deepEqual(imported, {
+    PUID: "1000",
+    PGID: "1000",
+    TZ: "America/Chicago"
+  });
+});
+
+test("shouldIncludeInventoryItem hides the stackarr controller and non-running containers", () => {
+  assert.equal(shouldIncludeInventoryItem({
+    containerName: "stackarr",
+    status: "running"
+  }), false);
+  assert.equal(shouldIncludeInventoryItem({
+    containerName: "radarr",
+    status: "exited"
+  }), false);
+  assert.equal(shouldIncludeInventoryItem({
+    containerName: "trailarr",
+    status: "running"
+  }), true);
 });

@@ -157,6 +157,11 @@ table {
   outline: 0;
 }
 
+.search-input-static {
+  display: inline-flex;
+  align-items: center;
+}
+
 .search-input::placeholder {
   color: var(--help-text);
 }
@@ -611,6 +616,47 @@ table {
   background: #252525;
 }
 
+.toast-shell {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 10;
+}
+
+.toast-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 280px;
+  max-width: 420px;
+  padding: 12px 14px;
+  border: 1px solid var(--default-border);
+  border-radius: 6px;
+  background: rgba(17, 17, 17, 0.96);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.35);
+}
+
+.toast-panel-info {
+  border-color: var(--alert-info-border);
+}
+
+.toast-panel-danger {
+  border-color: var(--danger-color);
+}
+
+.toast-dismiss {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--help-text);
+  cursor: pointer;
+}
+
+.toast-dismiss:hover,
+.toast-dismiss:focus-visible {
+  color: var(--text-color);
+}
+
 .result-panel-info {
   border-color: var(--alert-info-border);
 }
@@ -725,6 +771,12 @@ table {
   min-width: 0;
 }
 
+.text-input-shell {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
 .text-input {
   width: 100%;
   height: 35px;
@@ -741,6 +793,23 @@ table {
 
 .text-input-warning {
   border-color: var(--warning-color);
+}
+
+.field-action-button {
+  flex: 0 0 35px;
+  width: 35px;
+  border: 1px solid var(--default-border);
+  border-radius: 4px;
+  background: var(--input-background);
+  color: var(--text-color);
+  cursor: pointer;
+}
+
+.field-action-button:hover,
+.field-action-button:focus-visible {
+  border-color: var(--default-hover-border);
+  background: var(--default-hover-background);
+  color: var(--theme-blue);
 }
 
 .help-text {
@@ -852,10 +921,19 @@ table {
 }
 
 .inspection-card {
+  width: 100%;
   border: 1px solid var(--default-border);
   border-radius: 4px;
   padding: 12px;
   background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inspection-card:hover,
+.inspection-card:focus-visible {
+  border-color: var(--primary-color);
 }
 
 .inspection-card-selected {
@@ -1050,6 +1128,81 @@ table {
   min-width: 1px;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.path-picker-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  border: 1px solid var(--default-border);
+  border-radius: 8px;
+  background: var(--header-background);
+  padding: 18px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+.path-picker-header,
+.path-picker-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.path-picker-title {
+  color: var(--text-color);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.path-picker-copy {
+  margin-top: 4px;
+  color: var(--help-text);
+}
+
+.path-picker-actions {
+  margin: 16px 0;
+  justify-content: flex-start;
+}
+
+.path-picker-list {
+  border: 1px solid var(--default-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.path-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line-color);
+  padding: 12px 14px;
+  background: transparent;
+  color: var(--text-color);
+  text-align: left;
+  cursor: pointer;
+}
+
+.path-picker-row:last-child {
+  border-bottom: 0;
+}
+
+.path-picker-row:hover,
+.path-picker-row:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
 @media (max-width: 992px) {
   body {
     overflow: auto;
@@ -1083,7 +1236,9 @@ table {
   .form-row,
   .preview-split,
   .inspection-summary,
-  .result-panel-header {
+  .result-panel-header,
+  .path-picker-header,
+  .path-picker-actions {
     flex-direction: column;
   }
 
@@ -1102,5 +1257,16 @@ table {
 
   .inspection-summary-badges {
     justify-content: flex-start;
+  }
+
+  .toast-shell {
+    left: 20px;
+    right: 20px;
+    top: 20px;
+  }
+
+  .toast-panel {
+    min-width: 0;
+    max-width: none;
   }
 }

@@ -7,14 +7,29 @@ import {
   validateDockerHostProfile
 } from "./shared.js";
 
+export function resolveGenericDockerSuggestedPaths(settings = {}, options = {}) {
+  const resetToGenericDefaults = options.preferredAdapterId === "generic-docker" && settings.adapterType !== "generic-docker";
+  const mediaRoot = resetToGenericDefaults ? "/srv/media" : settings.mediaRoot || "/srv/media";
+
+  return {
+    stackRoot: resetToGenericDefaults ? "/opt/stackarr/stacks" : settings.stackRoot || "/opt/stackarr/stacks",
+    configRoot: resetToGenericDefaults ? "/srv/stackarr/config" : settings.configRoot || "/srv/stackarr/config",
+    mediaRoot,
+    downloadsRoot: resetToGenericDefaults ? `${mediaRoot}/downloads` : settings.downloadsRoot || `${mediaRoot}/downloads`,
+    plexLogsRoot: resetToGenericDefaults ? "" : settings.plexLogsRoot || ""
+  };
+}
+
 export async function detectGenericDockerHost(settings = {}, options = {}) {
   const dockerCandidates = [settings.dockerBin, process.env.DOCKER_BIN, "docker"];
   const dockerProbe = await firstSuccessfulDockerProbe(dockerCandidates, options);
-  const stackRoot = settings.stackRoot || "/opt/stackarr/stacks";
-  const configRoot = settings.configRoot || "/srv/stackarr/config";
-  const mediaRoot = settings.mediaRoot || "/srv/media";
-  const downloadsRoot = settings.downloadsRoot || `${mediaRoot}/downloads`;
-  const plexLogsRoot = settings.plexLogsRoot || "";
+  const {
+    stackRoot,
+    configRoot,
+    mediaRoot,
+    downloadsRoot,
+    plexLogsRoot
+  } = resolveGenericDockerSuggestedPaths(settings, options);
 
   const [stackExists, stackWritable, mediaExists] = await Promise.all([
     pathExists(stackRoot),

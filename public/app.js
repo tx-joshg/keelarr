@@ -30,11 +30,21 @@ const ui = {
   advOpen: false,
   jsonOpen: false,
   latestResult: null,
+  toast: null,
+  toastTimer: null,
+  pathPicker: null,
   selectedImportContainerId: null,
   pendingServices: new Set()
 };
 
 const appNode = document.querySelector("#app");
+const directoryBrowseFields = new Set([
+  "stackRoot",
+  "configRoot",
+  "mediaRoot",
+  "downloadsRoot",
+  "plexLogsRoot"
+]);
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -81,6 +91,24 @@ function stripTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+function normalizeBrowsePath(value) {
+  const trimmed = String(value || "").trim();
+
+  if (!trimmed || trimmed === "/") {
+    return "/";
+  }
+
+  return stripTrailingSlash(trimmed);
+}
+
+function appDisplayName() {
+  return state.meta?.appName || "Stackarr";
+}
+
+function appVersion() {
+  return state.meta?.version || "0.1.0";
+}
+
 function catalogMap() {
   return new Map(state.catalog.map((service) => [service.id, service]));
 }
@@ -100,9 +128,7 @@ function buildRenderService(id) {
   }
 
   const live = liveServiceMap().get(id) || null;
-  const hostUrl = stripTrailingSlash(state.settings?.hostUrl || "http://localhost");
   const port = live?.port ?? catalog.defaultPort;
-  const appUrl = live?.appUrl ?? `${hostUrl}:${port}`;
 
   return {
     id,
@@ -110,13 +136,23 @@ function buildRenderService(id) {
     description: live?.description ?? catalog.description,
     family: live?.family ?? catalog.family,
     port,
-    appUrl,
+    appUrl: live?.appUrl || null,
     generated: live?.generated === true,
+    managementState: live?.managementState || "catalog",
     runtimeStatus: live?.runtimeStatus || "not-deployed",
+    runtimeSource: live?.runtimeSource || "none",
     reachable: live?.reachable === true,
+    healthStatus: live?.healthStatus || "unknown",
     httpStatus: live?.httpStatus ?? null,
     latencyMs: live?.latencyMs ?? null,
     updateStatus: live?.updateStatus || "unknown",
+    updateCheckedAt: live?.updateCheckedAt || null,
+    observedImage: live?.observedImage || live?.image || catalog.defaultImage,
+    observedContainerId: live?.observedContainerId || null,
+    observedContainerName: live?.observedContainerName || live?.containerName || id,
+    observedNetworkMode: live?.observedNetworkMode || live?.networkMode || "default",
+    publishings: Array.isArray(live?.publishings) ? live.publishings : [],
+    networks: Array.isArray(live?.networks) ? live.networks : [],
     lastError: live?.lastError || null
   };
 }
@@ -137,6 +173,123 @@ function selectedCatalogEntries() {
 
 function isServiceRunning(service) {
   return service.runtimeStatus?.toLowerCase().includes("running");
+}
+
+function imageTagFromRef(image = "") {
+  const trimmed = String(image || "").trim();
+  if (!trimmed) {
+    return "unknown";
+  }
+
+  const withoutDigest = trimmed.split("@")[0];
+  const lastSlash = withoutDigest.lastIndexOf("/");
+  const lastColon = withoutDigest.lastIndexOf(":");
+
+  if (lastColon > lastSlash) {
+    return withoutDigest.slice(lastColon + 1);
+  }
+
+  return "latest";
+}
+
+function managementStateMeta(service) {
+  switch (service.managementState) {
+    case "managed":
+      return { label: "Managed", tone: "info", detail: "Running under Stackarr Compose." };
+    case "draft":
+      return { label: "Draft", tone: "warn", detail: "Managed draft exists, but cutover is still pending." };
+    case "detected":
+      return { label: "Detected", tone: "manual", detail: "Live container found outside Stackarr management." };
+    case "generated":
+      return { label: "Generated", tone: "manual", detail: "Compose files exist, but the service is not running under Stackarr." };
+    default:
+      return { label: "Catalog", tone: "manual", detail: "Selected in catalog only." };
+  }
+}
+
+function runtimeStatusMeta(service) {
+  if (isServiceRunning(service)) {
+    return {
+      label: service.runtimeSource === "compose" ? "Running" : "Live",
+      tone: "info"
+    };
+  }
+
+  if (service.runtimeStatus === "exited" || service.runtimeStatus === "dead") {
+    return { label: service.runtimeStatus, tone: "error" };
+  }
+
+  if (service.runtimeStatus === "created" || service.runtimeStatus === "restarting") {
+    return { label: service.runtimeStatus, tone: "warn" };
+  }
+
+  return { label: "Not Deployed", tone: "manual" };
+}
+
+function healthStatusMeta(service) {
+  switch (service.healthStatus) {
+    case "healthy":
+      return { label: "Healthy", tone: "info" };
+    case "unhealthy":
+      return { label: "Unhealthy", tone: "error" };
+    case "starting":
+      return { label: "Starting", tone: "warn" };
+    case "reachable":
+      return { label: "Reachable", tone: "info" };
+    case "running":
+      return { label: "Running", tone: "info" };
+    case "exited":
+    case "dead":
+      return { label: service.healthStatus, tone: "error" };
+    default:
+      return { label: "Unknown", tone: "manual" };
+  }
+}
+
+function updateStatusMeta(service) {
+  switch (service.updateStatus) {
+    case "ready":
+      return { label: "Update Ready", tone: "warn" };
+    case "current":
+      return { label: "Current", tone: "info" };
+    case "cutover-pending":
+      return { label: "Cutover Pending", tone: "warn" };
+    case "unmanaged":
+      return { label: "Not Managed", tone: "manual" };
+    case "unchecked":
+      return { label: "Unchecked", tone: "manual" };
+    default:
+      return { label: "Unknown", tone: "manual" };
+  }
+}
+
+function resolveUiHostBase() {
+  const configuredHostUrl = stripTrailingSlash(state.settings?.hostUrl || "http://localhost");
+
+  try {
+    const configured = new URL(configuredHostUrl);
+    if (!["localhost", "127.0.0.1", "::1"].includes(configured.hostname)) {
+      return configured;
+    }
+  } catch {
+    // Fall back to the current browser location.
+  }
+
+  const current = new URL(window.location.href);
+  return new URL(`${current.protocol}//${current.hostname}`);
+}
+
+function resolveServiceOpenUrl(service) {
+  const qnetAddress = service.networks.find((network) => network.address)?.address || null;
+  if (service.observedNetworkMode?.startsWith("qnet-static") && qnetAddress) {
+    return `http://${qnetAddress}:${service.port}`;
+  }
+
+  const publishedHostPort = service.publishings.find((entry) => entry.hostPort)?.hostPort || null;
+  const base = resolveUiHostBase();
+  const openPort = publishedHostPort || service.port;
+
+  return `${base.protocol}//${base.hostname}:${openPort}`;
 }
 
 function hasTautulliWarning() {
@@ -269,6 +422,32 @@ function currentGeneratedArtifacts() {
   return null;
 }
 
+function showToast(message, tone = "info") {
+  ui.toast = {
+    message,
+    tone
+  };
+
+  if (ui.toastTimer) {
+    window.clearTimeout(ui.toastTimer);
+  }
+
+  ui.toastTimer = window.setTimeout(() => {
+    ui.toast = null;
+    ui.toastTimer = null;
+    render();
+  }, 3200);
+}
+
+function closeToast() {
+  if (ui.toastTimer) {
+    window.clearTimeout(ui.toastTimer);
+    ui.toastTimer = null;
+  }
+
+  ui.toast = null;
+}
+
 function resultToneClass(level = "info") {
   if (level === "error") {
     return "status-pill-danger";
@@ -311,7 +490,11 @@ function resultSummaryText() {
     return `Detected ${selectedLabel} and validated the current draft settings.`;
   }
 
-  if (Array.isArray(latest.generated)) {
+  if (ui.latestResult.title === "Settings Saved") {
+    return "Saved host settings without generating or deploying any stacks.";
+  }
+
+  if (Array.isArray(latest.generated) && latest.generated.length > 0) {
     return `Generated ${latest.generated.length} stack folder(s).`;
   }
 
@@ -378,6 +561,23 @@ function renderResultPanel() {
           </div>
         `
         : ""}
+    </div>
+  `;
+}
+
+function renderToast() {
+  if (!ui.toast?.message) {
+    return "";
+  }
+
+  return `
+    <div class="toast-shell">
+      <div class="toast-panel ${ui.toast.tone === "error" ? "toast-panel-danger" : "toast-panel-info"}">
+        <span>${escapeHtml(ui.toast.message)}</span>
+        <button type="button" class="toast-dismiss" data-toast-dismiss="true" aria-label="Dismiss notification">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
     </div>
   `;
 }
@@ -544,42 +744,71 @@ function renderStackView() {
           ? '<i class="fa-solid fa-circle-check status-icon-good"></i>'
           : '<i class="fa-solid fa-circle-minus status-icon-idle"></i>';
       const composeLabel = service.generated
-        ? '<span class="status-pill status-pill-success">Generated</span>'
-        : '<span class="status-pill status-pill-idle">Missing</span>';
-      const runtimeLabel = running
-        ? '<span class="status-pill status-pill-success">Running</span>'
-        : '<span class="status-pill status-pill-disabled">Not deployed</span>';
-      const health = running
-        ? `${service.httpStatus ?? 200} &middot; ${service.latencyMs ?? 34} ms`
-        : "n/a";
-      const primaryAction = running ? "upgrade" : "deploy";
-      const primaryIcon = running ? "fa-solid fa-circle-up" : "fa-solid fa-cloud-arrow-up";
-      const primaryColor = running ? "var(--primary-color)" : "var(--success-background)";
+        ? renderStatusPill("Generated", "info")
+        : renderStatusPill("Missing", "manual");
+      const runtimeMeta = runtimeStatusMeta(service);
+      const runtimeLabel = renderStatusPill(runtimeMeta.label, runtimeMeta.tone);
+      const healthMeta = healthStatusMeta(service);
+      const healthLabel = renderStatusPill(healthMeta.label, healthMeta.tone);
+      const updateMeta = updateStatusMeta(service);
+      const updateLabel = renderStatusPill(updateMeta.label, updateMeta.tone);
+      const managementMeta = managementStateMeta(service);
+      const versionTag = imageTagFromRef(service.observedImage);
+      const openUrl = resolveServiceOpenUrl(service);
+      let primaryAction = "deploy";
+      let primaryTitle = "Deploy";
+      let primaryIcon = "fa-solid fa-cloud-arrow-up";
+      let primaryColor = "var(--success-background)";
+      let primaryContainerId = "";
+
+      if (service.managementState === "managed") {
+        primaryAction = running ? "upgrade" : "deploy";
+        primaryTitle = running ? "Upgrade" : "Deploy";
+        primaryIcon = running ? "fa-solid fa-circle-up" : "fa-solid fa-cloud-arrow-up";
+        primaryColor = running ? "var(--primary-color)" : "var(--success-background)";
+      } else if (service.managementState === "draft" || service.managementState === "detected") {
+        primaryAction = "review-adoption";
+        primaryTitle = "Review Adoption";
+        primaryIcon = "fa-solid fa-file-import";
+        primaryColor = "var(--warning-background)";
+        primaryContainerId = service.observedContainerId || "";
+      }
 
       return `
         <tr>
           <td class="status-cell">${statusIcon}</td>
-          <td class="cell-truncate"><a href="#" data-app-link="${escapeHtml(service.id)}">${escapeHtml(service.name)}</a></td>
-          <td class="cell-truncate role-copy">${escapeHtml(service.description)}</td>
+          <td class="cell-truncate">
+            <a href="#" data-app-link="${escapeHtml(service.id)}">${escapeHtml(service.name)}</a>
+            <div class="secondary-copy">${escapeHtml(service.observedContainerName)}</div>
+          </td>
+          <td class="cell-truncate">
+            <div>${escapeHtml(service.observedImage)}</div>
+            <div class="secondary-copy">${escapeHtml(versionTag)} · ${escapeHtml(managementMeta.detail)}</div>
+          </td>
           <td>${escapeHtml(String(service.port))}</td>
           <td>${composeLabel}</td>
           <td>${runtimeLabel}</td>
-          <td class="cell-truncate health-copy">${health}</td>
+          <td class="cell-truncate">
+            ${healthLabel}
+            <div class="secondary-copy">${service.httpStatus ? `${escapeHtml(String(service.httpStatus))}${service.latencyMs ? ` · ${escapeHtml(String(service.latencyMs))} ms` : ""}` : escapeHtml(managementMeta.label)}</div>
+          </td>
+          <td class="cell-truncate">${updateLabel}</td>
           <td class="row-actions">
             <button
               type="button"
               class="row-icon-button"
               data-stack-action="${escapeHtml(primaryAction)}"
               data-service-id="${escapeHtml(service.id)}"
+              data-container-id="${escapeHtml(primaryContainerId)}"
               style="color:${primaryColor};"
-              title="${running ? "Upgrade" : "Deploy"}"
+              title="${escapeHtml(primaryTitle)}"
               ${pending ? "disabled" : ""}
             >
               <i class="${escapeHtml(primaryIcon)}"></i>
             </button>
             <a
               class="row-icon-link"
-              href="${escapeHtml(service.appUrl)}"
+              href="${escapeHtml(openUrl)}"
               target="_blank"
               rel="noreferrer noopener"
               title="Open app"
@@ -593,9 +822,10 @@ function renderStackView() {
     .join("");
 
   const runningCount = services.filter((service) => isServiceRunning(service)).length;
+  const updateReadyCount = services.filter((service) => service.updateStatus === "ready").length;
   const summary = runningCount === 0
-    ? `${escapeHtml(String(services.length))} apps selected, none deployed. Deploy writes each Compose file and starts the container.`
-    : `${escapeHtml(String(runningCount))} of ${escapeHtml(String(services.length))} running &middot; 0 updates pending`;
+    ? `${escapeHtml(String(services.length))} apps selected, none currently running under Stackarr monitoring.`
+    : `${escapeHtml(String(runningCount))} of ${escapeHtml(String(services.length))} live ${updateReadyCount > 0 ? `· ${escapeHtml(String(updateReadyCount))} update${updateReadyCount === 1 ? "" : "s"} ready` : "· no managed updates pending"}`;
 
   return `
     <div data-screen-label="Stack">
@@ -604,12 +834,13 @@ function renderStackView() {
           <tr>
             <th style="width:4%;"></th>
             <th style="width:14%;">App</th>
-            <th style="width:30%;">Role</th>
+            <th style="width:28%;">Image / Source</th>
             <th style="width:8%;">Port</th>
-            <th style="width:13%;">Compose</th>
-            <th style="width:14%;">Runtime</th>
-            <th style="width:11%;">Health</th>
-            <th style="width:6%;"></th>
+            <th style="width:10%;">Compose</th>
+            <th style="width:10%;">Runtime</th>
+            <th style="width:12%;">Health</th>
+            <th style="width:10%;">Update</th>
+            <th style="width:4%;"></th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -842,20 +1073,36 @@ function renderInputRow(field) {
   const labelClass = warning ? "form-label form-label-warning" : field.advanced ? "form-label form-label-advanced" : "form-label";
   const inputClass = warning ? "text-input text-input-warning" : "text-input";
   const helpClass = warning ? "help-text help-text-warning" : "help-text";
+  const browseButton = field.browse === "directory"
+    ? `
+      <button
+        type="button"
+        class="field-action-button"
+        data-browse-field="${escapeHtml(field.key)}"
+        aria-label="Browse directories for ${escapeHtml(field.label)}"
+        title="Browse directories"
+      >
+        <i class="fa-regular fa-folder-open"></i>
+      </button>
+    `
+    : "";
 
   return `
     <div class="form-row">
       <label class="${labelClass}" for="${escapeHtml(field.key)}">${escapeHtml(field.label)}</label>
       <div class="form-input-wrap">
-        <input
-          id="${escapeHtml(field.key)}"
-          class="${inputClass}"
-          type="text"
-          name="${escapeHtml(field.key)}"
-          value="${escapeHtml(value)}"
-          placeholder="${escapeHtml(field.placeholder || "")}"
-          autocomplete="off"
-        >
+        <div class="text-input-shell">
+          <input
+            id="${escapeHtml(field.key)}"
+            class="${inputClass}"
+            type="text"
+            name="${escapeHtml(field.key)}"
+            value="${escapeHtml(value)}"
+            placeholder="${escapeHtml(field.placeholder || "")}"
+            autocomplete="off"
+          >
+          ${browseButton}
+        </div>
         <div class="${helpClass}">${escapeHtml(field.help)}</div>
       </div>
     </div>
@@ -917,14 +1164,18 @@ function renderHostInspection() {
     .filter((key) => inspectionFieldLabels[key]);
   const detectionCards = (inspection.detections || [])
     .map((item) => `
-      <div class="inspection-card ${item.adapterId === selected.adapterId ? "inspection-card-selected" : ""}">
+      <button
+        type="button"
+        class="inspection-card ${item.adapterId === selected.adapterId ? "inspection-card-selected" : ""}"
+        data-detection-adapter="${escapeHtml(item.adapterId)}"
+      >
         <div class="inspection-card-header">
           <strong>${escapeHtml(item.label)}</strong>
           ${renderStatusPill(item.confidence || "low", item.confidence === "high" ? "info" : item.confidence === "medium" ? "warn" : "manual")}
         </div>
         <div class="inspection-card-copy">score ${escapeHtml(String(item.score || 0))} &middot; ${item.matched ? "matched" : "fallback"}</div>
         <div class="inspection-card-copy">${escapeHtml((item.notes || []).join(" "))}</div>
-      </div>
+      </button>
     `)
     .join("");
   const fieldRows = fieldKeys
@@ -973,6 +1224,7 @@ function renderHostInspection() {
           ${renderStatusPill(validation?.ok === false ? `${errors.length} blocker(s)` : "validated", validation?.ok === false ? "error" : "info")}
         </div>
       </div>
+      <div class="muted-paragraph">Click a host profile card to apply its defaults before saving.</div>
       ${detectionCards ? `<div class="inspection-grid">${detectionCards}</div>` : ""}
       ${errors.length
         ? `
@@ -1035,20 +1287,15 @@ function renderSettingsView() {
       help: "Base URL used for the Open links."
     },
     {
+      key: "dockerBin",
+      label: "Docker Binary",
+      help: "Detected and validated on this host."
+    },
+    {
       key: "stackRoot",
       label: "Compose Stack Root",
-      help: "Suggested from host detection. Does not exist yet and will be created."
-    },
-    {
-      key: "mediaRoot",
-      label: "Media Root",
-      help: "Confirm this before deploying - every app mounts it."
-    },
-    {
-      key: "plexLogsRoot",
-      label: "Plex Logs Path",
-      help: "Required while Tautulli is enabled.",
-      placeholder: "/var/lib/plex/logs"
+      help: "Suggested from host detection. Does not exist yet and will be created.",
+      browse: "directory"
     },
     {
       key: "tz",
@@ -1057,37 +1304,48 @@ function renderSettingsView() {
     }
   ];
 
-  const advancedFields = [
-    {
-      key: "dockerBin",
-      label: "Docker Binary",
-      help: "Detected and validated on this host.",
-      advanced: true
-    },
+  const pathFields = [
     {
       key: "configRoot",
       label: "Config Root",
       help: "One subdirectory per app.",
-      advanced: true
+      browse: "directory"
+    },
+    {
+      key: "mediaRoot",
+      label: "Media Root",
+      help: "Confirm this before deploying - every app mounts it.",
+      browse: "directory"
     },
     {
       key: "downloadsRoot",
       label: "Downloads Root",
       help: "Derived from Media Root.",
-      advanced: true
+      browse: "directory"
     },
+    {
+      key: "plexLogsRoot",
+      label: "Plex Logs Path",
+      help: "Required while Tautulli is enabled.",
+      placeholder: "/var/lib/plex/logs",
+      browse: "directory"
+    }
+  ];
+
+  const identityFields = [
     {
       key: "puid",
       label: "PUID",
-      help: "",
-      advanced: true
+      help: "User id passed to LinuxServer and similar images."
     },
     {
       key: "pgid",
       label: "PGID",
-      help: "",
-      advanced: true
-    },
+      help: "Group id passed to LinuxServer and similar images."
+    }
+  ];
+
+  const advancedFields = [
     {
       key: "ombiVersion",
       label: "Ombi Version",
@@ -1101,6 +1359,9 @@ function renderSettingsView() {
     .filter(Boolean)
     .map((service) => renderManageRow(service))
     .join("");
+  const actionHint = visibleWarningCount() > 0
+    ? "Review warnings before deploying."
+    : "Save settings first, then generate or deploy when you are ready.";
 
   return `
     <div data-screen-label="Settings" class="form-container">
@@ -1110,10 +1371,18 @@ function renderSettingsView() {
         <legend class="legend">Host</legend>
         ${hostFields.map((field) => renderInputRow(field)).join("")}
       </fieldset>
-      ${ui.advOpen
+      <fieldset class="fieldset">
+        <legend class="legend legend-secondary">Paths</legend>
+        ${pathFields.map((field) => renderInputRow(field)).join("")}
+      </fieldset>
+      <fieldset class="fieldset">
+        <legend class="legend legend-secondary">Runtime Identity</legend>
+        ${identityFields.map((field) => renderInputRow(field)).join("")}
+      </fieldset>
+      ${ui.advOpen && advancedFields.length
         ? `
           <fieldset class="fieldset">
-            <legend class="legend legend-secondary">Paths and identity</legend>
+            <legend class="legend legend-secondary">Advanced</legend>
             ${advancedFields.map((field) => renderInputRow(field)).join("")}
           </fieldset>
         `
@@ -1124,9 +1393,52 @@ function renderSettingsView() {
         ${manageRows}
       </fieldset>
       <div class="action-row">
-        <button type="button" class="button-success" data-settings-action="save-deploy">Save And Deploy</button>
+        <button type="button" class="button-default" data-settings-action="save">Save Settings</button>
         <button type="button" class="button-default" data-settings-action="save-generate">Save And Generate</button>
-        <span class="action-hint">${escapeHtml(visibleWarningCount() > 0 ? "1 warning to clear first" : "Ready to deploy")}</span>
+        <button type="button" class="button-success" data-settings-action="save-deploy">Save And Deploy</button>
+        <span class="action-hint">${escapeHtml(actionHint)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderPathPicker() {
+  if (!ui.pathPicker?.open) {
+    return "";
+  }
+
+  const picker = ui.pathPicker;
+  const directories = (picker.directories || [])
+    .map((directory) => `
+      <button type="button" class="path-picker-row" data-path-open="${escapeHtml(directory.path)}">
+        <span><i class="fa-regular fa-folder"></i> ${escapeHtml(directory.name)}</span>
+        <i class="fa-solid fa-angle-right"></i>
+      </button>
+    `)
+    .join("");
+
+  return `
+    <div class="modal-backdrop" data-path-close="true">
+      <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="Browse host directories" onclick="event.stopPropagation()">
+        <div class="path-picker-header">
+          <div>
+            <div class="path-picker-title">${escapeHtml(`Browse ${picker.label || "Directory"}`)}</div>
+            <div class="path-picker-copy">${escapeHtml(picker.path || "/")}</div>
+          </div>
+          <button type="button" class="toast-dismiss" data-path-close="true" aria-label="Close directory browser">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        ${picker.error
+          ? `<div class="result-list result-list-danger"><strong>Browse failed</strong><ul><li>${escapeHtml(picker.error)}</li></ul></div>`
+          : ""}
+        <div class="path-picker-actions">
+          <button type="button" class="button-default" data-path-use="true">Use This Folder</button>
+          ${picker.parentPath ? `<button type="button" class="button-default" data-path-open="${escapeHtml(picker.parentPath)}">Up One Level</button>` : ""}
+        </div>
+        <div class="path-picker-list">
+          ${directories || '<div class="muted-paragraph">No subdirectories are visible from this location.</div>'}
+        </div>
       </div>
     </div>
   `;
@@ -1139,7 +1451,7 @@ function renderFooter() {
 
   return `
     <span>${escapeHtml(String(services.length))} apps &middot; ${escapeHtml(String(running))} running &middot; ${escapeHtml(warnings)} &middot; PUID ${escapeHtml(state.settings?.puid || "1000")} / PGID ${escapeHtml(state.settings?.pgid || "1000")}</span>
-    <span>Stackarr 0.4.2 &middot; compose-native ARR control plane</span>
+    <span>${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())} &middot; compose-native ARR control plane</span>
   `;
 }
 
@@ -1165,44 +1477,64 @@ function render() {
     return;
   }
 
-  appNode.innerHTML = `
-    <div class="app-shell">
-      <header class="app-header">
-        <div class="brand-slot">
-          <div class="brand-mark">SA</div>
-          <span class="brand-wordmark">Stackarr</span>
-        </div>
-        <div class="header-search">
-          <label class="search-shell" aria-label="Search apps">
-            <i class="fa-solid fa-magnifying-glass"></i>
-            <input class="search-input" type="text" placeholder="Search apps" readonly tabindex="-1">
-          </label>
-        </div>
-        <div class="header-icons">
-          <button type="button" class="header-icon header-icon-warning" aria-label="Warnings"><i class="fa-solid fa-triangle-exclamation"></i></button>
-          <button type="button" class="header-icon header-icon-donate" aria-label="Donate"><i class="fa-solid fa-heart"></i></button>
-          <button type="button" class="header-icon header-icon-account" aria-label="Account"><i class="fa-solid fa-user"></i></button>
-        </div>
-      </header>
-      <div class="app-body">
-        <aside class="sidebar">
-          <nav class="sidebar-nav">${renderSidebarNav()}</nav>
-          ${renderHostSummary()}
-        </aside>
-        <main class="main-shell">
-          ${renderToolbar()}
-      <div class="scroll-shell">
-        <div class="page-content">
-          ${renderWarningBanner()}
-          ${renderResultPanel()}
-          ${renderCurrentView()}
-        </div>
-        <div class="page-footer">${renderFooter()}</div>
+  try {
+    document.title = `${appDisplayName()} v${appVersion()}`;
+
+    appNode.innerHTML = `
+      <div class="app-shell">
+        <header class="app-header">
+          <div class="brand-slot">
+            <div class="brand-mark">SA</div>
+            <span class="brand-wordmark">${escapeHtml(appDisplayName())}</span>
           </div>
-        </main>
+          <div class="header-search">
+            <div class="search-shell" aria-hidden="true">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <span class="search-input search-input-static">Search apps</span>
+            </div>
+          </div>
+          <div class="header-icons">
+            <span class="header-icon header-icon-warning" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
+            <span class="header-icon header-icon-donate" aria-hidden="true"><i class="fa-solid fa-heart"></i></span>
+            <span class="header-icon header-icon-account" aria-hidden="true"><i class="fa-solid fa-user"></i></span>
+          </div>
+        </header>
+        <div class="app-body">
+          <aside class="sidebar">
+            <nav class="sidebar-nav">${renderSidebarNav()}</nav>
+            ${renderHostSummary()}
+          </aside>
+          <main class="main-shell">
+            ${renderToolbar()}
+        <div class="scroll-shell">
+          <div class="page-content">
+            ${renderWarningBanner()}
+            ${renderResultPanel()}
+            ${renderCurrentView()}
+          </div>
+          <div class="page-footer">${renderFooter()}</div>
+            </div>
+          </main>
+        </div>
+        ${renderToast()}
+        ${renderPathPicker()}
       </div>
-    </div>
-  `;
+    `;
+    window.__stackarrRenderError = null;
+  } catch (error) {
+    window.__stackarrRenderError = error?.message || "Render failed.";
+    console.error(error);
+    appNode.innerHTML = `
+      <div class="app-shell">
+        <div class="page-content">
+          <div class="result-panel result-panel-danger">
+            <div class="result-panel-title">UI render failed</div>
+            <div class="result-panel-copy">${escapeHtml(error?.message || "Unexpected render error.")}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
 }
 
 function setLatestResult(title, data) {
@@ -1232,12 +1564,18 @@ function updateSettingValue(key, value) {
     ...state.settings,
     [key]: value
   };
-  render();
 }
 
-function settingsPayload(deploy = false) {
+function settingsPayload(options = {}) {
+  const {
+    deploy = false,
+    preferredAdapterId = null
+  } = options;
+
   return {
     projectName: state.settings.projectName,
+    adapterType: state.settings.adapterType,
+    hostLabel: state.settings.hostLabel,
     hostUrl: state.settings.hostUrl,
     dockerBin: state.settings.dockerBin,
     stackRoot: state.settings.stackRoot,
@@ -1250,6 +1588,7 @@ function settingsPayload(deploy = false) {
     pgid: state.settings.pgid,
     ombiVersion: state.settings.ombiVersion,
     selectedServiceIds: selectedServiceIds(),
+    ...(preferredAdapterId ? { preferredAdapterId } : {}),
     deploy
   };
 }
@@ -1273,17 +1612,29 @@ async function loadState() {
 async function submitSetup(deploy = false) {
   const data = await request("/api/setup", {
     method: "POST",
-    body: JSON.stringify(settingsPayload(deploy))
+    body: JSON.stringify(settingsPayload({ deploy }))
   });
   setLatestResult(deploy ? "Save And Deploy" : "Save And Generate", data);
   ui.view = "stack";
+  showToast(deploy ? "Settings saved and selected stacks deployed." : "Settings saved and stack files generated.");
   await loadState();
 }
 
-async function detectHost() {
+async function saveSettingsOnly() {
+  const data = await request("/api/settings", {
+    method: "POST",
+    body: JSON.stringify(settingsPayload())
+  });
+  setLatestResult("Settings Saved", data);
+  ui.view = "settings";
+  showToast("Settings saved.");
+  await loadState();
+}
+
+async function detectHost(preferredAdapterId = null) {
   const data = await request("/api/host/detect", {
     method: "POST",
-    body: JSON.stringify(settingsPayload(false))
+    body: JSON.stringify(settingsPayload({ preferredAdapterId }))
   });
   state.hostDetection = data;
   state.settings = data.effectiveSettings || {
@@ -1291,6 +1642,52 @@ async function detectHost() {
     ...(data.selected?.suggestedSettings || {})
   };
   setLatestResult("Host Detection", data);
+  render();
+}
+
+async function browseHostDirectories(fieldKey, inputPath = null) {
+  const fieldLabel = inspectionFieldLabels[fieldKey] || fieldKey;
+  const pathToBrowse = normalizeBrowsePath(inputPath ?? state.settings?.[fieldKey] ?? "/");
+
+  try {
+    const data = await request(`/api/host/browse?path=${encodeURIComponent(pathToBrowse)}`);
+    ui.pathPicker = {
+      open: true,
+      fieldKey,
+      label: fieldLabel,
+      path: data.path,
+      parentPath: data.parentPath,
+      directories: data.directories || [],
+      error: null
+    };
+  } catch (error) {
+    ui.pathPicker = {
+      open: true,
+      fieldKey,
+      label: fieldLabel,
+      path: pathToBrowse,
+      parentPath: null,
+      directories: [],
+      error: error.message
+    };
+  }
+
+  render();
+}
+
+function closePathPicker() {
+  ui.pathPicker = null;
+  render();
+}
+
+function applyPathPickerSelection() {
+  if (!ui.pathPicker?.fieldKey || !ui.pathPicker?.path) {
+    closePathPicker();
+    return;
+  }
+
+  updateSettingValue(ui.pathPicker.fieldKey, ui.pathPicker.path);
+  ui.pathPicker = null;
   render();
 }
 
@@ -1322,6 +1719,17 @@ async function adoptImportDraft(containerId) {
   await loadState();
   if (state.importScan) {
     await scanImports(true);
+  }
+}
+
+async function reviewServiceAdoption(containerId) {
+  ui.view = "adoption";
+  render();
+
+  await scanImports(true);
+
+  if (containerId) {
+    await previewImport(containerId);
   }
 }
 
@@ -1417,6 +1825,7 @@ function clearActivityView() {
 }
 
 function showError(error) {
+  closeToast();
   setLatestResult("Error", {
     ok: false,
     error: error.message,
@@ -1497,7 +1906,7 @@ appNode.addEventListener("click", (event) => {
       }
 
       if (action === "save") {
-        await submitSetup(false);
+        await saveSettingsOnly();
         return;
       }
 
@@ -1514,10 +1923,52 @@ appNode.addEventListener("click", (event) => {
     return;
   }
 
+  const detectionTarget = event.target.closest("[data-detection-adapter]");
+  if (detectionTarget) {
+    detectHost(detectionTarget.dataset.detectionAdapter).catch(showError);
+    return;
+  }
+
+  const browseTarget = event.target.closest("[data-browse-field]");
+  if (browseTarget) {
+    browseHostDirectories(browseTarget.dataset.browseField).catch(showError);
+    return;
+  }
+
+  if (event.target.closest("[data-toast-dismiss]")) {
+    closeToast();
+    render();
+    return;
+  }
+
+  if (event.target.closest("[data-path-close]")) {
+    closePathPicker();
+    return;
+  }
+
+  const pathOpenTarget = event.target.closest("[data-path-open]");
+  if (pathOpenTarget) {
+    browseHostDirectories(ui.pathPicker?.fieldKey, pathOpenTarget.dataset.pathOpen).catch(showError);
+    return;
+  }
+
+  if (event.target.closest("[data-path-use]")) {
+    applyPathPickerSelection();
+    return;
+  }
+
   const stackTarget = event.target.closest("[data-stack-action]");
   if (stackTarget) {
     const serviceId = stackTarget.dataset.serviceId;
-    const action = stackTarget.dataset.stackAction === "upgrade" ? "upgrade" : "install";
+    const containerId = stackTarget.dataset.containerId || null;
+    const stackAction = stackTarget.dataset.stackAction;
+
+    if (stackAction === "review-adoption") {
+      reviewServiceAdoption(containerId).catch(showError);
+      return;
+    }
+
+    const action = stackAction === "upgrade" ? "upgrade" : "install";
     serviceAction(serviceId, action).catch(showError);
     return;
   }
@@ -1550,6 +2001,11 @@ appNode.addEventListener("click", (event) => {
   const settingsTarget = event.target.closest("[data-settings-action]");
   if (settingsTarget) {
     const action = settingsTarget.dataset.settingsAction;
+    if (action === "save") {
+      saveSettingsOnly().catch(showError);
+      return;
+    }
+
     if (action === "save-deploy") {
       submitSetup(true).catch(showError);
       return;

@@ -25,6 +25,19 @@ The core workflow is:
 4. Deploy apps from the dashboard.
 5. Check health, open the app, and run per-service or bulk upgrades.
 
+## Current Validated State
+
+As of August 5, 2026, the live QNAP test has validated these pieces end to end:
+
+- Stackarr runs as its own controller container on QNAP through `deploy/compose.example.yml`
+- host detection and validation succeed against the QNAP share layout using `docker` inside the controller container
+- adoption scan finds the live Arr/Ombi/Tautulli/SABnzbd stack without exposing secret values in the UI
+- managed draft generation preserves the live container shape for imported services
+- `trailarr` has been cut over successfully to Compose management at `/share/Container/docker/trailarr/compose.yml`
+- the dashboard now reports Trailarr as `Generated`, `Running`, `Healthy`, and `Managed`
+
+The remaining live apps are still detected correctly, but they have not been migrated under Stackarr management yet.
+
 The dashboard can also run a read-only adoption scan:
 
 1. Inspect current Docker containers.
@@ -45,6 +58,7 @@ The dashboard can also run a read-only adoption scan:
 - Managed drafts preserve the live container image, ports, restart policy, mounts, entrypoint, command, and custom Docker networks
 - Managed drafts also write `import-summary.json` and `IMPORT-REVIEW.md` beside the Compose files for cutover review
 - Imported drafts are persisted in local Stackarr state so later save, generate, and install actions keep using the reviewed draft files instead of snapping back to catalog defaults
+- Managed runtime detection now handles the single-object `docker compose ps --format json` output seen on QNAP one-service projects
 - Per-service deploy
 - Per-service update check
 - Per-service upgrade
@@ -58,7 +72,7 @@ The dashboard can also run a read-only adoption scan:
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control
-- Full import adoption and cutover flow
+- Fully automated one-click import cutover and rollback flow inside the UI
 - Full rollback to previous images
 - App-to-app API provisioning
 - Reverse proxy and certificate automation
@@ -117,7 +131,7 @@ Important:
 
 ### First Test On QNAP
 
-For the current QNAP-oriented setup we audited on August 4, 2026, the example `deploy/.env.example` values already match the expected share layout:
+For the QNAP setup validated on August 5, 2026, the example `deploy/.env.example` values already match the expected share layout:
 
 ```text
 HOST_STACK_ROOT=/share/Container/docker
@@ -132,13 +146,14 @@ After the container starts:
 1. open `http://<nas-ip>:4687`
 2. go to `Settings`
 3. run `Detect Host`
-4. confirm the detected paths
+4. confirm the detected paths and keep `Docker Binary` as `docker`
 5. save without deploy first
-6. review generated stack folders before installing any managed service
+6. scan existing containers from `Adoption`
+7. review generated stack folders before recreating any managed service
 
 If host validation fails, Stackarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
 
-For a fuller first-pass workflow on an existing QNAP stack, see [docs/qnap-first-test.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/qnap-first-test.md).
+For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](/Users/joshgoble/Documents/Codex/2026-08-03/i-have-a-qnap-nas-running/stackarr/docs/qnap-first-test.md).
 
 ## Logging
 
@@ -186,13 +201,19 @@ The detailed interaction and platform specs live in:
 
 ## QNAP Notes
 
-On QNAP Container Station, the Docker binary is often not on the non-interactive shell path. In Stackarr's wizard, set:
+When Stackarr is running through `deploy/compose.example.yml`, the controller container already includes the Docker CLI. In the Stackarr wizard, the correct value is usually:
 
 ```text
-Docker Binary: /share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker
+Docker Binary: docker
 ```
 
-Recommended defaults for the same style of setup we migrated on August 4, 2026:
+For manual shell work directly on the QNAP, `docker` may still be missing from the NAS shell `PATH`. In that shell, use:
+
+```text
+/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker
+```
+
+Recommended defaults for the same style of setup we validated on August 5, 2026:
 
 ```text
 Compose Stack Root: /share/Container/docker
@@ -231,7 +252,7 @@ Stackarr is trying to be opinionated for one user type:
 
 ## Suggested Next Milestones
 
-1. Service-to-service onboarding helpers for Prowlarr, SABnzbd, and the Arr apps
-2. Download client templates beyond SABnzbd
-3. Reverse proxy integration helpers
+1. One-click per-service cutover with inspect backup, confirmation, validation, and rollback hooks
+2. Better update/version reporting for imported and externally managed services
+3. Service-to-service onboarding helpers for Prowlarr, SABnzbd, and the Arr apps
 4. Safer image rollback with explicit release snapshots

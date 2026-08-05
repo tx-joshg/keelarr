@@ -1,28 +1,26 @@
-# Stackarr First QNAP Test
+# Stackarr QNAP Validation And Migration Runbook
 
-This guide is for the first live Stackarr test against an existing QNAP Container Station setup.
+This document is the current source of truth for the live QNAP test environment.
 
-The priority is safety:
+It records what has already been proven, what is still manual, and the safest order for the remaining migrations.
 
-- do not stop existing containers yet
+## Safety Rules
+
+- migrate one container at a time
 - do not delete config directories
-- do not delete Docker volumes
-- use the running containers as the source of truth
+- do not delete named or unnamed volumes unless their purpose is confirmed
+- use the running container as the source of truth
+- create an inspect backup before every cutover
+- leave rollback artifacts in place until the replacement container is validated
 
-## Goal Of The First Test
+## Current Validated State
 
-Prove that Stackarr can:
+As of August 5, 2026:
 
-1. run as its own controller container
-2. detect the QNAP host profile correctly
-3. scan existing supported containers without writing changes
-4. generate managed drafts that preserve the current container settings
-
-The first test is successful even if no live container is recreated yet.
-
-## Before You Start
-
-Confirm these host paths match your QNAP:
+- Stackarr is running on the QNAP as its own controller container
+- host detection succeeds with the `qnap` adapter
+- the validated controller-side Docker binary is `docker`
+- the validated host paths are:
 
 ```text
 /share/Container/docker
@@ -32,114 +30,169 @@ Confirm these host paths match your QNAP:
 /share/Container/plex/Logs
 ```
 
-Expected supported apps in the current MVP:
+- adoption scan detects the live supported services already on the NAS
+- managed draft generation is working for imported containers
+- `trailarr` has been cut over successfully to Compose management
 
-- Prowlarr
-- Radarr
-- Sonarr
-- Lidarr
-- Readarr
-- Bazarr
-- Trailarr
-- Ombi
-- Tautulli
-- SABnzbd
-
-## Deploy Stackarr
-
-From the checked-out repo:
-
-```bash
-cd deploy
-cp .env.example .env
-docker compose -f compose.example.yml up -d --build
-```
-
-Then open:
+Trailarr now runs from:
 
 ```text
-http://<qnap-ip>:4687
+/share/Container/docker/trailarr/compose.yml
 ```
 
-## First Validation Pass
+Trailarr validation after cutover:
 
-In `Settings`:
+- container name: `trailarr`
+- image: `nandyalu/trailarr:latest`
+- runtime: Compose-managed
+- health: healthy
+- port: `0.0.0.0:7889->7889/tcp`
+- media mount: `/share/Media -> /Media`
+- config mount: `/share/Container/trailarr/config -> /config`
 
-1. Run `Detect Host`
-2. Confirm the Docker binary path
-3. Confirm stack root, config root, media root, downloads root, and Plex logs path
-4. Save without deploy first
+The dashboard now shows Trailarr as:
 
-If validation fails, stop there and fix the reported Docker or path issue before continuing.
+- `Generated`
+- `Running`
+- `Healthy`
+- `Managed`
 
-## Read-Only Import Pass
+Rollback artifacts were preserved for that cutover:
 
-In `Adoption`:
+- inspect and compose backup under `/share/Container/docker/trailarr/cutover-backup-*`
+- older exited container object left in place intentionally for reference
 
-1. Run `Scan Docker`
-2. Confirm Stackarr recognizes the expected containers
-3. Open the preview for one app at a time
+## What This Means Right Now
 
-The preview should preserve:
+Stackarr has proven the following on a live QNAP:
 
-- current image tag
-- current restart policy
-- current bind mounts and named volumes
-- current port mappings
-- host networking or external Docker network settings
-- current entrypoint and command
+1. detect and validate the host profile
+2. scan existing supported containers safely
+3. generate managed drafts that preserve the live container shape
+4. detect Compose-managed runtime correctly after cutover
+5. reflect that managed state back into the dashboard
 
-The generated `.env` file is local-only and may contain secret values copied from the existing container environment. Do not commit that file.
+What Stackarr does not do yet:
 
-After a managed draft is created, Stackarr now treats that draft as the service source of truth. Later `Save`, `Save And Generate`, and per-service install actions keep using the reviewed draft files instead of regenerating a default catalog template on top of them.
+- execute the full cutover from one UI click
+- provide in-app rollback automation
+- finish update/version reporting for every imported service
 
-## Recommended First Adoption Candidate
+## Current Service Inventory
 
-Start with `trailarr`.
+Services already present on the live NAS that matter for the Stackarr MVP:
 
-Reasons:
+- `trailarr`: migrated and validated
+- `ombi`: live, not yet managed
+- `tautulli`: live, not yet managed
+- `radarr`: live, not yet managed
+- `sonarr`: live, not yet managed
+- `sabnzbd`: live, not yet managed
 
-- simple bind mounts
-- explicit port mapping
-- already validated media path
-- lower blast radius than Plex-adjacent or custom-network services
+Services currently selected in the catalog but not running in the live stack:
 
-## What To Review Before Any Cutover
+- `prowlarr`
+- `bazarr`
 
-For the generated draft in `/share/Container/docker/<app>/`:
+Services intentionally outside the current Stackarr migration scope:
 
-- `compose.yml`
-- `.env`
-- `.env.example`
-- `import-summary.json`
-- `IMPORT-REVIEW.md`
+- `plex`
+- `cloudflare-ddns*`
 
-Check that:
+## Recommended Next Migration Order
 
-- `/config` still points to the current persistent source
-- `/Media` still points to the current media source
-- image matches the running container
-- ports match the running container
-- restart policy matches the running container
-- custom network settings are preserved if the current container uses them
-- `import-summary.json` reflects the live container you scanned
-- `IMPORT-REVIEW.md` gives you a cutover checklist before touching the live container
+Use this order for the remaining live cutovers:
 
-## Not Part Of The First Test
+1. `ombi`
+2. `tautulli`
+3. `radarr`
+4. `sonarr`
+5. `sabnzbd`
 
-Do not do these in the first pass unless you have manually reviewed the draft:
+Reasoning:
 
-- stop the live container
-- recreate the live container under Stackarr control
-- upgrade images
-- run bulk actions
+- `ombi` is the simplest remaining bind-mounted app with low blast radius
+- `tautulli` is still simple, but it adds the read-only Plex logs mount
+- `radarr` and `sonarr` use host networking and named-volume-backed `/config`, so they need more careful validation
+- `sabnzbd` is last because it uses a custom QNAP network with a fixed LAN IP, which is the highest-risk migration in the current group
 
-## Success Criteria
+## Standard Cutover Workflow
 
-The first live test is good enough when all of the following are true:
+Apply this process to each remaining service.
 
-- Stackarr stays up on the QNAP
-- host detection succeeds
-- read-only scan finds the existing supported apps
-- at least one adoption preview looks accurate
-- at least one managed draft is generated without touching the live container
+### 1. Confirm The Draft
+
+Review:
+
+- `/share/Container/docker/<app>/compose.yml`
+- `/share/Container/docker/<app>/.env`
+- `/share/Container/docker/<app>/.env.example`
+- `/share/Container/docker/<app>/import-summary.json`
+- `/share/Container/docker/<app>/IMPORT-REVIEW.md`
+
+Confirm:
+
+- persistent config source is correct
+- image matches the live container
+- ports match the live container
+- restart policy matches the live container
+- mounts match the live container
+- network mode and custom networks match the live container
+- entrypoint and command match the live container when present
+
+### 2. Create Cutover Backup
+
+Before stopping anything, create:
+
+- `docker inspect` backup
+- resolved Compose backup
+- copy of the persistent config directory when practical
+
+Do not delete the original config directory after the backup.
+
+### 3. Recreate Under Compose
+
+Preferred manual flow today:
+
+1. stop the live container
+2. rename it to a rollback name if possible
+3. run `docker compose up -d` from the generated stack folder
+4. confirm the replacement container is healthy before touching any old artifacts
+
+### 4. Validate Immediately
+
+Check all of the following before moving on:
+
+- container is running
+- healthcheck is healthy when one exists
+- expected port or host-network URL responds
+- `/config` contains the expected application database or config files
+- media and downloads mounts are visible inside the container
+- the dashboard changes from `Detected` or `Draft` to `Managed`
+
+### 5. Leave Rollback State In Place
+
+Do not clean up old container objects or backup folders until the replacement app has been used successfully.
+
+## Product Gaps Found During The Live QNAP Test
+
+These are the concrete issues discovered during the first live migration pass:
+
+- required host fields were previously hidden under advanced UI
+- save flow needed clearer confirmation
+- keyboard tab order needed correction
+- path browsing is not implemented yet
+- one-service Compose projects on QNAP returned single-object JSON from `docker compose ps --format json`
+- update/version status is still incomplete for imported services
+- one-click UI cutover is not implemented yet
+
+The Compose runtime parsing issue has already been fixed. The other items remain product work.
+
+## Exit Criteria For The Next Stage
+
+The next stage is successful when:
+
+- Ombi and Tautulli are both managed successfully under Compose
+- at least one host-network Arr service is migrated safely
+- the dashboard shows accurate managed state across those migrated apps
+- the manual runbook is stable enough to turn into a one-click in-app cutover flow

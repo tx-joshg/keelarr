@@ -69,7 +69,7 @@ function filterImportedEnvironment(environment = {}) {
 
 function buildEnvironmentSpec(environment = {}, fallbackKeys = []) {
   const keys = [...new Set([...Object.keys(environment), ...fallbackKeys])]
-    .filter(Boolean)
+    .filter((key) => key && !SYSTEM_ENV_KEYS.has(key))
     .sort();
   const composeEnvironment = {};
 

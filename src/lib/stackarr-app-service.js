@@ -43,6 +43,25 @@ export class StackarrAppService {
     return this.hostProfileService.detectHost(input, context);
   }
 
+  async saveSettings(input = {}, context = {}) {
+    const {
+      settings,
+      detection,
+      effectiveSettings,
+      validation
+    } = await this.hostProfileService.saveProfile(input, context);
+    const state = await this.dashboardService.buildState();
+
+    return {
+      ...state,
+      generated: [],
+      hostDetection: detection,
+      validation,
+      effectiveSettings,
+      settings
+    };
+  }
+
   async setup(input = {}, context = {}) {
     const {
       settings,
@@ -65,6 +84,10 @@ export class StackarrAppService {
       validation,
       effectiveSettings
     };
+  }
+
+  async browseDirectories(inputPath = "/", context = {}) {
+    return this.hostProfileService.browseDirectories(inputPath, context);
   }
 
   async scanImportInventory(context = {}) {

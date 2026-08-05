@@ -8,7 +8,7 @@ Dates are intentionally omitted at this stage. The goal is sequencing, not calen
 
 Status:
 
-- partially complete
+- complete
 
 Outcomes:
 
@@ -29,6 +29,10 @@ Artifacts:
 Goal:
 
 Make the current controller stable enough for local demos and iterative development.
+
+Status:
+
+- in progress
 
 Required work:
 
@@ -51,6 +55,11 @@ Goal:
 
 Introduce adapter-driven host detection without changing the core product model.
 
+Status:
+
+- largely complete for `generic-docker` and `qnap`
+- synology-specific work has not started yet
+
 Required work:
 
 - create a host adapter interface
@@ -70,6 +79,10 @@ Exit criteria:
 Goal:
 
 Turn Compose generation into a stable artifact pipeline.
+
+Status:
+
+- in progress
 
 Required work:
 
@@ -91,6 +104,12 @@ Goal:
 
 Support the real-world migration path for users with messy existing stacks.
 
+Status:
+
+- in progress
+- read-only scan, preview, managed draft generation, and first live cutover are proven
+- full UI-driven cutover and rollback are still missing
+
 Required work:
 
 - container scan
@@ -99,11 +118,15 @@ Required work:
 - issue detection
 - adoption preview generation
 - per-service adoption workflow
+- guided cutover confirmation flow
+- inspect backup and rollback hooks
+- runtime status normalization across QNAP and other Docker variants
 
 Exit criteria:
 
 - a Docker-based existing stack can be previewed
 - one supported service can be adopted safely
+- the controller can drive the cutover with explicit confirmation and post-cutover validation
 
 ## Phase 5: Guided App Linking
 
@@ -207,11 +230,11 @@ The following should stay out of scope unless the product proves demand:
 
 ## Practical Next Build Step
 
-The best immediate implementation step after the current documentation set is:
+The best immediate implementation step after the current live QNAP validation is:
 
-1. refactor `server.js` into application services
-2. define the host adapter interface
-3. add a generic Docker adapter and QNAP adapter
+1. finish the per-service cutover action inside the UI
+2. include inspect backup, diff review, confirmation, and rollback metadata in that flow
+3. validate the workflow next on Ombi and Tautulli
+4. improve update/version reporting for imported and externally managed services
 
-That path aligns directly with the current codebase and the product direction.
-
+That path turns the current manual runbook into the one-click migration experience the product is aiming for.

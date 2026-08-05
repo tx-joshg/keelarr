@@ -18,6 +18,17 @@ export function pickBestHostDetection(detections) {
   return [...detections].sort((left, right) => right.score - left.score)[0];
 }
 
+export function pickHostDetection(detections, preferredAdapterId = null) {
+  if (preferredAdapterId) {
+    const preferred = detections.find((item) => item.adapterId === preferredAdapterId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+
+  return pickBestHostDetection(detections);
+}
+
 export function applyDetectionSuggestions(settings, detection) {
   if (!detection?.suggestedSettings) {
     return settings;
@@ -31,7 +42,7 @@ export function applyDetectionSuggestions(settings, detection) {
 
 export async function detectHostEnvironment(settings = {}, options = {}) {
   const detections = await Promise.all(HOST_ADAPTERS.map((adapter) => adapter.detect(settings, options)));
-  const selected = pickBestHostDetection(detections);
+  const selected = pickHostDetection(detections, options.preferredAdapterId || null);
 
   return {
     selected,

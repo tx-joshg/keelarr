@@ -55,6 +55,24 @@ function parseEnvironment(env = []) {
   return entries;
 }
 
+export function diffEnvironment(containerEnvironment = {}, imageEnvironment = {}) {
+  const entries = {};
+
+  for (const [key, value] of Object.entries(containerEnvironment)) {
+    if (!key) {
+      continue;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(imageEnvironment, key) && imageEnvironment[key] === value) {
+      continue;
+    }
+
+    entries[key] = value;
+  }
+
+  return entries;
+}
+
 function parsePorts(inspect) {
   const networkMode = inspect.HostConfig?.NetworkMode || "default";
   const published = inspect.NetworkSettings?.Ports || {};
@@ -162,7 +180,7 @@ export async function buildAdoptionIssues(serviceMatch, inspect, mounts) {
       continue;
     }
 
-    if (!(await pathExists(mount.source))) {
+    if (mount.type === "bind" && !(await pathExists(mount.source))) {
       issues.push({
         level,
         message: `Mount source does not exist on disk: ${mount.source}`
@@ -191,7 +209,10 @@ async function buildInventoryItem(inspect, options = {}) {
   const serviceMatch = matchSupportedService(inspect);
   const mounts = parseMounts(inspect);
   const issues = await buildAdoptionIssues(serviceMatch, inspect, mounts);
-  const environment = parseEnvironment(inspect.Config?.Env || []);
+  const environment = diffEnvironment(
+    parseEnvironment(inspect.Config?.Env || []),
+    options.imageEnvironmentByRef?.get(inspect.Config?.Image || "") || {}
+  );
 
   const item = {
     containerId: inspect.Id?.slice(0, 12) || null,
@@ -202,6 +223,7 @@ async function buildInventoryItem(inspect, options = {}) {
     serviceName: serviceMatch?.serviceName || null,
     matchedBy: serviceMatch?.matchedBy || null,
     status: inspect.State?.Status || "unknown",
+    healthStatus: inspect.State?.Health?.Status || null,
     restartPolicy: inspect.HostConfig?.RestartPolicy?.Name || "no",
     networkMode: inspect.HostConfig?.NetworkMode || "default",
     networks: parseNetworks(inspect),
@@ -222,7 +244,7 @@ async function buildInventoryItem(inspect, options = {}) {
 }
 
 async function loadContainerInventory(dockerBin, options = {}) {
-  const idsResult = await runCommand(dockerBin, ["ps", "-aq"], {
+  const idsResult = await runCommand(dockerBin, ["ps", "--filter", "status=running", "-aq"], {
     logger: options.logger
   });
   if (!idsResult.ok) {
@@ -248,10 +270,67 @@ async function loadContainerInventory(dockerBin, options = {}) {
   return JSON.parse(inspectResult.stdout || "[]");
 }
 
+async function loadImageEnvironmentByRef(dockerBin, inventory, options = {}) {
+  const imageRefs = [...new Set(inventory
+    .map((inspect) => inspect.Config?.Image || "")
+    .filter(Boolean))];
+
+  if (!imageRefs.length) {
+    return new Map();
+  }
+
+  const inspectResult = await runCommand(dockerBin, ["image", "inspect", ...imageRefs], {
+    logger: options.logger
+  });
+
+  if (!inspectResult.ok) {
+    return new Map();
+  }
+
+  const inspectedImages = JSON.parse(inspectResult.stdout || "[]");
+  const environmentByRef = new Map();
+
+  inspectedImages.forEach((imageInspect, index) => {
+    const defaults = parseEnvironment(imageInspect?.Config?.Env || []);
+    const requestedRef = imageRefs[index];
+
+    if (requestedRef) {
+      environmentByRef.set(requestedRef, defaults);
+    }
+
+    for (const tag of imageInspect?.RepoTags || []) {
+      environmentByRef.set(tag, defaults);
+    }
+
+    for (const digest of imageInspect?.RepoDigests || []) {
+      environmentByRef.set(digest, defaults);
+    }
+  });
+
+  return environmentByRef;
+}
+
+export function shouldIncludeInventoryItem(item) {
+  if (!item?.containerName) {
+    return false;
+  }
+
+  if (item.containerName === "stackarr") {
+    return false;
+  }
+
+  return item.status === "running";
+}
+
 export async function scanDockerInventory(settings, options = {}) {
   const inventory = await loadContainerInventory(settings.dockerBin, options);
-  const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect, options)));
-  const sortedItems = [...items].sort((left, right) => {
+  const imageEnvironmentByRef = await loadImageEnvironmentByRef(settings.dockerBin, inventory, options);
+  const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect, {
+    ...options,
+    imageEnvironmentByRef
+  })));
+  const visibleItems = items.filter((item) => shouldIncludeInventoryItem(item));
+  const sortedItems = [...visibleItems].sort((left, right) => {
     if (left.recognized !== right.recognized) {
       return left.recognized ? -1 : 1;
     }

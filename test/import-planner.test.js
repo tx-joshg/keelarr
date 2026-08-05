@@ -137,6 +137,8 @@ test("builds a managed draft that preserves image, host networking details, and 
   assert.match(draft.composeYaml, /entrypoint:/);
   assert.match(draft.envText, /API_KEY=secret-value/);
   assert.doesNotMatch(draft.envText, /PATH=/);
+  assert.doesNotMatch(draft.composeYaml, /PATH:/);
+  assert.equal(draft.envKeys.includes("PATH"), false);
   assert.match(draft.envExampleText, /API_KEY=/);
 });
 
