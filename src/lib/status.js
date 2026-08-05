@@ -240,6 +240,7 @@ export async function buildDashboardState(settings, dependencies = {}) {
       latencyMs: probe.latencyMs,
       observedImage: inventoryItem?.image || service.sourceImage || service.image,
       observedImageId: inventoryItem?.imageId || null,
+      appVersion: inventoryItem?.appVersion || null,
       observedContainerId: inventoryItem?.containerId || service.sourceContainerId || null,
       observedContainerName: inventoryItem?.containerName || service.sourceContainerName || service.containerName,
       observedRestartPolicy: inventoryItem?.restartPolicy || service.restartPolicy,

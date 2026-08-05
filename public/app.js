@@ -155,6 +155,7 @@ function buildRenderService(id) {
     updateCheckedAt: live?.updateCheckedAt || null,
     observedImage: live?.observedImage || live?.image || catalog.defaultImage,
     observedImageId: live?.observedImageId || null,
+    appVersion: live?.appVersion || null,
     observedContainerId: live?.observedContainerId || null,
     observedContainerName: live?.observedContainerName || live?.containerName || id,
     observedNetworkMode: live?.observedNetworkMode || live?.networkMode || "default",
@@ -343,6 +344,8 @@ function updateStatusMeta(service) {
       return { label: "Cutover Pending", tone: "warn" };
     case "unmanaged":
       return { label: "Not Managed", tone: "manual" };
+    case "not-deployed":
+      return { label: "Not Installed", tone: "manual" };
     case "unchecked":
       return { label: "Unchecked", tone: "manual" };
     default:
@@ -862,9 +865,14 @@ function renderStackView() {
       const managementMeta = managementStateMeta(service);
       const versionTag = imageTagFromRef(service.observedImage);
       const imageIdTag = shortImageId(service.observedImageId);
-      const versionDetail = imageIdTag
-        ? `ref ${versionTag} · image ${imageIdTag} · ${managementMeta.detail}`
-        : `${versionTag} · ${managementMeta.detail}`;
+      // Prefer the release the image reports over the tag, which is usually
+      // just "latest" and says nothing about what is actually running.
+      const versionParts = [
+        service.appVersion ? `v${String(service.appVersion).replace(/^v/, "")}` : `ref ${versionTag}`,
+        imageIdTag ? `image ${imageIdTag}` : null,
+        managementMeta.detail
+      ].filter(Boolean);
+      const versionDetail = versionParts.join(" · ");
       const usageMarkup = renderUsageMetrics(service);
       const openUrl = resolveServiceOpenUrl(service);
       let primaryAction = "deploy";

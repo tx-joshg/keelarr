@@ -10,6 +10,7 @@ import {
   matchSupportedService,
   normalizeImageRepository,
   parseDockerStatsLine,
+  readImageVersionLabel,
   shouldIncludeInventoryItem
 } from "../src/lib/import-scanner.js";
 
@@ -147,4 +148,21 @@ test("shouldIncludeInventoryItem hides the stackarr controller and non-running c
     containerName: "trailarr",
     status: "running"
   }), true);
+});
+
+test("readImageVersionLabel prefers the OCI release over branch-style labels", () => {
+  assert.equal(
+    readImageVersionLabel({ "org.opencontainers.image.version": "5.26.2.10099-ls278" }),
+    "5.26.2.10099-ls278"
+  );
+  assert.equal(readImageVersionLabel({ "org.label-schema.version": "1.2.3" }), "1.2.3");
+});
+
+test("readImageVersionLabel ignores branch names that say nothing about the release", () => {
+  // Tautulli labels its image "master", which is no more useful than ":latest".
+  assert.equal(readImageVersionLabel({ "org.opencontainers.image.version": "master" }), null);
+  assert.equal(readImageVersionLabel({ "org.opencontainers.image.version": "latest" }), null);
+  assert.equal(readImageVersionLabel({ "org.opencontainers.image.version": "  " }), null);
+  assert.equal(readImageVersionLabel(null), null);
+  assert.equal(readImageVersionLabel({}), null);
 });

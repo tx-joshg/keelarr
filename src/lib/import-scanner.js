@@ -27,6 +27,32 @@ export function normalizeImageRepository(image = "") {
   return withoutTag;
 }
 
+// Ordered by how specific each label is. linuxserver images set both, and the
+// OCI label carries the clean release string.
+const VERSION_LABEL_KEYS = [
+  "org.opencontainers.image.version",
+  "org.label-schema.version",
+  "version"
+];
+
+export function readImageVersionLabel(labels = null) {
+  if (!labels || typeof labels !== "object") {
+    return null;
+  }
+
+  for (const key of VERSION_LABEL_KEYS) {
+    const value = typeof labels[key] === "string" ? labels[key].trim() : "";
+
+    // Some images tag the branch rather than a release; that is no more
+    // informative than the image tag already shown.
+    if (value && value !== "latest" && value !== "master" && value !== "main") {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 function sanitizeContainerName(name = "") {
   return name.replace(/^\//, "");
 }
@@ -254,6 +280,9 @@ async function buildInventoryItem(inspect, options = {}) {
     containerName: sanitizeContainerName(inspect.Name || ""),
     image: inspect.Config?.Image || "",
     imageId: inspect.Image || null,
+    // The human-readable release the image was built from. A `:latest` tag and
+    // a truncated digest say nothing about what is actually running.
+    appVersion: readImageVersionLabel(inspect.Config?.Labels),
     recognized: Boolean(serviceMatch),
     serviceId: serviceMatch?.serviceId || null,
     serviceName: serviceMatch?.serviceName || null,

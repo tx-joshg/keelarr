@@ -1,3 +1,5 @@
+import { access } from "node:fs/promises";
+
 import { writeStacks } from "../generator.js";
 import {
   checkForUpdates,
@@ -70,6 +72,16 @@ export class ManagedStackService {
     return context.requestId
       ? this.logger.child({ requestId: context.requestId })
       : this.logger;
+  }
+
+  /** A stack is deployable only once its compose file exists on disk. */
+  async serviceIsDeployed(service) {
+    try {
+      await access(service.composePath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async deploySelected(settings, serviceIds = settings.selectedServiceIds, context = {}) {
@@ -260,6 +272,19 @@ export class ManagedStackService {
 
     for (const serviceId of settings.selectedServiceIds) {
       const service = this.requireService(settings, serviceId);
+
+      // A service that was never deployed has no compose file to pull against.
+      // Reporting that as a failure makes a healthy stack look broken.
+      if (!(await this.serviceIsDeployed(service))) {
+        results.push({
+          serviceId: service.id,
+          ok: true,
+          skipped: true,
+          updateStatus: "not-deployed"
+        });
+        continue;
+      }
+
       const result = await this.checkForUpdates(settings, service, {
         logger: logger.child({
           serviceId: service.id,
