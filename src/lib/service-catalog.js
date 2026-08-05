@@ -245,6 +245,15 @@ export function buildServicesFromSelection(baseSettings, selectedServiceIds, ser
   return services;
 }
 
+/**
+ * Every catalog stack is its own Compose project, so by default each service
+ * lands on an isolated <project>_default network and cannot reach the others.
+ * Joining one shared network lets them resolve each other by container name —
+ * which is exactly how Prowlarr, the Arr apps, and a download client expect to
+ * talk to each other.
+ */
+export const SHARED_NETWORK = "stackarr";
+
 export function buildComposeSpec(settings, service) {
   const definition = getServiceDefinition(service.id);
   const composeService = {
@@ -253,7 +262,8 @@ export function buildComposeSpec(settings, service) {
     restart: service.restartPolicy || "unless-stopped",
     ports: [`${"${PORT}"}:${service.port}`],
     environment: definition.buildEnvironment(service),
-    volumes: [`${"${CONFIG_DIR}"}:/config`]
+    volumes: [`${"${CONFIG_DIR}"}:/config`],
+    networks: [SHARED_NETWORK]
   };
 
   if (service.volumes.includes("media")) {
@@ -268,6 +278,14 @@ export function buildComposeSpec(settings, service) {
     name: service.id,
     services: {
       [service.id]: composeService
+    },
+    // External: Stackarr creates the network once, so no single stack owns it
+    // and tearing one stack down cannot remove it from under the others.
+    networks: {
+      [SHARED_NETWORK]: {
+        external: true,
+        name: SHARED_NETWORK
+      }
     }
   };
 }

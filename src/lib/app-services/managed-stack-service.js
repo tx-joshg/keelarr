@@ -3,9 +3,11 @@ import { access } from "node:fs/promises";
 import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
 import {
   backupService,
+  ensureSharedNetwork,
   findRollbackPoint,
   imageExistsLocally
 } from "../runtime.js";
+import { SHARED_NETWORK, isImportedMode } from "../service-catalog.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
 import { JobRegistry } from "../jobs.js";
 import {
@@ -39,6 +41,7 @@ export class ManagedStackService {
     appendActivityImpl = appendActivity,
     backupServiceImpl = backupService,
     checkForUpdatesImpl = checkForUpdates,
+    ensureSharedNetworkImpl = ensureSharedNetwork,
     findRollbackPointImpl = findRollbackPoint,
     generateAndDeployImpl = generateAndDeploy,
     hostProfileService = null,
@@ -58,6 +61,7 @@ export class ManagedStackService {
     writeUpdateStateImpl = writeUpdateState
   } = {}) {
     this.backupService = backupServiceImpl;
+    this.ensureSharedNetwork = ensureSharedNetworkImpl;
     this.findRollbackPoint = findRollbackPointImpl;
     this.imageExistsLocally = imageExistsLocallyImpl;
     this.jobs = jobs;
@@ -130,6 +134,29 @@ export class ManagedStackService {
       to: service.image
     });
     return true;
+  }
+
+  /**
+   * Catalog stacks declare the shared network as external, so it must exist
+   * before the first deploy. Imported stacks keep whatever network the live
+   * container was on and are left alone.
+   */
+  async prepareNetwork(settings, service, logger) {
+    if (isImportedMode(service.managedMode)) {
+      return;
+    }
+
+    const result = await this.ensureSharedNetwork(settings, SHARED_NETWORK, { logger });
+
+    if (!result.ok) {
+      throw new StackarrError(`Unable to create the shared ${SHARED_NETWORK} network: ${result.error || "unknown error"}`, {
+        statusCode: 500
+      });
+    }
+
+    if (result.created) {
+      logger.info("network.created", { network: SHARED_NETWORK });
+    }
   }
 
   requireJobs() {
@@ -334,6 +361,7 @@ export class ManagedStackService {
 
     for (const serviceId of serviceIds) {
       const service = this.requireService(settings, serviceId);
+      await this.prepareNetwork(settings, service, logger);
       const result = await this.generateAndDeploy(settings, service, {
         logger: logger.child({
           serviceId: service.id,
@@ -396,6 +424,7 @@ export class ManagedStackService {
     const service = this.requireService(settings, serviceId);
     const logger = this.scopedLogger(context);
     await this.writeStacks(settings, [service.id]);
+    await this.prepareNetwork(settings, service, logger);
     const result = await this.installService(settings, service, {
       logger: logger.child({
         serviceId: service.id,

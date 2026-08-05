@@ -199,3 +199,21 @@ test("writeStacks preserves files for a service that has already been cut over",
   assert.match(composeText, /trailarr:custom/);
   assert.doesNotMatch(composeText, /trailarr:latest/);
 });
+
+test("catalog stacks join one shared network so the apps can reach each other", async () => {
+  const settings = normalizeSettings({
+    stackRoot: "/share/Container/docker",
+    configRoot: "/share/Container",
+    mediaRoot: "/share/Media",
+    downloadsRoot: "/share/Media/Downloads",
+    selectedServiceIds: ["prowlarr", "radarr"]
+  });
+
+  for (const id of ["prowlarr", "radarr"]) {
+    const spec = buildComposeSpec(settings, settings.services[id]);
+    assert.deepEqual(spec.services[id].networks, ["stackarr"]);
+    // External so no single stack owns it and `compose down` cannot take the
+    // network away from the others.
+    assert.deepEqual(spec.networks, { stackarr: { external: true, name: "stackarr" } });
+  }
+});

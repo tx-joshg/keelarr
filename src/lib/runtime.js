@@ -306,6 +306,31 @@ export async function composePs(settings, service, options = {}) {
   }
 }
 
+/**
+ * Creates the shared network if it is missing. Declared external in generated
+ * stacks, so it has to exist before the first `compose up` or the deploy fails.
+ */
+export async function ensureSharedNetwork(settings, networkName, options = {}) {
+  const exists = await runCommand(settings.dockerBin, ["network", "inspect", networkName, "--format", "{{.Id}}"], {
+    logger: options.logger
+  });
+
+  if (exists.ok) {
+    return { ok: true, created: false };
+  }
+
+  const created = await runCommand(settings.dockerBin, ["network", "create", networkName], {
+    logger: options.logger
+  });
+
+  // A concurrent deploy may have won the race; that is still success.
+  if (!created.ok && /already exists/i.test(`${created.stdout}${created.stderr}`)) {
+    return { ok: true, created: false };
+  }
+
+  return { ok: created.ok, created: created.ok, error: created.ok ? null : created.stderr };
+}
+
 export async function generateAndDeploy(settings, service, options = {}) {
   return runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
     logger: options.logger
