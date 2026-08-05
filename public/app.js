@@ -509,6 +509,8 @@ function currentGeneratedArtifacts() {
   return null;
 }
 
+const TOAST_VISIBLE_MS = 6000;
+
 function showToast(message, tone = "info") {
   ui.toast = {
     message,
@@ -519,11 +521,16 @@ function showToast(message, tone = "info") {
     window.clearTimeout(ui.toastTimer);
   }
 
+  // Paint immediately. Callers routinely continue into a slow refresh, and on
+  // a slow host the dismiss timer would otherwise clear the toast before any
+  // render ever showed it — which is exactly how "save" appeared to do nothing.
+  render();
+
   ui.toastTimer = window.setTimeout(() => {
     ui.toast = null;
     ui.toastTimer = null;
     render();
-  }, 3200);
+  }, TOAST_VISIBLE_MS);
 }
 
 function closeToast() {
@@ -657,9 +664,22 @@ function renderToast() {
     return "";
   }
 
+  const tone = ui.toast.tone;
+  const toneClass = tone === "error" || tone === "danger"
+    ? "toast-panel-danger"
+    : tone === "success"
+      ? "toast-panel-success"
+      : "toast-panel-info";
+  const toneIcon = tone === "error" || tone === "danger"
+    ? "fa-solid fa-circle-exclamation"
+    : tone === "success"
+      ? "fa-solid fa-circle-check"
+      : "fa-solid fa-circle-info";
+
   return `
     <div class="toast-shell">
-      <div class="toast-panel ${ui.toast.tone === "error" ? "toast-panel-danger" : "toast-panel-info"}">
+      <div class="toast-panel ${toneClass}">
+        <i class="${toneIcon} toast-icon"></i>
         <span>${escapeHtml(ui.toast.message)}</span>
         <button type="button" class="toast-dismiss" data-toast-dismiss="true" aria-label="Dismiss notification">
           <i class="fa-solid fa-xmark"></i>
@@ -1919,7 +1939,7 @@ async function submitSetup(deploy = false) {
   });
   setLatestResult(deploy ? "Save And Deploy" : "Save And Generate", data);
   ui.view = "stack";
-  showToast(deploy ? "Settings saved and selected stacks deployed." : "Settings saved and stack files generated.");
+  showToast(deploy ? "Settings saved and selected stacks deployed." : "Settings saved and stack files generated.", "success");
   await loadState();
 }
 
@@ -1930,7 +1950,7 @@ async function saveSettingsOnly() {
   });
   setLatestResult("Settings Saved", data);
   ui.view = "settings";
-  showToast("Settings saved.");
+  showToast("Host settings saved.", "success");
   await loadState();
 }
 
@@ -2300,13 +2320,14 @@ function clearActivityView() {
 }
 
 function showError(error) {
-  closeToast();
   setLatestResult("Error", {
     ok: false,
     error: error.message,
     details: error.details || error.payload?.details || null
   });
-  render();
+  // A failed action has to be as visible as a successful one. showToast
+  // renders, so no separate render call is needed here.
+  showToast(error.message || "Something went wrong.", "error");
 }
 
 appNode.addEventListener("click", (event) => {

@@ -1429,3 +1429,23 @@ table {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.toast-panel-success {
+  border-color: var(--success-border);
+}
+
+.toast-icon {
+  flex-shrink: 0;
+}
+
+.toast-panel-success .toast-icon {
+  color: var(--success-background);
+}
+
+.toast-panel-danger .toast-icon {
+  color: var(--danger-color);
+}
+
+.toast-panel-info .toast-icon {
+  color: var(--primary-color);
+}
