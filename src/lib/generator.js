@@ -1,5 +1,5 @@
 import path from "node:path";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 
 import YAML from "yaml";
 
@@ -66,6 +66,42 @@ async function writeServiceFiles(settings, service) {
     composePath: service.composePath,
     envPath: service.envPath
   };
+}
+
+/**
+ * Rewrites the image reference inside a managed compose file.
+ *
+ * Rolling back pins the image directly in compose.yml rather than layering an
+ * override file, so every later `compose` call — ps, up, down — sees the same
+ * config. A pin stays until an upgrade explicitly clears it.
+ */
+export async function setComposeImage(service, imageRef) {
+  const text = await readFile(service.composePath, "utf8");
+  const spec = YAML.parse(text);
+  const serviceKey = Object.keys(spec?.services || {})[0];
+
+  if (!serviceKey) {
+    throw new StackarrError(`No service block found in ${service.composePath}.`, {
+      statusCode: 500
+    });
+  }
+
+  const previous = spec.services[serviceKey].image || null;
+  spec.services[serviceKey].image = imageRef;
+  await writeFile(service.composePath, YAML.stringify(spec), "utf8");
+
+  return {
+    composePath: service.composePath,
+    previousImage: previous,
+    image: imageRef
+  };
+}
+
+export async function readComposeImage(service) {
+  const text = await readFile(service.composePath, "utf8");
+  const spec = YAML.parse(text);
+  const serviceKey = Object.keys(spec?.services || {})[0];
+  return serviceKey ? spec.services[serviceKey].image || null : null;
 }
 
 export async function writeDraftFiles(draft) {

@@ -164,8 +164,14 @@ function buildRenderService(id) {
     networks: Array.isArray(live?.networks) ? live.networks : [],
     cutoverAt: live?.cutoverAt || null,
     rollbackContainerName: live?.rollbackContainerName || null,
+    rollbackPoint: live?.rollbackPoint || null,
     lastError: live?.lastError || null
   };
+}
+
+/** Rollback is only offered when a backup recorded a reachable prior image. */
+function canRollbackImage(service) {
+  return Boolean(service.rollbackPoint?.imageRef) && service.managementState === "managed";
 }
 
 /** A preserved pre-cutover container is what makes revert possible. */
@@ -927,6 +933,21 @@ function renderStackView() {
             >
               <i class="${escapeHtml(primaryIcon)}"></i>
             </button>
+            ${canRollbackImage(service)
+              ? `
+                <button
+                  type="button"
+                  class="row-icon-button"
+                  data-stack-action="rollback"
+                  data-service-id="${escapeHtml(service.id)}"
+                  style="color:var(--advanced-color);"
+                  title="Roll back to previous image (${escapeHtml(service.rollbackPoint.taggedImage || service.rollbackPoint.imageRef)})"
+                  ${pending ? "disabled" : ""}
+                >
+                  <i class="fa-solid fa-clock-rotate-left"></i>
+                </button>
+              `
+              : ""}
             ${canRevertCutover(service)
               ? `
                 <button
@@ -1675,7 +1696,9 @@ function renderJobPanel() {
     })
     .join("");
 
-  const title = job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const title = job.kind === "rollback"
+    ? "Rollback"
+    : job.kind === "cutover-revert" ? "Revert" : "Cutover";
   const subject = job.result?.serviceName
     || job.subject?.serviceId
     || job.subject?.containerId
@@ -1706,14 +1729,19 @@ function renderCutoverModal() {
   }
 
   const reverting = dialog.mode === "revert";
+  const rollingBack = dialog.mode === "rollback";
   const confirmed = dialog.confirmText.trim() === dialog.containerName;
-  const heading = reverting
-    ? `Revert ${dialog.serviceName}`
-    : `Cut over ${dialog.serviceName} to Compose`;
+  const heading = rollingBack
+    ? `Roll back ${dialog.serviceName}`
+    : reverting
+      ? `Revert ${dialog.serviceName}`
+      : `Cut over ${dialog.serviceName} to Compose`;
 
-  const explanation = reverting
-    ? `Stackarr will stop and remove the Compose container, then rename <code>${escapeHtml(dialog.rollbackContainerName || "")}</code> back to <code>${escapeHtml(dialog.containerName)}</code> and start it.`
-    : `Stackarr will back up the container, stop it, rename it to <code>${escapeHtml(dialog.containerName)}-stackarr-rollback</code>, then start the managed Compose stack. The original container is kept, not deleted, so this can be reverted.`;
+  const explanation = rollingBack
+    ? `Stackarr will back up the current state, pin the stack to <code>${escapeHtml(dialog.rollbackImage || "the previous image")}</code>, and recreate the container on it. If it does not come up, the newer image is restored automatically. Running an upgrade later clears the pin.`
+    : reverting
+      ? `Stackarr will stop and remove the Compose container, then rename <code>${escapeHtml(dialog.rollbackContainerName || "")}</code> back to <code>${escapeHtml(dialog.containerName)}</code> and start it.`
+      : `Stackarr will back up the container, stop it, rename it to <code>${escapeHtml(dialog.containerName)}-stackarr-rollback</code>, then start the managed Compose stack. The original container is kept, not deleted, so this can be reverted.`;
 
   return `
     <div class="modal-backdrop" data-modal-backdrop="cutover">
@@ -1751,11 +1779,11 @@ function renderCutoverModal() {
           <button type="button" class="button-default" data-cutover-close="true">Cancel</button>
           <button
             type="button"
-            class="${reverting ? "button-default" : "button-success"}"
+            class="${reverting || rollingBack ? "button-default" : "button-success"}"
             data-cutover-action="submit"
             ${confirmed && !dialog.submitting ? "" : "disabled"}
           >
-            ${dialog.submitting ? "Starting..." : reverting ? "Revert" : "Cut Over"}
+            ${dialog.submitting ? "Starting..." : rollingBack ? "Roll Back" : reverting ? "Revert" : "Cut Over"}
           </button>
         </div>
       </div>
@@ -2053,7 +2081,7 @@ async function adoptImportDraft(containerId) {
   }
 }
 
-function openCutoverDialog({ mode, containerId, serviceId, serviceName, containerName, rollbackContainerName }) {
+function openCutoverDialog({ mode, containerId, serviceId, serviceName, containerName, rollbackContainerName, rollbackImage }) {
   ui.cutover = {
     open: true,
     mode,
@@ -2062,6 +2090,7 @@ function openCutoverDialog({ mode, containerId, serviceId, serviceName, containe
     serviceName: serviceName || containerName,
     containerName,
     rollbackContainerName: rollbackContainerName || null,
+    rollbackImage: rollbackImage || null,
     confirmText: "",
     submitting: false,
     error: null
@@ -2177,7 +2206,9 @@ async function pollJob(jobId) {
     await scanImports(true);
   }
 
-  const label = data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const label = data.job.kind === "rollback"
+    ? "Rollback"
+    : data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
   const unverified = data.job.result?.outcome === "unverified";
 
   showToast(
@@ -2201,9 +2232,11 @@ async function submitCutoverDialog() {
   dialog.error = null;
   render();
 
-  const url = dialog.mode === "revert"
-    ? `/api/services/${dialog.serviceId}/revert-cutover`
-    : `/api/import/${dialog.containerId}/cutover`;
+  const url = dialog.mode === "rollback"
+    ? `/api/services/${dialog.serviceId}/rollback`
+    : dialog.mode === "revert"
+      ? `/api/services/${dialog.serviceId}/revert-cutover`
+      : `/api/import/${dialog.containerId}/cutover`;
 
   try {
     const data = await request(url, {
@@ -2506,6 +2539,20 @@ appNode.addEventListener("click", (event) => {
 
     if (stackAction === "review-adoption") {
       reviewServiceAdoption(containerId).catch(showError);
+      return;
+    }
+
+    if (stackAction === "rollback") {
+      const service = selectedServices().find((candidate) => candidate.id === serviceId);
+      if (service) {
+        openCutoverDialog({
+          mode: "rollback",
+          serviceId,
+          serviceName: service.name,
+          containerName: service.observedContainerName,
+          rollbackImage: service.rollbackPoint?.taggedImage || service.rollbackPoint?.imageRef
+        });
+      }
       return;
     }
 

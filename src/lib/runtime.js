@@ -1,4 +1,4 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runCommand } from "./command-runner.js";
 
@@ -225,6 +225,62 @@ export async function composeDown(settings, service, options = {}) {
   return runCommand(settings.dockerBin, composeArgs(service, "down"), {
     logger: options.logger
   });
+}
+
+/**
+ * Finds the newest backup that recorded a usable previous image.
+ *
+ * Backups are timestamped directories, so lexical sort is chronological.
+ * Entries whose recorded image matches what is running are skipped — rolling
+ * back to the image you are already on is a no-op the caller should not offer.
+ */
+export async function findRollbackPoint(settings, service, options = {}) {
+  const serviceBackupRoot = path.join(settings.stackRoot, ".stackarr-backups", service.id);
+  let stamps = [];
+
+  try {
+    stamps = (await readdir(serviceBackupRoot)).sort().reverse();
+  } catch {
+    return null;
+  }
+
+  const runningImageId = options.runningImageId
+    ?? (await readContainerImageId(settings, service, options));
+
+  for (const stamp of stamps) {
+    let record;
+
+    try {
+      record = JSON.parse(await readFile(path.join(serviceBackupRoot, stamp, "rollback.json"), "utf8"));
+    } catch {
+      continue;
+    }
+
+    const imageRef = record.imageRepoDigest || record.imageId;
+
+    if (!imageRef || record.imageId === runningImageId) {
+      continue;
+    }
+
+    return {
+      backupDir: path.join(serviceBackupRoot, stamp),
+      backedUpAt: record.backedUpAt || null,
+      imageRef,
+      imageId: record.imageId || null,
+      imageRepoDigest: record.imageRepoDigest || null,
+      taggedImage: record.image || null
+    };
+  }
+
+  return null;
+}
+
+export async function imageExistsLocally(settings, imageRef, options = {}) {
+  const result = await runCommand(settings.dockerBin, ["image", "inspect", imageRef, "--format", "{{.Id}}"], {
+    logger: options.logger
+  });
+
+  return result.ok;
 }
 
 export async function composePs(settings, service, options = {}) {

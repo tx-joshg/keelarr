@@ -32,6 +32,9 @@ export class StackarrAppService {
       hostProfileService: this.hostProfileService,
       logger
     });
+    // One registry across both services so /api/jobs shows every job kind.
+    this.managedStackService.jobs = this.cutoverService.jobs;
+    this.dashboardService.managedStackService = this.managedStackService;
   }
 
   /**
@@ -169,6 +172,13 @@ export class StackarrAppService {
 
   async upgradeManagedService(serviceId, context = {}) {
     return this.managedStackService.upgradeManagedService(serviceId, context);
+  }
+
+  async startRollback(serviceId, input = {}, context = {}) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.managedStackService.startRollback(serviceId, input, context))
+    };
   }
 
   async checkAllUpdates(context = {}) {

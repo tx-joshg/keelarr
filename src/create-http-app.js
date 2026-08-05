@@ -155,6 +155,16 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.post("/api/services/:serviceId/rollback", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await stackarrApp.startRollback(request.params.serviceId, request.body || {}, requestContext(request))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/jobs", async (_request, response, next) => {
     try {
       response.json(await stackarrApp.listJobs());

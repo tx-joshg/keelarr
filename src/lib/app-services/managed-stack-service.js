@@ -1,6 +1,13 @@
 import { access } from "node:fs/promises";
 
-import { writeStacks } from "../generator.js";
+import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
+import {
+  backupService,
+  findRollbackPoint,
+  imageExistsLocally
+} from "../runtime.js";
+import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
+import { JobRegistry } from "../jobs.js";
 import {
   checkForUpdates,
   generateAndDeploy,
@@ -17,21 +24,47 @@ import {
 import { StackarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
+export const ROLLBACK_STEPS = [
+  { name: "preflight", label: "Find the previous image" },
+  { name: "backup", label: "Back up the current state" },
+  { name: "pin", label: "Pin the stack to the previous image" },
+  { name: "deploy", label: "Recreate the container on that image" },
+  { name: "verify", label: "Confirm the service is healthy" },
+  { name: "restore", label: "Undo the pin" },
+  { name: "finalize", label: "Record the rollback" }
+];
+
 export class ManagedStackService {
   constructor({
     appendActivityImpl = appendActivity,
+    backupServiceImpl = backupService,
     checkForUpdatesImpl = checkForUpdates,
+    findRollbackPointImpl = findRollbackPoint,
     generateAndDeployImpl = generateAndDeploy,
     hostProfileService = null,
+    imageExistsLocallyImpl = imageExistsLocally,
     installServiceImpl = installService,
+    jobs = null,
     loadSettingsImpl = loadSettings,
     logger = defaultLogger,
+    readComposeImageImpl = readComposeImage,
     readUpdateStateImpl = readUpdateState,
+    setComposeImageImpl = setComposeImage,
     upgradeAllServicesImpl = upgradeAllServices,
     upgradeServiceImpl = upgradeService,
+    verifyServiceHealthImpl = verifyServiceHealth,
+    verifyOptions = {},
     writeStacksImpl = writeStacks,
     writeUpdateStateImpl = writeUpdateState
   } = {}) {
+    this.backupService = backupServiceImpl;
+    this.findRollbackPoint = findRollbackPointImpl;
+    this.imageExistsLocally = imageExistsLocallyImpl;
+    this.jobs = jobs;
+    this.readComposeImage = readComposeImageImpl;
+    this.setComposeImage = setComposeImageImpl;
+    this.verifyServiceHealth = verifyServiceHealthImpl;
+    this.verifyOptions = verifyOptions;
     this.appendActivity = appendActivityImpl;
     this.checkForUpdates = checkForUpdatesImpl;
     this.generateAndDeploy = generateAndDeployImpl;
@@ -72,6 +105,217 @@ export class ManagedStackService {
     return context.requestId
       ? this.logger.child({ requestId: context.requestId })
       : this.logger;
+  }
+
+  /**
+   * A rollback pins compose.yml to an image digest. Upgrading has to restore
+   * the tag first, or the pull would just re-resolve the pinned digest and the
+   * service could never move forward again.
+   */
+  async clearRollbackPin(service, logger) {
+    if (!(await this.serviceIsDeployed(service))) {
+      return false;
+    }
+
+    const current = await this.readComposeImage(service);
+
+    if (!current || current === service.image || !/@sha256:|^sha256:/.test(current)) {
+      return false;
+    }
+
+    await this.setComposeImage(service, service.image);
+    logger.info("service.rollback_pin_cleared", {
+      serviceId: service.id,
+      from: current,
+      to: service.image
+    });
+    return true;
+  }
+
+  requireJobs() {
+    if (!this.jobs) {
+      this.jobs = new JobRegistry({ logger: this.logger, persist: true });
+    }
+
+    return this.jobs;
+  }
+
+  /**
+   * Reports whether a service can be rolled back, so the dashboard can offer
+   * the action only when there is somewhere to roll back to.
+   */
+  async describeRollbackPoint(settings, service) {
+    if (!(await this.serviceIsDeployed(service))) {
+      return null;
+    }
+
+    const point = await this.findRollbackPoint(settings, service);
+
+    if (!point) {
+      return null;
+    }
+
+    return {
+      backedUpAt: point.backedUpAt,
+      imageRef: point.imageRef,
+      taggedImage: point.taggedImage
+    };
+  }
+
+  startRollback(serviceId, input = {}, context = {}) {
+    const job = this.requireJobs().create({
+      kind: "rollback",
+      subject: { serviceId },
+      steps: ROLLBACK_STEPS
+    });
+
+    return this.jobs.start(job, (ctx) => this.runRollback(ctx, serviceId, input, context));
+  }
+
+  async runRollback(ctx, serviceId, input, context) {
+    const logger = this.scopedLogger(context);
+    let plan = null;
+
+    await ctx.step("preflight", async () => {
+      const settings = await this.loadSettings();
+      const service = this.requireService(settings, serviceId);
+
+      if (input.confirmContainerName !== service.containerName) {
+        throw new StackarrError(
+          `Rollback confirmation does not match. Expected the container name ${service.containerName}.`,
+          { statusCode: 400 }
+        );
+      }
+
+      if (!(await this.serviceIsDeployed(service))) {
+        throw new StackarrError(`${service.name} has no managed compose file to roll back.`, {
+          statusCode: 409
+        });
+      }
+
+      const point = await this.findRollbackPoint(settings, service, { logger });
+
+      if (!point) {
+        throw new StackarrError(
+          `No previous image is recorded for ${service.name}. Rollback is only available after an upgrade or install made a backup.`,
+          { statusCode: 409 }
+        );
+      }
+
+      // Rolling back to an image the host no longer has would leave the
+      // service unable to start, so refuse before touching the container.
+      if (!(await this.imageExistsLocally(settings, point.imageRef, { logger }))) {
+        throw new StackarrError(
+          `The previous image for ${service.name} (${point.imageRef}) is no longer present on this host.`,
+          { statusCode: 409 }
+        );
+      }
+
+      const currentImage = await this.readComposeImage(service);
+      plan = { settings, service, point, currentImage };
+      return { detail: `Rolling back to ${point.taggedImage || point.imageRef} from ${point.backedUpAt || "an earlier backup"}.` };
+    });
+
+    const { settings, service, point, currentImage } = plan;
+    const stepLogger = logger.child({ serviceId: service.id, containerName: service.containerName });
+
+    const backup = await ctx.step("backup", async () => {
+      const result = await this.backupService(settings, service, { logger: stepLogger });
+      return { detail: `Backed up to ${result.backupDir}.`, ...result };
+    });
+
+    await ctx.step("pin", async () => {
+      await this.setComposeImage(service, point.imageRef);
+      return { detail: `Pinned ${service.name} to ${point.imageRef}.` };
+    });
+
+    const deployed = await ctx.step("deploy", async () => {
+      const result = await this.generateAndDeploy(settings, service, { logger: stepLogger });
+
+      if (!result.ok) {
+        await this.undoPin(ctx, settings, service, currentImage, stepLogger);
+        throw new StackarrError(`Compose failed to start ${service.name} on the previous image.`, {
+          statusCode: 500,
+          details: { stdout: result.stdout, stderr: result.stderr, restored: true }
+        });
+      }
+
+      return { detail: `Recreated ${service.name}.` };
+    });
+
+    const health = await ctx.step("verify", async () => {
+      const result = await this.verifyServiceHealth(settings, service, {
+        ...this.verifyOptions,
+        logger: stepLogger
+      });
+      return { detail: result.reason, ...result };
+    });
+
+    if (health.outcome === HEALTH_OUTCOME.FAILED) {
+      await this.undoPin(ctx, settings, service, currentImage, stepLogger);
+      throw new StackarrError(`${service.name} did not come up on the previous image. The newer image was restored.`, {
+        statusCode: 500,
+        details: { reason: health.reason, restored: true }
+      });
+    }
+
+    ctx.skip("restore", "Not needed.");
+
+    await ctx.step("finalize", async () => {
+      const updateState = await this.readUpdateState();
+      updateState[service.id] = {
+        status: "rolled-back",
+        checkedAt: new Date().toISOString()
+      };
+      await this.writeUpdateState(updateState);
+
+      await this.appendActivity({
+        kind: "rollback",
+        level: health.outcome === HEALTH_OUTCOME.VERIFIED ? "info" : "warn",
+        message: `Rolled ${service.name} back to ${point.taggedImage || point.imageRef}.`,
+        details: { serviceId: service.id, imageRef: point.imageRef }
+      });
+
+      return { detail: `${service.name} is pinned to the previous image.` };
+    });
+
+    logger.warn("service.rollback", {
+      serviceId: service.id,
+      imageRef: point.imageRef,
+      outcome: health.outcome
+    });
+
+    return {
+      outcome: health.outcome,
+      serviceId: service.id,
+      serviceName: service.name,
+      containerName: service.containerName,
+      rolledBackTo: point.imageRef,
+      rolledBackFrom: currentImage,
+      backupDir: backup.backupDir,
+      health,
+      pinNote: `${service.name} is pinned to ${point.imageRef}. Running an upgrade clears the pin and moves it forward again.`
+    };
+  }
+
+  /** Best-effort restore of the image the stack was on before the rollback. */
+  async undoPin(ctx, settings, service, previousImage, logger) {
+    if (!previousImage) {
+      return;
+    }
+
+    try {
+      await ctx.step("restore", async () => {
+        await this.setComposeImage(service, previousImage);
+        await this.generateAndDeploy(settings, service, { logger });
+        return { detail: `Restored ${service.name} to ${previousImage}.` };
+      });
+    } catch (error) {
+      logger.error("service.rollback_restore_failed", {
+        serviceId: service.id,
+        message: error.message
+      });
+    }
   }
 
   /** A stack is deployable only once its compose file exists on disk. */
@@ -231,6 +475,7 @@ export class ManagedStackService {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
     const logger = this.scopedLogger(context);
+    await this.clearRollbackPin(service, logger);
     const result = await this.upgradeService(settings, service, {
       logger: logger.child({
         serviceId: service.id,
