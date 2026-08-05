@@ -416,13 +416,24 @@ export async function removeImage(settings, imageRef, options = {}) {
   const result = await runCommand(settings.dockerBin, ["image", "rm", imageRef], {
     logger: options.logger
   });
+  const output = `${result.stdout}${result.stderr}`;
 
   // Another service on the same image keeps it alive; that is not a failure.
-  if (!result.ok && /image is being used|conflict/i.test(`${result.stdout}${result.stderr}`)) {
-    return { ok: true, removed: false, reason: "Image is still used by another container." };
+  if (!result.ok && /image is being used|conflict/i.test(output)) {
+    return { ok: true, removed: false, reason: "Image kept: another container still uses it." };
   }
 
-  return { ok: result.ok, removed: result.ok, reason: result.ok ? null : result.stderr || "Could not remove image." };
+  // Nothing to delete is a success, not an error. This happens whenever a
+  // failed install never managed to pull the image in the first place.
+  if (!result.ok && /no such image|reference does not exist/i.test(output)) {
+    return { ok: true, removed: false, reason: "Image was not present on this host." };
+  }
+
+  return {
+    ok: result.ok,
+    removed: result.ok,
+    reason: result.ok ? null : (result.stderr || "Could not remove image.").split("\n").filter(Boolean).pop()
+  };
 }
 
 /**

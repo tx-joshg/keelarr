@@ -203,3 +203,34 @@ test("finalize deselects the service and clears its stored state", async () => {
   assert.ok(!saved.at(-1).selectedServiceIds.includes("radarr"));
   assert.equal(saved.at(-1).serviceOverrides.radarr, undefined);
 });
+
+test("removeImage treats 'no such image' and 'in use' as non-failures", async () => {
+  // The job must surface a readable reason, not a raw daemon string, whether
+  // the image was never pulled or is still in use elsewhere.
+  const cases = [
+    { out: "Error response from daemon: No such image: x:develop", expect: /was not present/ },
+    { out: "conflict: unable to delete, image is being used by running container", expect: /another container still uses it/ }
+  ];
+
+  for (const c of cases) {
+    const service = new RemovalService({
+      logger: silentLogger,
+      jobs: new JobRegistry({ logger: silentLogger }),
+      loadSettingsImpl: async () => buildSettings(),
+      readConfigMountSourceImpl: async () => null,
+      composeDownImpl: async () => ({ ok: true }),
+      removeImageImpl: async () => ({ ok: true, removed: false, reason: c.out.includes("No such") ? "Image was not present on this host." : "Image kept: another container still uses it." }),
+      rmImpl: async () => {},
+      readUpdateStateImpl: async () => ({}),
+      writeUpdateStateImpl: async () => ({}),
+      saveSettingsImpl: async (n) => n,
+      appendActivityImpl: async () => {}
+    });
+
+    const job = await settle(service.startRemoval("radarr", { confirmContainerName: "radarr", removeImage: true }));
+    const step = job.steps.find((s) => s.name === "image");
+    assert.match(step.detail, c.expect);
+    assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+  }
+
+});
