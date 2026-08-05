@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { access, rm } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -52,6 +52,14 @@ export class RemovalService {
     loadSettingsImpl = loadSettings,
     logger = defaultLogger,
     measurePathImpl = measurePath,
+    pathExistsImpl = async (target) => {
+      try {
+        await access(target);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     readConfigMountSourceImpl = readConfigMountSource,
     readUpdateStateImpl = readUpdateState,
     removeImageImpl = removeImage,
@@ -69,6 +77,7 @@ export class RemovalService {
     this.logger = logger.child({ component: "removal-service" });
     this.measurePath = measurePathImpl;
     this.readConfigMountSource = readConfigMountSourceImpl;
+    this.pathExists = pathExistsImpl;
     this.readUpdateState = readUpdateStateImpl;
     this.removeImage = removeImageImpl;
     this.rm = rmImpl;
@@ -106,6 +115,28 @@ export class RemovalService {
     return service;
   }
 
+  /**
+   * Finds the app's configuration whether or not its container still exists.
+   *
+   * Inspecting the container is the accurate route, but a service that failed
+   * to start — or was stopped — has no container to inspect. Falling back to
+   * the conventional config path means the delete option is still offered
+   * instead of silently disappearing and quietly preserving data.
+   */
+  async resolveConfigTarget(settings, service, logger) {
+    const mount = await this.readConfigMountSource(settings, service, { logger });
+
+    if (mount) {
+      return mount;
+    }
+
+    if (service.configDir && (await this.pathExists(service.configDir))) {
+      return { type: "bind", source: service.configDir, inferred: true };
+    }
+
+    return null;
+  }
+
   backupRoot(settings, serviceId) {
     return path.join(settings.stackRoot, ".stackarr-backups", serviceId);
   }
@@ -122,7 +153,7 @@ export class RemovalService {
     const settings = await this.loadSettings();
     const service = this.requireService(settings, serviceId);
     const logger = this.scopedLogger(context);
-    const configMount = await this.readConfigMountSource(settings, service, { logger });
+    const configMount = await this.resolveConfigTarget(settings, service, logger);
 
     const dependents = DEPENDENTS[serviceId];
     const affected = dependents
@@ -143,9 +174,12 @@ export class RemovalService {
               label: configMount.type === "volume" ? `Named volume ${configMount.source}` : "Configuration and database",
               path: configMount.source,
               type: configMount.type,
+              inferred: configMount.inferred === true,
               size: await this.measurePath(settings, configMount.type === "bind" ? configMount.source : null, { logger })
             }
-          : null,
+          // Explicitly absent rather than merely missing, so the dialog can say
+          // there is no configuration instead of hiding the option.
+          : { absent: true, label: "No configuration on disk" },
         image: { label: service.image },
         backups: { label: "Stackarr backups and config snapshots", path: this.backupRoot(settings, serviceId) }
       },
@@ -188,7 +222,7 @@ export class RemovalService {
       // Read the mount while the container still exists; removing it first
       // would leave nothing to inspect.
       const configMount = input.removeConfig
-        ? await this.readConfigMountSource(settings, service, { logger })
+        ? await this.resolveConfigTarget(settings, service, logger)
         : null;
 
       plan = { settings, service, configMount };
@@ -235,7 +269,11 @@ export class RemovalService {
 
     if (input.removeConfig) {
       await ctx.step("config", async () => {
-        if (configMount?.type === "bind") {
+        if (!configMount) {
+          return { detail: "No configuration was found on disk." };
+        }
+
+        if (configMount.type === "bind") {
           await this.rm(configMount.source, { recursive: true, force: true });
           removed.push("config");
           return { detail: `Deleted ${configMount.source}.` };
@@ -246,8 +284,16 @@ export class RemovalService {
         return { detail: "Deleted the configuration volume." };
       });
     } else {
-      kept.push("config");
-      ctx.skip("config", "Configuration and database kept.");
+      const hasConfig = await this.resolveConfigTarget(settings, service, stepLogger);
+
+      if (hasConfig) {
+        kept.push("config");
+        ctx.skip("config", "Configuration and database kept.");
+      } else {
+        // Claiming to have kept something that was never there is a lie the
+        // summary should not tell.
+        ctx.skip("config", "No configuration exists on disk.");
+      }
     }
 
     if (input.removeImage) {

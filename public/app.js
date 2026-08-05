@@ -2322,11 +2322,11 @@ function renderRemovalModal() {
         </ul>
 
         <div class="muted-paragraph" style="margin:14px 0 6px;">Choose what else to delete:</div>
-        ${t.config
-          ? choice("removeConfig", `Delete ${t.config.label.toLowerCase()}`,
-              `${escapeHtml(t.config.path)}${t.config.size ? ` &middot; ${escapeHtml(t.config.size)}` : ""}. This is the app's database and settings. Keeping it lets you reinstall exactly where you left off.`,
-              dialog.removeConfig)
-          : ""}
+        ${t.config?.absent
+          ? '<div class="muted-paragraph" style="margin-bottom:12px;">No configuration or database exists on disk for this app, so there is nothing to keep or delete.</div>'
+          : choice("removeConfig", `Delete ${t.config.label.toLowerCase()}`,
+              `${escapeHtml(t.config.path)}${t.config.size ? ` &middot; ${escapeHtml(t.config.size)}` : ""}. This is the app's database and settings. Keeping it lets you reinstall exactly where you left off.${t.config.inferred ? " (Container is not running; this is the standard path for this app.)" : ""}`,
+              dialog.removeConfig)}
         ${choice("removeImage", `Delete the image ${t.image.label}`,
             "Only affects disk space. It is re-pulled on the next install, and is kept automatically if another service still uses it.",
             dialog.removeImage)}

@@ -35,7 +35,7 @@ function createService(overrides = {}) {
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => overrides.settings || buildSettings(),
-    readConfigMountSourceImpl: async () => overrides.configMount ?? { type: "bind", source: "/share/Container/radarr/config" },
+    readConfigMountSourceImpl: async () => ("configMount" in overrides ? overrides.configMount : { type: "bind", source: "/share/Container/radarr/config" }),
     measurePathImpl: async () => "412M",
     backupServiceImpl: async () => {
       calls.push("snapshot");
@@ -233,4 +233,58 @@ test("removeImage treats 'no such image' and 'in use' as non-failures", async ()
     assert.equal(job.status, JOB_STATUS.SUCCEEDED);
   }
 
+});
+
+test("the config option is still offered when the container is gone", async () => {
+  // A failed install or a stopped service has no container to inspect. Hiding
+  // the option there silently preserved data the operator asked to delete.
+  const { service } = createService({
+    configMount: null,
+    impls: { pathExistsImpl: async () => true }
+  });
+
+  const preview = await service.describeRemoval("radarr");
+
+  assert.equal(preview.targets.config.absent, undefined);
+  assert.equal(preview.targets.config.inferred, true);
+  assert.equal(preview.targets.config.path, "/share/Container/radarr/config");
+});
+
+test("with no container and no config on disk, the dialog is told there is nothing to delete", async () => {
+  const { service } = createService({
+    configMount: null,
+    impls: { pathExistsImpl: async () => false }
+  });
+
+  const preview = await service.describeRemoval("radarr");
+
+  assert.equal(preview.targets.config.absent, true);
+});
+
+test("removal deletes the inferred config path when the container is gone", async () => {
+  const { service, removedPaths } = createService({
+    configMount: null,
+    impls: { pathExistsImpl: async () => true }
+  });
+
+  const job = await settle(service.startRemoval("radarr", {
+    confirmContainerName: "radarr",
+    removeConfig: true
+  }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.ok(removedPaths.includes("/share/Container/radarr/config"));
+  assert.deepEqual(job.result.kept, ["image", "backups"]);
+});
+
+test("it does not claim to have kept configuration that never existed", async () => {
+  const { service } = createService({
+    configMount: null,
+    impls: { pathExistsImpl: async () => false }
+  });
+
+  const job = await settle(service.startRemoval("radarr", { confirmContainerName: "radarr" }));
+
+  assert.ok(!job.result.kept.includes("config"));
+  assert.match(job.steps.find((s) => s.name === "config").detail, /No configuration exists/);
 });
