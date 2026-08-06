@@ -896,12 +896,22 @@ function renderHostSummary() {
 
 function toolbarButtons() {
   if (ui.view === "stack") {
+    const services = selectedServices();
+    // Only offer Deploy All when something is actually undeployed. On a fully
+    // running stack it reads as a mystery button that recreates containers for
+    // no reason.
+    const undeployed = services.filter((service) => service.managementState === "catalog" || !service.generated).length;
+    const updatesReady = services.filter((service) => service.updateStatus === "ready").length;
+
     return [
       { action: "refresh", icon: "fa-solid fa-rotate", label: "Refresh" },
-      { action: "deploy-all", icon: "fa-solid fa-cloud-arrow-up", label: "Deploy All" },
+      ...(undeployed
+        ? [{ action: "deploy-all", icon: "fa-solid fa-cloud-arrow-up", label: `Deploy ${undeployed}` }]
+        : []),
       { action: "check-updates", icon: "fa-solid fa-magnifying-glass-chart", label: "Check Updates" },
-      { action: "upgrade-all", icon: "fa-solid fa-arrow-up-right-dots", label: "Upgrade All" },
-      { action: "options", icon: "fa-solid fa-sliders", label: "Options" }
+      ...(updatesReady
+        ? [{ action: "upgrade-all", icon: "fa-solid fa-arrow-up-right-dots", label: `Upgrade ${updatesReady}` }]
+        : [])
     ];
   }
 
@@ -983,13 +993,17 @@ function renderRowMenu(service) {
 
   return `
     <div class="row-menu">
-      ${item("upgrade", "fa-solid fa-circle-up", "Upgrade", installed,
-        service.updateStatus === "ready" ? "An update is available." : "Pulls the latest image.")}
+      ${item("upgrade", "fa-solid fa-circle-up", "Upgrade", installed && service.updateStatus !== "current",
+        service.updateStatus === "ready"
+          ? "An update is available."
+          : service.updateStatus === "current"
+            ? "Already on the latest image."
+            : "Pulls the latest image.")}
       ${item("rollback", "fa-solid fa-clock-rotate-left", "Downgrade", canRollbackImage(service),
         canRollbackImage(service) ? `Roll back to ${service.rollbackPoint?.taggedImage || "the previous image"}.` : "No previous image recorded yet.")}
       ${item("restart", "fa-solid fa-arrows-rotate", "Restart", running, running ? "" : "Not running.")}
       <div class="row-menu-divider"></div>
-      ${item("remove", "fa-solid fa-trash-can", "Remove", installed)}
+      ${item("remove", "fa-solid fa-trash-can", "Remove", installed, installed ? "" : "Nothing installed to remove.")}
     </div>
   `;
 }
@@ -1036,9 +1050,9 @@ function renderStackView() {
             <div class="secondary-copy ${versionClass}" title="${escapeHtml(versionTitle)}">${escapeHtml(version)}</div>
           </td>
           <td>${escapeHtml(String(service.port))}</td>
-          <td class="chip-cell">${icon(compose)}</td>
+          <td class="chip-cell col-center">${icon(compose)}</td>
           <td>${renderUsageMetrics(service)}</td>
-          <td class="chip-cell">${icon(health)}</td>
+          <td class="chip-cell col-center">${icon(health)}</td>
           <td class="row-actions">
             <div class="row-menu-wrap">
               <button type="button" class="row-icon-button" data-row-menu="${escapeHtml(service.id)}"
@@ -1065,12 +1079,12 @@ function renderStackView() {
         <thead>
           <tr>
             <th style="width:4%;"></th>
-            <th style="width:18%;">App</th>
-            <th style="width:34%;">Image / Version</th>
-            <th style="width:8%;">Port</th>
-            <th style="width:8%;">Compose</th>
-            <th style="width:16%;">Usage</th>
-            <th style="width:8%;">Health</th>
+            <th style="width:17%;">App</th>
+            <th style="width:31%;">Image / Version</th>
+            <th style="width:7%;">Port</th>
+            <th class="col-center" style="width:10%;">Compose</th>
+            <th style="width:17%;">Usage</th>
+            <th class="col-center" style="width:10%;">Health</th>
             <th style="width:4%;"></th>
           </tr>
         </thead>

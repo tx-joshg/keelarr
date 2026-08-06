@@ -1654,3 +1654,12 @@ table {
 .row-menu-item[data-row-menu-action="remove"] span {
   color: var(--danger-color);
 }
+
+/* Icon columns read better centred under their own heading, and the extra
+   width stops "Compose" and "Usage" running together. */
+.table-view th.col-center,
+.table-view td.col-center {
+  text-align: center;
+  padding-left: 14px;
+  padding-right: 14px;
+}
