@@ -237,12 +237,18 @@ Each connection is reported in one of six states:
 
 `pending` is deliberately distinct from `absent`. A freshly installed app writes `config.xml` a few seconds after first start, and reporting that as missing turns a normal startup into a false alarm.
 
+**Configure** then acts on the `absent` rows only, as a job you can watch. Payloads are built by patching values into the schema each app publishes, so fields Stackarr does not name keep the app's own defaults — your categories and priorities survive. Each payload is tested against the app before it is saved, and a refusal is reported with the app's own words rather than overridden: Arr apps offer a `forceSave` escape hatch, and using it produces configuration that looks right and never works.
+
+Prowlarr applications are registered with `syncLevel: addOnly`, so indexers you configured directly inside an Arr are not deleted by the first sync.
+
 Identity is matched on implementation plus address, never on the entry's name — users rename these — and API keys are never persisted, never logged, and never returned by the API. The check reports only the key's source file and a truncated `sha256` fingerprint. Objects fetched from an app are re-projected field by field rather than passed through, so what reaches the response is always a decision rather than whatever the remote app happened to send.
 
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control
-- Writing app-to-app configuration (Stackarr reports how the apps are connected — see Stack Wiring — but you still make the changes inside each app)
+- Repairing app-to-app configuration that already exists (Stackarr adds missing connections, but a link that points somewhere unexpected is reported for you to change inside the app)
+- Indexer setup, which carries credentials Stackarr has no business holding
+- Remote path mapping writes (disagreeing paths are detected and described, but not yet corrected)
 - Reverse proxy and certificate automation
 - One-click indexer/download-client/provider setup inside each app
 - Generic marketplace support for unrelated self-hosted software
