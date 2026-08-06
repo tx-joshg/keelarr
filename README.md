@@ -216,10 +216,33 @@ Outcomes:
 | `unverified` | succeeded | Same, but health was never confirmed. Rollback container kept so you can revert. |
 | Container exited, or Compose failed to start | failed | Automatically reverted to the original container. |
 
+## Stack Wiring
+
+The Stack tab's **Check Wiring** button reports how the apps are connected to each other. It is read-only: it reads each app's API key from its own config file, works out the address each app must use to reach the others, compares that against what is configured, and then asks each app to run its **own** connection tests.
+
+Using the app's tests rather than probing from the controller matters on a mixed stack. A controller-side probe only proves that *Stackarr* can reach something, from Stackarr's network position. What the configuration needs is whether *Radarr* can reach SABnzbd, from Radarr's.
+
+Addresses are derived from `docker inspect`, never composed from `hostUrl` and a port. On a QNAP the difference is not academic: SABnzbd on a `qnet` network answers on its own LAN address, while the host address at the same port is the NAS administration interface — which returns `200` and would look exactly like success.
+
+Each connection is reported in one of six states:
+
+| State | Meaning |
+| --- | --- |
+| `correct` | Configured, and the app's own test passed |
+| `absent` | Nothing configured |
+| `drift` | Configured, but pointing somewhere other than the resolved address |
+| `ambiguous` | Several comparable entries exist and none match, so nothing can be assumed |
+| `blocked` | This host's networking cannot carry the connection at all |
+| `pending` | The app has only just started and has not written its API key yet |
+
+`pending` is deliberately distinct from `absent`. A freshly installed app writes `config.xml` a few seconds after first start, and reporting that as missing turns a normal startup into a false alarm.
+
+Identity is matched on implementation plus address, never on the entry's name — users rename these — and API keys are never persisted, never logged, and never returned by the API. The check reports only the key's source file and a truncated `sha256` fingerprint.
+
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control
-- App-to-app API provisioning (indexers, download clients, and API keys are still configured inside each app)
+- Writing app-to-app configuration (Stackarr reports how the apps are connected — see Stack Wiring — but you still make the changes inside each app)
 - Reverse proxy and certificate automation
 - One-click indexer/download-client/provider setup inside each app
 - Generic marketplace support for unrelated self-hosted software

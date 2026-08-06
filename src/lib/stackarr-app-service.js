@@ -4,6 +4,7 @@ import { HostProfileService } from "./app-services/host-profile-service.js";
 import { ImportService } from "./app-services/import-service.js";
 import { ManagedStackService } from "./app-services/managed-stack-service.js";
 import { RemovalService } from "./app-services/removal-service.js";
+import { WiringService } from "./app-services/wiring-service.js";
 import { buildJobSnapshot } from "./jobs.js";
 
 export class StackarrAppService {
@@ -34,6 +35,10 @@ export class StackarrAppService {
       logger
     });
     this.removalService = new RemovalService({
+      hostProfileService: this.hostProfileService,
+      logger
+    });
+    this.wiringService = new WiringService({
       hostProfileService: this.hostProfileService,
       logger
     });
@@ -182,6 +187,10 @@ export class StackarrAppService {
 
   async upgradeManagedService(serviceId, context = {}) {
     return this.managedStackService.upgradeManagedService(serviceId, context);
+  }
+
+  async describeWiring(context = {}) {
+    return this.wiringService.describeWiring(context);
   }
 
   async describeRemoval(serviceId, context = {}) {

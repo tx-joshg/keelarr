@@ -1663,3 +1663,150 @@ table {
   padding-left: 14px;
   padding-right: 14px;
 }
+
+/* Stack wiring report: read-only view of how the apps reach each other */
+.wiring-modal {
+  max-width: 760px;
+  max-height: 82vh;
+  overflow-y: auto;
+}
+
+.wiring-verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0 4px;
+  border: 1px solid var(--default-border);
+  border-radius: 4px;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-color);
+}
+
+.wiring-verdict i {
+  margin-top: 2px;
+}
+
+.wiring-verdict-ok {
+  border-color: var(--success-border);
+  background: rgba(39, 194, 76, 0.08);
+}
+
+.wiring-verdict-ok i {
+  color: var(--success-background);
+}
+
+.wiring-verdict-warn {
+  border-color: var(--warning-color);
+  background: rgba(255, 165, 0, 0.08);
+}
+
+.wiring-verdict-warn i {
+  color: var(--warning-color);
+}
+
+.wiring-verdict-danger {
+  border-color: var(--danger-color);
+  background: rgba(240, 80, 80, 0.08);
+}
+
+.wiring-verdict-danger i {
+  color: var(--danger-color);
+}
+
+.wiring-verdict-muted i {
+  color: var(--muted-text);
+}
+
+.wiring-section-title {
+  margin: 18px 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--help-text);
+}
+
+.wiring-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line-color);
+  border-radius: 4px;
+}
+
+.wiring-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-color);
+}
+
+.wiring-row:last-child {
+  border-bottom: none;
+}
+
+.wiring-row-icon {
+  margin-top: 2px;
+  width: 16px;
+  text-align: center;
+}
+
+.wiring-row-ok .wiring-row-icon {
+  color: var(--success-background);
+}
+
+.wiring-row-warn .wiring-row-icon {
+  color: var(--warning-color);
+}
+
+.wiring-row-danger .wiring-row-icon {
+  color: var(--danger-color);
+}
+
+.wiring-row-muted .wiring-row-icon {
+  color: var(--muted-text);
+}
+
+.wiring-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.wiring-row-title {
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.wiring-row-state {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--help-text);
+}
+
+.wiring-row-address code {
+  font-size: 11px;
+  color: var(--theme-blue);
+  word-break: break-all;
+}
+
+.wiring-row-reason {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--help-text);
+}
+
+.wiring-row-detail {
+  color: var(--muted-text);
+}
+
+.wiring-row-test-ok {
+  color: var(--success-background);
+}
+
+.wiring-row-test-fail {
+  color: var(--danger-color);
+}

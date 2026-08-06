@@ -147,6 +147,52 @@ export async function readConfigMountSource(settings, service, options = {}) {
 }
 
 /**
+ * Full `docker inspect` output for several containers in one call.
+ *
+ * Containers that do not exist are skipped by the daemon rather than failing
+ * the batch, so the caller matches results back by name instead of by position.
+ */
+export async function inspectContainers(settings, containerNames, options = {}) {
+  const names = (containerNames || []).filter(Boolean);
+
+  if (names.length === 0) {
+    return [];
+  }
+
+  const result = await runCommand(settings.dockerBin, ["inspect", ...names], {
+    logger: options.logger,
+    timeoutMs: options.timeoutMs
+  });
+
+  try {
+    const parsed = JSON.parse(String(result.stdout || "[]"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Reads one small text file out of a running container.
+ *
+ * Deliberately `exec` rather than the helper-container pattern used for
+ * snapshots. That pattern exists to reach *stopped* containers and named
+ * volumes; reading an app's settings only makes sense while the app is running,
+ * and `exec cat` avoids starting a container per file. Returns null rather than
+ * throwing when the file is absent, because "not written yet" is a normal state
+ * for an app that has only just started.
+ */
+export async function readContainerFile(settings, containerName, filePath, options = {}) {
+  const result = await runCommand(
+    settings.dockerBin,
+    ["exec", containerName, "cat", filePath],
+    { logger: options.logger, timeoutMs: options.timeoutMs }
+  );
+
+  return result.ok ? String(result.stdout || "") : null;
+}
+
+/**
  * Captures the service's configuration and database so a rollback can restore
  * the state the app had *before* an upgrade migrated it forward. Rolling the
  * image back alone is not enough once a schema migration has run.

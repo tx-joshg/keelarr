@@ -33,6 +33,8 @@ const ui = {
   toastTimer: null,
   pathPicker: null,
   removal: null,
+  // Read-only report on how the apps are connected to each other.
+  wiring: null,
   rowMenu: null,
   busy: null,
   selectedImportContainerId: null,
@@ -908,6 +910,7 @@ function toolbarButtons() {
         ? [{ action: "deploy-all", icon: "fa-solid fa-cloud-arrow-up", label: `Deploy ${undeployed}` }]
         : []),
       { action: "check-updates", icon: "fa-solid fa-magnifying-glass-chart", label: "Check Updates" },
+      { action: "check-wiring", icon: "fa-solid fa-diagram-project", label: "Check Wiring" },
       ...(updatesReady
         ? [{ action: "upgrade-all", icon: "fa-solid fa-arrow-up-right-dots", label: `Upgrade ${updatesReady}` }]
         : [])
@@ -2042,6 +2045,7 @@ function render() {
         ${renderPathPicker()}
         ${renderCutoverModal()}
         ${renderRemovalModal()}
+        ${renderWiringModal()}
       </div>
     `;
 
@@ -2433,6 +2437,185 @@ function renderRemovalModal() {
   `;
 }
 
+async function openWiringDialog() {
+  ui.wiring = { open: true, report: await request("/api/wiring/check") };
+  render();
+}
+
+function closeWiringDialog() {
+  ui.wiring = null;
+  render();
+}
+
+/**
+ * Every state gets a tone and a plain-language label, because the whole point
+ * of the report is that "not configured" and "cannot be configured on this
+ * host" are different problems with different fixes.
+ */
+const WIRING_STATE_META = {
+  correct: { tone: "ok", icon: "fa-solid fa-circle-check", label: "Connected" },
+  drift: { tone: "warn", icon: "fa-solid fa-circle-exclamation", label: "Points elsewhere" },
+  ambiguous: { tone: "warn", icon: "fa-solid fa-code-branch", label: "Ambiguous" },
+  absent: { tone: "warn", icon: "fa-solid fa-circle-minus", label: "Not configured" },
+  blocked: { tone: "danger", icon: "fa-solid fa-ban", label: "Blocked" },
+  unknown: { tone: "muted", icon: "fa-solid fa-circle-question", label: "Unreadable" },
+  "not-applicable": { tone: "muted", icon: "fa-solid fa-minus", label: "Not applicable" },
+  "not-needed": { tone: "ok", icon: "fa-solid fa-circle-check", label: "Not needed" }
+};
+
+const WIRING_READINESS_META = {
+  ready: { tone: "ok", icon: "fa-solid fa-circle-check" },
+  incomplete: { tone: "warn", icon: "fa-solid fa-triangle-exclamation" },
+  blocked: { tone: "danger", icon: "fa-solid fa-ban" },
+  pending: { tone: "muted", icon: "fa-solid fa-hourglass-half" }
+};
+
+function renderWiringRow({ title, subtitle, state, reason, detail, test }) {
+  const meta = WIRING_STATE_META[state] || WIRING_STATE_META.unknown;
+
+  return `
+    <li class="wiring-row wiring-row-${meta.tone}">
+      <span class="wiring-row-icon" title="${escapeHtml(meta.label)}"><i class="${meta.icon}"></i></span>
+      <span class="wiring-row-body">
+        <span class="wiring-row-title">
+          ${escapeHtml(title)}
+          <span class="wiring-row-state">${escapeHtml(meta.label)}</span>
+        </span>
+        ${subtitle ? `<span class="wiring-row-address"><code>${escapeHtml(subtitle)}</code></span>` : ""}
+        <span class="wiring-row-reason">${escapeHtml(reason || "")}</span>
+        ${detail ? `<span class="wiring-row-reason wiring-row-detail">${escapeHtml(detail)}</span>` : ""}
+        ${test?.ran
+          ? `<span class="wiring-row-reason wiring-row-test-${test.ok ? "ok" : "fail"}">${escapeHtml(
+              test.ok ? `Verified by the app itself: ${test.message}` : `The app's own test failed: ${test.message}`
+            )}</span>`
+          : ""}
+      </span>
+    </li>
+  `;
+}
+
+function renderWiringModal() {
+  if (!ui.wiring?.open) {
+    return "";
+  }
+
+  const report = ui.wiring.report;
+  const verdict = WIRING_READINESS_META[report.readiness] || WIRING_READINESS_META.pending;
+
+  const linkRows = report.links
+    .map((link) =>
+      renderWiringRow({
+        title: `${link.sourceName} → ${link.targetName}`,
+        subtitle: link.address?.baseUrl || null,
+        state: link.state,
+        reason: link.reason,
+        // The address is the part that is easy to get wrong and impossible to
+        // eyeball, so the reasoning behind it is shown rather than hidden.
+        detail: link.addressReason,
+        test: link.test
+      })
+    )
+    .join("");
+
+  const folderRows = report.rootFolders
+    .map((folder) =>
+      renderWiringRow({
+        title: `${folder.name} library folder`,
+        subtitle: folder.actual?.length ? folder.actual.map((entry) => entry.path).join(", ") : folder.expectedPath,
+        state: folder.state,
+        reason: folder.reason,
+        detail: folder.derivedFrom ? `Derived from ${folder.derivedFrom}.` : null
+      })
+    )
+    .join("");
+
+  const mappingRows = report.pathMappings
+    .map((mapping) =>
+      renderWiringRow({
+        title: `${mapping.name} download paths`,
+        subtitle: mapping.mapping ? `${mapping.mapping.remotePath} → ${mapping.mapping.localPath}` : null,
+        state: mapping.state,
+        reason: mapping.reason
+      })
+    )
+    .join("");
+
+  const participantRows = report.participants
+    .map((participant) => {
+      const key = participant.apiKey;
+      const note =
+        key.state === "found"
+          ? `API key read from ${key.source}`
+          : key.state === "unsupported"
+            ? "Stackarr does not need an API key for this app"
+            : key.reason;
+
+      return `
+        <li class="wiring-row wiring-row-${key.state === "found" || key.state === "unsupported" ? "ok" : "warn"}">
+          <span class="wiring-row-icon"><i class="fa-solid fa-key"></i></span>
+          <span class="wiring-row-body">
+            <span class="wiring-row-title">
+              ${escapeHtml(participant.name)}
+              <span class="wiring-row-state">${escapeHtml(participant.topology.kind)}</span>
+            </span>
+            <span class="wiring-row-reason">${escapeHtml(note)}</span>
+            ${participant.controllerLink.ok
+              ? ""
+              : `<span class="wiring-row-reason wiring-row-test-fail">${escapeHtml(participant.controllerLink.reason)}</span>`}
+          </span>
+        </li>
+      `;
+    })
+    .join("");
+
+  return `
+    <div class="modal-backdrop" data-modal-backdrop="wiring">
+      <div class="path-picker-modal wiring-modal" role="dialog" aria-modal="true" aria-label="Stack wiring">
+        <div class="path-picker-header">
+          <div>
+            <div class="path-picker-title">Stack wiring</div>
+            <div class="path-picker-copy">How these apps are connected to each other</div>
+          </div>
+          <button type="button" class="toast-dismiss" data-wiring-close="true" aria-label="Close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="wiring-verdict wiring-verdict-${verdict.tone}">
+          <i class="${verdict.icon}"></i>
+          <span>${escapeHtml(report.readinessMessage)}</span>
+        </div>
+
+        <div class="wiring-section-title">Connections</div>
+        <ul class="wiring-list">${linkRows}</ul>
+
+        <div class="wiring-section-title">Library folders</div>
+        <ul class="wiring-list">${folderRows}</ul>
+
+        ${mappingRows ? `<div class="wiring-section-title">Download paths</div><ul class="wiring-list">${mappingRows}</ul>` : ""}
+
+        <div class="wiring-section-title">Apps</div>
+        <ul class="wiring-list">${participantRows}</ul>
+
+        <div class="removal-preserved">
+          <i class="fa-solid fa-shield-halved"></i>
+          <span>
+            <strong>Nothing was changed.</strong>
+            This is a read-only check. It reads each app's settings and asks the app to run its own connection
+            tests, which is why a passing result means the app really can reach the other one, not just that the
+            address looks right.
+          </span>
+        </div>
+
+        <div class="path-picker-actions" style="justify-content:flex-end;">
+          <button type="button" class="button-default" data-wiring-close="true">Close</button>
+          <button type="button" class="button-primary" data-wiring-action="recheck">Check again</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function closeCutoverDialog() {
   ui.cutover = null;
   render();
@@ -2776,6 +2959,11 @@ appNode.addEventListener("click", (event) => {
         return;
       }
 
+      if (action === "check-wiring") {
+        await runBusy("Checking how the apps are connected...", () => openWiringDialog());
+        return;
+      }
+
       if (action === "upgrade-all") {
         await runBusy("Starting upgrade...", upgradeAll);
         return;
@@ -2857,6 +3045,16 @@ appNode.addEventListener("click", (event) => {
 
   if (backdropKind === "removal") {
     closeRemovalDialog();
+    return;
+  }
+
+  if (backdropKind === "wiring" || event.target.closest("[data-wiring-close]")) {
+    closeWiringDialog();
+    return;
+  }
+
+  if (event.target.closest("[data-wiring-action]")) {
+    runBusy("Checking how the apps are connected...", () => openWiringDialog()).catch(showError);
     return;
   }
 

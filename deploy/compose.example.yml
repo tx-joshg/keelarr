@@ -22,3 +22,14 @@ services:
       - ${HOST_DOWNLOADS_ROOT}:${HOST_DOWNLOADS_ROOT}
       # Remove this line if Plex logs are not available on the host.
       - ${HOST_PLEX_LOGS_ROOT}:${HOST_PLEX_LOGS_ROOT}:ro
+    # Catalog services publish their ports on the host, but many hosts will not
+    # route a container's request back to a port published on that same host.
+    # Joining the shared network lets the controller reach them by container
+    # name instead, which is the only reliable path to their APIs.
+    networks:
+      - stackarr
+
+networks:
+  stackarr:
+    external: true
+    name: stackarr

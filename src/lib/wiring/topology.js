@@ -1,0 +1,305 @@
+import { runCommand } from "../command-runner.js";
+
+/**
+ * How a container is attached to the network, which is what decides the address
+ * every other container must use to reach it.
+ */
+export const ENDPOINT_KIND = Object.freeze({
+  /** network_mode: host — the container listens on the host's own address. */
+  HOST: "host",
+  /** macvlan/ipvlan — the container has its own address on the LAN. */
+  MACVLAN: "macvlan",
+  /** Any bridge network, with or without published ports. */
+  BRIDGE: "bridge",
+  /** network_mode: none, or the container is not running. */
+  NONE: "none"
+});
+
+export const LINK_STRATEGY = Object.freeze({
+  SHARED_NETWORK: "shared-network",
+  MACVLAN_IP: "macvlan-ip",
+  HOST_NETWORK: "host-network",
+  HOST_PUBLISHED: "host-published"
+});
+
+/**
+ * Docker's built-in bridge has no embedded DNS, so container names do not
+ * resolve on it. Two containers sharing only this network are not linkable by
+ * name, even though they technically share a network.
+ */
+const DEFAULT_BRIDGE_NETWORK = "bridge";
+
+/**
+ * Drivers that give a container its own address on the LAN and publish no ports
+ * to the host. `qnet` is QNAP Container Station's macvlan equivalent — it does
+ * not report itself as `macvlan`, so recognizing only the upstream driver names
+ * would classify SABnzbd as an ordinary bridge container and send callers to the
+ * host address instead of its own.
+ *
+ * A driver missing from this list resolves to a blocked link rather than a
+ * guess, which is the safe direction to fail in.
+ */
+const ADDRESSABLE_DRIVERS = new Set(["macvlan", "ipvlan", "qnet"]);
+
+/**
+ * Reads the driver for each named network.
+ *
+ * The driver is the only trustworthy way to recognize macvlan: `docker inspect`
+ * on a container reports the network's *name*, and QNAP happens to prefix its
+ * macvlan networks with `qnet-`. Branching on that prefix works on one vendor's
+ * NAS and silently mis-addresses every other host.
+ */
+export async function inspectNetworkDrivers(settings, names, options = {}) {
+  const unique = [...new Set((names || []).filter(Boolean))];
+  const drivers = new Map();
+
+  if (unique.length === 0) {
+    return drivers;
+  }
+
+  const result = await runCommand(
+    settings.dockerBin,
+    ["network", "inspect", ...unique, "--format", "{{.Name}}|{{.Driver}}"],
+    options
+  );
+
+  if (!result.ok) {
+    return drivers;
+  }
+
+  for (const line of String(result.stdout || "").split("\n")) {
+    const [name, driver] = line.trim().split("|");
+
+    if (name && driver) {
+      drivers.set(name, driver);
+    }
+  }
+
+  return drivers;
+}
+
+function readContainerPort(inspect, fallbackPort) {
+  const exposed = Object.keys(inspect?.Config?.ExposedPorts || {})
+    .filter((entry) => entry.endsWith("/tcp"))
+    .map((entry) => Number.parseInt(entry, 10))
+    .filter((entry) => Number.isFinite(entry));
+
+  // Only trust the image when it names exactly one TCP port. Several ports means
+  // guessing which one serves the API, and the catalog already knows.
+  return exposed.length === 1 ? exposed[0] : fallbackPort;
+}
+
+function readPublished(inspect) {
+  const published = [];
+
+  for (const [containerPort, bindings] of Object.entries(inspect?.NetworkSettings?.Ports || {})) {
+    for (const binding of bindings || []) {
+      if (binding?.HostPort) {
+        published.push({
+          containerPort: Number.parseInt(containerPort, 10),
+          hostIp: binding.HostIp && binding.HostIp !== "0.0.0.0" ? binding.HostIp : null,
+          hostPort: Number.parseInt(binding.HostPort, 10)
+        });
+      }
+    }
+  }
+
+  return published;
+}
+
+function classify(networkMode, networks, running) {
+  if (!running) {
+    return ENDPOINT_KIND.NONE;
+  }
+
+  if (networkMode === "host") {
+    return ENDPOINT_KIND.HOST;
+  }
+
+  if (networkMode === "none") {
+    return ENDPOINT_KIND.NONE;
+  }
+
+  return networks.some((network) => ADDRESSABLE_DRIVERS.has(network.driver))
+    ? ENDPOINT_KIND.MACVLAN
+    : ENDPOINT_KIND.BRIDGE;
+}
+
+/**
+ * Flattens one `docker inspect` result into everything the resolver needs.
+ * `networkDrivers` comes from `inspectNetworkDrivers`.
+ */
+export function buildEndpoint({
+  serviceId,
+  name,
+  containerName,
+  fallbackPort,
+  inspect,
+  networkDrivers = new Map()
+}) {
+  const running = inspect?.State?.Running === true;
+  const networkMode = inspect?.HostConfig?.NetworkMode || "default";
+  const networks = Object.entries(inspect?.NetworkSettings?.Networks || {}).map(([networkName, network]) => ({
+    name: networkName,
+    address: network?.IPAddress || null,
+    driver: networkDrivers.get(networkName) || null
+  }));
+
+  return {
+    serviceId,
+    name: name || serviceId,
+    containerName,
+    running,
+    startedAt: inspect?.State?.StartedAt || null,
+    networkMode,
+    kind: classify(networkMode, networks, running),
+    containerPort: readContainerPort(inspect, fallbackPort),
+    networks,
+    published: readPublished(inspect)
+  };
+}
+
+/**
+ * How long after a container starts its app is still allowed to be silent.
+ *
+ * An Arr writes its config within a second or two but does not accept requests
+ * for appreciably longer. Reporting that gap as a fault means every fresh
+ * install shows red for its first few seconds.
+ */
+const STARTUP_GRACE_MS = 90_000;
+
+export function isStillStarting(endpoint, now = Date.now()) {
+  if (!endpoint?.startedAt) {
+    return false;
+  }
+
+  const startedAt = Date.parse(endpoint.startedAt);
+  return Number.isFinite(startedAt) && now - startedAt < STARTUP_GRACE_MS;
+}
+
+/** The controller is a source like any other, so it gets an endpoint too. */
+export function buildControllerEndpoint(inspect, networkDrivers = new Map()) {
+  return buildEndpoint({
+    serviceId: "stackarr",
+    name: "Stackarr",
+    containerName: "stackarr",
+    fallbackPort: null,
+    inspect,
+    networkDrivers
+  });
+}
+
+function sharedNamedNetwork(source, target) {
+  const sourceNames = new Set(
+    source.networks.filter((network) => network.name !== DEFAULT_BRIDGE_NETWORK).map((network) => network.name)
+  );
+
+  return target.networks.find(
+    (network) => network.name !== DEFAULT_BRIDGE_NETWORK && sourceNames.has(network.name)
+  ) || null;
+}
+
+function macvlanAddress(endpoint) {
+  return endpoint.networks.find(
+    (network) => ADDRESSABLE_DRIVERS.has(network.driver) && network.address
+  )?.address || null;
+}
+
+function publishedBinding(endpoint) {
+  return (
+    endpoint.published.find((entry) => entry.containerPort === endpoint.containerPort) ||
+    endpoint.published[0] ||
+    null
+  );
+}
+
+function blocked(reason) {
+  return { ok: false, blocked: true, baseUrl: null, host: null, port: null, strategy: null, reason };
+}
+
+function linked(strategy, host, port, reason) {
+  return { ok: true, blocked: false, baseUrl: `http://${host}:${port}`, host, port, strategy, reason };
+}
+
+/**
+ * Works out the URL `source` must use to reach `target`.
+ *
+ * Rule order matters more than it looks. A macvlan container publishes no
+ * ports, so any "fall back to the host address" branch placed ahead of rule 3
+ * would compose the host address with the app's port and produce something that
+ * answers — on a QNAP, `<host>:8080` is the NAS admin interface, which returns
+ * 200 and looks exactly like success. Blocked links are reported, never guessed.
+ */
+export function resolveLink(source, target, { hostAddress } = {}) {
+  if (!target.running) {
+    return blocked(`${target.name} is not running, so nothing can reach it yet.`);
+  }
+
+  if (!target.containerPort) {
+    return blocked(`${target.name} does not expose a port that Stackarr can identify.`);
+  }
+
+  if (target.kind === ENDPOINT_KIND.HOST) {
+    if (!hostAddress) {
+      return blocked(`${target.name} uses host networking, but no host address is configured for this stack.`);
+    }
+
+    return linked(
+      LINK_STRATEGY.HOST_NETWORK,
+      hostAddress,
+      target.containerPort,
+      `${target.name} uses host networking, so it answers on the host address at port ${target.containerPort}.`
+    );
+  }
+
+  const shared = sharedNamedNetwork(source, target);
+
+  if (shared) {
+    return linked(
+      LINK_STRATEGY.SHARED_NETWORK,
+      target.containerName,
+      target.containerPort,
+      `${source.name} and ${target.name} share the ${shared.name} network, so ${target.name} resolves by container name.`
+    );
+  }
+
+  if (target.kind === ENDPOINT_KIND.MACVLAN) {
+    const address = macvlanAddress(target);
+
+    if (!address) {
+      return blocked(`${target.name} is on a macvlan network but has no address assigned.`);
+    }
+
+    return linked(
+      LINK_STRATEGY.MACVLAN_IP,
+      address,
+      target.containerPort,
+      `${target.name} is on the macvlan network ${target.networkMode} and answers on its own address. The host address is not used, because ${target.name} publishes no ports to it.`
+    );
+  }
+
+  const binding = publishedBinding(target);
+
+  if (!binding) {
+    return blocked(
+      `${target.name} publishes no ports and shares no network with ${source.name}, so there is no address that reaches it.`
+    );
+  }
+
+  if (source.kind === ENDPOINT_KIND.BRIDGE) {
+    return blocked(
+      `${source.name} and ${target.name} are on separate Docker bridge networks, and this host does not route a container's request back to a port published on the host. Put both containers on the stackarr network, or move one to host networking.`
+    );
+  }
+
+  if (!binding.hostIp && !hostAddress) {
+    return blocked(`${target.name} publishes a port, but no host address is configured for this stack.`);
+  }
+
+  return linked(
+    LINK_STRATEGY.HOST_PUBLISHED,
+    binding.hostIp || hostAddress,
+    binding.hostPort,
+    `${target.name} publishes port ${binding.containerPort} on the host as ${binding.hostPort}, and ${source.name} can reach the host directly.`
+  );
+}

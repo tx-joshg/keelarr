@@ -787,6 +787,111 @@ export class DemoStackarrAppService {
     return { ok: true, job: buildJobSnapshot(job) };
   }
 
+  /**
+   * The demo stack is all one Compose project on a shared network, which is the
+   * clean case: every app resolves the others by container name and nothing is
+   * blocked. The messier states are exercised by the unit tests, not here.
+   */
+  async describeWiring() {
+    const settings = normalizeSettings(this.demo.settings);
+    const acquirers = ["radarr", "sonarr", "lidarr"].filter((id) => settings.services[id]);
+    const has = (id) => Boolean(settings.services[id]);
+    const folder = { radarr: "Movies", sonarr: "TV", lidarr: "Music" };
+    const passed = { ran: true, ok: true, message: "1 connection test passed." };
+
+    const links = [
+      ...acquirers.map((id) => ({
+        id: `${id}->sabnzbd:downloadclient`,
+        kind: "download-client",
+        source: id,
+        sourceName: settings.services[id].name,
+        target: "sabnzbd",
+        targetName: "SABnzbd",
+        ...(has("sabnzbd")
+          ? {
+              state: "correct",
+              address: { baseUrl: "http://sabnzbd:8080", host: "sabnzbd", port: 8080, strategy: "shared-network" },
+              addressReason: `${settings.services[id].name} and SABnzbd share the stackarr network, so SABnzbd resolves by container name.`,
+              actual: { id: 1, name: "SABnzbd", enabled: true, host: "sabnzbd", port: 8080 },
+              changes: [],
+              reason: "The SABnzbd download client is already configured correctly.",
+              test: passed
+            }
+          : { state: "not-applicable", reason: "SABnzbd is not part of this stack." })
+      })),
+      ...acquirers.map((id) => ({
+        id: `prowlarr->${id}:application`,
+        kind: "indexer-app",
+        source: "prowlarr",
+        sourceName: "Prowlarr",
+        target: id,
+        targetName: settings.services[id].name,
+        ...(has("prowlarr")
+          ? {
+              state: "correct",
+              address: {
+                baseUrl: `http://${id}:${settings.services[id].port}`,
+                prowlarrUrl: "http://prowlarr:9696",
+                strategy: "shared-network"
+              },
+              addressReason: `Prowlarr and ${settings.services[id].name} share the stackarr network.`,
+              actual: { id: 2, name: settings.services[id].name, implementation: settings.services[id].name, baseUrl: `http://${id}:${settings.services[id].port}` },
+              changes: [],
+              reason: `${settings.services[id].name} in Prowlarr is already configured correctly.`,
+              test: passed
+            }
+          : { state: "not-applicable", reason: "Prowlarr is not part of this stack, so nothing syncs indexers into this app." })
+      }))
+    ];
+
+    const rootFolders = acquirers.map((id) => ({
+      serviceId: id,
+      name: settings.services[id].name,
+      state: "correct",
+      expectedPath: `/Media/${folder[id]}`,
+      derivedFrom: "the /Media mount",
+      actual: [{ path: `/Media/${folder[id]}`, accessible: true }],
+      reason: `A root folder is configured at /Media/${folder[id]}.`
+    }));
+
+    const counted = links.filter((link) => link.state !== "not-applicable").length + rootFolders.length;
+
+    return {
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      participants: settings.selectedServiceIds.map((id) => ({
+        serviceId: id,
+        name: settings.services[id].name,
+        running: true,
+        topology: { kind: "bridge", networkMode: "stackarr", containerPort: settings.services[id].port },
+        apiKey: ["radarr", "sonarr", "lidarr", "prowlarr"].includes(id)
+          ? { found: true, state: "found", source: "/config/config.xml", fingerprint: "demo1234" }
+          : id === "sabnzbd"
+            ? { found: true, state: "found", source: "/config/sabnzbd.ini", fingerprint: "demo5678" }
+            : { found: false, state: "unsupported", reason: `Stackarr does not read an API key for ${settings.services[id].name}.` },
+        controllerLink: {
+          ok: true,
+          baseUrl: `http://${id}:${settings.services[id].port}`,
+          strategy: "shared-network",
+          reason: `Stackarr and ${settings.services[id].name} share the stackarr network.`
+        },
+        downloads: id === "sabnzbd" ? { completeDir: "/Media/Downloads/complete", hostWhitelist: ["sabnzbd"] } : null
+      })),
+      links,
+      rootFolders,
+      pathMappings: acquirers.map((id) => ({
+        serviceId: id,
+        name: settings.services[id].name,
+        state: "not-needed",
+        mapping: null,
+        reason: "The download client and this app both see completed downloads at /Media/Downloads/complete, so no mapping is required."
+      })),
+      summary: { total: counted, correct: counted, drift: 0, ambiguous: 0, absent: 0, blocked: 0, unknown: 0 },
+      readiness: "ready",
+      readinessMessage: `Stack ready. All ${counted} connections are configured correctly.`
+    };
+  }
+
   async describeRemoval(serviceId) {
     const settings = normalizeSettings(this.demo.settings);
     const service = this.requireService(settings, serviceId);

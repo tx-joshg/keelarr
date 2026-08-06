@@ -165,6 +165,14 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.get("/api/wiring/check", async (request, response, next) => {
+    try {
+      response.json(await stackarrApp.describeWiring(requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/services/:serviceId/removal-preview", async (request, response, next) => {
     try {
       response.json(await stackarrApp.describeRemoval(request.params.serviceId, requestContext(request)));
