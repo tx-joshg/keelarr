@@ -32,11 +32,11 @@ export const REMOVE_STEPS = [
  */
 const DEPENDENTS = {
   prowlarr: {
-    affects: ["radarr", "sonarr", "lidarr", "readarr"],
+    affects: ["radarr", "sonarr", "lidarr"],
     note: "These apps get their indexers from Prowlarr and will stop finding releases."
   },
   sabnzbd: {
-    affects: ["radarr", "sonarr", "lidarr", "readarr"],
+    affects: ["radarr", "sonarr", "lidarr"],
     note: "These apps send downloads to SABnzbd and will have no download client."
   }
 };

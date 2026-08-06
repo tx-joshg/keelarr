@@ -10,7 +10,6 @@ This MVP is built around:
 - Radarr
 - Sonarr
 - Lidarr
-- Readarr
 - Bazarr
 - Trailarr
 - Ombi
@@ -377,7 +376,6 @@ Current port/image defaults in the MVP are aligned with mainstream current Docke
 - `Radarr`: `7878`
 - `Sonarr`: `8989`
 - `Lidarr`: `8686`
-- `Readarr`: `8787`
 - `Prowlarr`: `9696`
 - `Bazarr`: `6767`
 - `Trailarr`: `7889`

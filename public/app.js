@@ -8,7 +8,6 @@ const appOrder = [
   "tautulli",
   "sabnzbd",
   "lidarr",
-  "readarr"
 ];
 
 const state = {

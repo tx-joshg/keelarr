@@ -78,3 +78,14 @@ test("backup retention treats non-positive values as keep-all, not keep-none", (
   // Bounded so a typo cannot request thousands of snapshots.
   assert.equal(sanitizeBackupRetention(9999), 50);
 });
+
+test("a stored selection naming a retired service is dropped, not carried forward", () => {
+  // Readarr was removed from the catalog. Keeping the id would build no
+  // service object for it, and the dashboard would read properties off
+  // undefined on the next load.
+  const settings = normalizeSettings({ selectedServiceIds: ["radarr", "readarr", "sonarr"] });
+
+  assert.deepEqual(settings.selectedServiceIds, ["radarr", "sonarr"]);
+  assert.equal(settings.services.readarr, undefined);
+  assert.ok(settings.services.radarr);
+});

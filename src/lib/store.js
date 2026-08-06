@@ -7,7 +7,7 @@ import {
   settingsPath,
   updatesPath
 } from "./data-paths.js";
-import { buildServicesFromSelection } from "./service-catalog.js";
+import { SERVICE_ORDER, buildServicesFromSelection } from "./service-catalog.js";
 
 export const defaultSettings = {
   initialized: false,
@@ -88,7 +88,11 @@ function sanitizeSelectedServiceIds(value) {
     return defaultSettings.selectedServiceIds;
   }
 
-  return [...new Set(value.filter((item) => typeof item === "string" && item.length > 0))];
+  // Drop ids that are no longer in the catalog. A stored selection naming a
+  // retired service would otherwise build no service object for it, and the
+  // dashboard would crash reading properties off undefined.
+  const known = new Set(SERVICE_ORDER);
+  return [...new Set(value.filter((item) => typeof item === "string" && known.has(item)))];
 }
 
 function sanitizeServiceOverrides(value) {
