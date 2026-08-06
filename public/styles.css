@@ -1584,7 +1584,6 @@ table {
 
 .chip-icon {
   font-size: 15px;
-  cursor: help;
 }
 
 .chip-icon-good { color: var(--success-background); }
@@ -1592,9 +1591,9 @@ table {
 .chip-icon-danger { color: var(--danger-color); }
 .chip-icon-idle { color: var(--gray-icon); }
 
-.version-current { color: var(--success-background); cursor: help; }
-.version-stale { color: var(--danger-color); cursor: help; }
-.version-unknown { color: var(--help-text); cursor: help; }
+.version-current { color: var(--success-background); }
+.version-stale { color: var(--danger-color); }
+.version-unknown { color: var(--help-text); }
 
 .row-menu-wrap {
   position: relative;
