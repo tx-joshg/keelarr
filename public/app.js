@@ -1763,6 +1763,24 @@ function renderPathPicker() {
   `;
 }
 
+/**
+ * One place, because the panel title and the completion toast both need it and
+ * a new job kind that reaches only one of them silently reports itself as a
+ * cutover.
+ */
+const JOB_KIND_LABELS = {
+  remove: "Removal",
+  rollback: "Rollback",
+  "upgrade-all": "Upgrade All",
+  "cutover-revert": "Revert",
+  wiring: "Wiring",
+  cutover: "Cutover"
+};
+
+function jobKindLabel(kind) {
+  return JOB_KIND_LABELS[kind] || JOB_KIND_LABELS.cutover;
+}
+
 const JOB_STEP_ICONS = {
   pending: { icon: "fa-regular fa-circle", tone: "idle" },
   running: { icon: "fa-solid fa-spinner fa-spin", tone: "info" },
@@ -1846,13 +1864,7 @@ function renderJobPanel() {
     })
     .join("");
 
-  const title = job.kind === "remove"
-    ? "Remove"
-    : job.kind === "rollback"
-      ? "Rollback"
-    : job.kind === "upgrade-all"
-      ? "Upgrade All"
-      : job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const title = jobKindLabel(job.kind);
   const subject = job.result?.serviceName
     || job.subject?.serviceId
     || job.subject?.containerId
@@ -2438,7 +2450,7 @@ function renderRemovalModal() {
 }
 
 async function openWiringDialog() {
-  ui.wiring = { open: true, report: await request("/api/wiring/check") };
+  ui.wiring = { open: true, report: await request("/api/wiring/check"), submitting: false, error: null };
   render();
 }
 
@@ -2607,13 +2619,83 @@ function renderWiringModal() {
           </span>
         </div>
 
+        ${renderWiringApply(report)}
+
         <div class="path-picker-actions" style="justify-content:flex-end;">
           <button type="button" class="button-default" data-wiring-close="true">Close</button>
-          <button type="button" class="button-primary" data-wiring-action="recheck">Check again</button>
+          <button type="button" class="button-default" data-wiring-action="recheck">Check again</button>
+          ${wiringActionable(report).length
+            ? `<button type="button" class="button-primary" data-wiring-action="apply" ${ui.wiring.submitting ? "disabled" : ""}>
+                 ${ui.wiring.submitting ? "Configuring..." : `Configure ${wiringActionable(report).length}`}
+               </button>`
+            : ""}
         </div>
       </div>
     </div>
   `;
+}
+
+/**
+ * Only genuinely missing connections are offered. Drift and ambiguity are shown
+ * in the report above but never included here — Stackarr does not overwrite a
+ * configuration someone made on purpose.
+ */
+function wiringActionable(report) {
+  return [
+    ...report.links.filter((link) => link.state === "absent").map((link) => `${link.sourceName} → ${link.targetName}`),
+    ...report.rootFolders
+      .filter((folder) => folder.state === "absent")
+      .map((folder) => `${folder.name} library folder ${folder.expectedPath}`)
+  ];
+}
+
+function renderWiringApply(report) {
+  const items = wiringActionable(report);
+  const held = [
+    ...report.links.filter((link) => link.state === "drift" || link.state === "ambiguous"),
+    ...report.rootFolders.filter((folder) => folder.state === "drift")
+  ];
+
+  if (!items.length && !held.length) {
+    return "";
+  }
+
+  return `
+    <div class="wiring-apply">
+      ${items.length
+        ? `<div class="wiring-section-title" style="margin-top:0;">Stackarr can configure</div>
+           <ul class="removal-list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+           <div class="wiring-row-reason">Each one is tested against the app before it is saved, so a connection that
+           would not work is refused rather than written.</div>`
+        : ""}
+      ${held.length
+        ? `<div class="wiring-section-title">Left alone</div>
+           <ul class="removal-list">${held
+             .map((entry) => `<li>${escapeHtml(entry.sourceName ? `${entry.sourceName} → ${entry.targetName}` : entry.name)} — ${escapeHtml(entry.reason)}</li>`)
+             .join("")}</ul>
+           <div class="wiring-row-reason">These already exist and point somewhere else. Change them in the app itself if
+           that is not what you want.</div>`
+        : ""}
+    </div>
+  `;
+}
+
+async function submitWiring() {
+  ui.wiring.submitting = true;
+  render();
+
+  try {
+    const data = await request("/api/wiring/apply", { method: "POST", body: JSON.stringify({}) });
+    ui.wiring = null;
+    ui.job = data.job;
+    render();
+    await pollJob(data.job.id);
+  } catch (error) {
+    ui.wiring.submitting = false;
+    ui.wiring.error = error.message;
+    render();
+    throw error;
+  }
 }
 
 function closeCutoverDialog() {
@@ -2724,13 +2806,7 @@ async function pollJob(jobId) {
     await scanImports(true);
   }
 
-  const label = data.job.kind === "remove"
-    ? "Removal"
-    : data.job.kind === "rollback"
-      ? "Rollback"
-      : data.job.kind === "upgrade-all"
-        ? "Upgrade All"
-        : data.job.kind === "cutover-revert" ? "Revert" : "Cutover";
+  const label = jobKindLabel(data.job.kind);
   const unverified = data.job.result?.outcome === "unverified";
 
   showToast(
@@ -3053,8 +3129,13 @@ appNode.addEventListener("click", (event) => {
     return;
   }
 
-  if (event.target.closest("[data-wiring-action]")) {
-    runBusy("Checking how the apps are connected...", () => openWiringDialog()).catch(showError);
+  const wiringAction = event.target.closest("[data-wiring-action]");
+  if (wiringAction) {
+    if (wiringAction.dataset.wiringAction === "apply") {
+      submitWiring().catch(showError);
+    } else {
+      runBusy("Checking how the apps are connected...", () => openWiringDialog()).catch(showError);
+    }
     return;
   }
 

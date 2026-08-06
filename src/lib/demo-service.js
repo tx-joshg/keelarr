@@ -792,6 +792,14 @@ export class DemoStackarrAppService {
    * clean case: every app resolves the others by container name and nothing is
    * blocked. The messier states are exercised by the unit tests, not here.
    */
+  /**
+   * The demo stack always reports as fully wired, so there is never anything to
+   * apply. Saying so is more honest than pretending to configure something.
+   */
+  async startWiring() {
+    throw new StackarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
+  }
+
   async describeWiring() {
     const settings = normalizeSettings(this.demo.settings);
     const acquirers = ["radarr", "sonarr", "lidarr"].filter((id) => settings.services[id]);

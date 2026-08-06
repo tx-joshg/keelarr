@@ -237,7 +237,7 @@ Each connection is reported in one of six states:
 
 `pending` is deliberately distinct from `absent`. A freshly installed app writes `config.xml` a few seconds after first start, and reporting that as missing turns a normal startup into a false alarm.
 
-Identity is matched on implementation plus address, never on the entry's name — users rename these — and API keys are never persisted, never logged, and never returned by the API. The check reports only the key's source file and a truncated `sha256` fingerprint.
+Identity is matched on implementation plus address, never on the entry's name — users rename these — and API keys are never persisted, never logged, and never returned by the API. The check reports only the key's source file and a truncated `sha256` fingerprint. Objects fetched from an app are re-projected field by field rather than passed through, so what reaches the response is always a decision rather than whatever the remote app happened to send.
 
 ## What Is Still Deliberately Missing
 

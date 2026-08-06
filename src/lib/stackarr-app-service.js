@@ -45,6 +45,7 @@ export class StackarrAppService {
     // One registry across all services so /api/jobs shows every job kind.
     this.managedStackService.jobs = this.cutoverService.jobs;
     this.removalService.jobs = this.cutoverService.jobs;
+    this.wiringService.jobs = this.cutoverService.jobs;
     this.dashboardService.managedStackService = this.managedStackService;
   }
 
@@ -191,6 +192,13 @@ export class StackarrAppService {
 
   async describeWiring(context = {}) {
     return this.wiringService.describeWiring(context);
+  }
+
+  async startWiring(input = {}, context = {}) {
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.wiringService.startWiring(input, context))
+    };
   }
 
   async describeRemoval(serviceId, context = {}) {

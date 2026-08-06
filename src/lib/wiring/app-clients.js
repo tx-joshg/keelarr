@@ -124,5 +124,29 @@ export const arrApi = {
   listApplications: (base, key) => arrRequest(base, key, { path: "/api/v1/applications" }),
   testAllDownloadClients: (serviceId, base, key) =>
     arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient/testall") }),
-  testAllApplications: (base, key) => arrRequest(base, key, { method: "POST", path: "/api/v1/applications/testall" })
+  testAllApplications: (base, key) => arrRequest(base, key, { method: "POST", path: "/api/v1/applications/testall" }),
+
+  // --- writes ---
+  //
+  // The schema endpoints matter: an app's field list changes between versions,
+  // so payloads are built by patching values into the template the app itself
+  // hands out rather than from a list written here.
+  downloadClientSchema: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "downloadclient/schema") }),
+  applicationSchema: (base, key) => arrRequest(base, key, { path: "/api/v1/applications/schema" }),
+
+  // Test endpoints take a full candidate body rather than an id, so a payload
+  // can be checked before it is written. Note that Arr apps validate on save
+  // anyway — these calls exist to fail early with a clearer message, not to
+  // substitute for that.
+  testDownloadClient: (serviceId, base, key, body) =>
+    arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient/test"), body, timeoutMs: 25_000 }),
+  testApplication: (base, key, body) =>
+    arrRequest(base, key, { method: "POST", path: "/api/v1/applications/test", body, timeoutMs: 25_000 }),
+
+  createDownloadClient: (serviceId, base, key, body) =>
+    arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient"), body, timeoutMs: 25_000 }),
+  createApplication: (base, key, body) =>
+    arrRequest(base, key, { method: "POST", path: "/api/v1/applications", body, timeoutMs: 25_000 }),
+  createRootFolder: (serviceId, base, key, folderPath) =>
+    arrRequest(base, key, { method: "POST", path: api(serviceId, "rootfolder"), body: { path: folderPath } })
 };

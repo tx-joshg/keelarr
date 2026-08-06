@@ -1810,3 +1810,10 @@ table {
 .wiring-row-test-fail {
   color: var(--danger-color);
 }
+
+.wiring-apply {
+  margin-top: 18px;
+  border: 1px solid var(--default-border);
+  border-radius: 4px;
+  padding: 12px;
+}

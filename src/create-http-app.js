@@ -173,6 +173,14 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.post("/api/wiring/apply", async (request, response, next) => {
+    try {
+      response.status(202).json(await stackarrApp.startWiring(request.body || {}, requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/services/:serviceId/removal-preview", async (request, response, next) => {
     try {
       response.json(await stackarrApp.describeRemoval(request.params.serviceId, requestContext(request)));

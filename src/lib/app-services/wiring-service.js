@@ -1,5 +1,8 @@
 import { createLogger } from "../logger.js";
-import { loadSettings } from "../store.js";
+import { StackarrError } from "../errors.js";
+import { JobRegistry } from "../jobs.js";
+import { appendActivity, loadSettings } from "../store.js";
+import { buildApplicationPayload, buildDownloadClientPayload, describeValidation } from "../wiring/payloads.js";
 import { inspectContainers } from "../runtime.js";
 import { arrApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
@@ -21,6 +24,14 @@ const ACQUIRERS = ["radarr", "sonarr", "lidarr"];
 /** How each acquirer identifies itself to Prowlarr. */
 const PROWLARR_IMPLEMENTATION = { radarr: "Radarr", sonarr: "Sonarr", lidarr: "Lidarr" };
 
+export const WIRING_STEPS = [
+  { name: "plan", label: "Work out what needs to change" },
+  { name: "downloadclients", label: "Add the download client to each app" },
+  { name: "rootfolders", label: "Add library folders" },
+  { name: "applications", label: "Register the apps with Prowlarr" },
+  { name: "verify", label: "Run each app's own connection tests" }
+];
+
 const READINESS = Object.freeze({
   READY: "ready",
   INCOMPLETE: "incomplete",
@@ -39,9 +50,11 @@ function hostAddressFrom(settings) {
 /**
  * Explicit projection rather than a spread.
  *
- * An Arr's download-client response carries the download client's own API key
- * in `fields[].value`, so passing a fetched object through to the response
- * would publish SABnzbd's key on `/api/wiring/check`.
+ * Arr apps mask fields marked `privacy: "apiKey"` in their schema, returning
+ * `********` instead of the value, so a spread would not leak today. Naming
+ * every field we publish is still the rule: the masking is the remote app's
+ * behaviour to change, not ours, and it does not hold for every field on every
+ * endpoint. Whatever crosses into the response is a decision, not a default.
  */
 function describeDownloadClient(client) {
   if (!client) {
@@ -87,16 +100,20 @@ function describeApplication(application) {
 
 export class WiringService {
   constructor({
+    appendActivityImpl = appendActivity,
     arrApiImpl = arrApi,
     hostProfileService = null,
     inspectContainersImpl = inspectContainers,
     inspectNetworkDriversImpl = inspectNetworkDrivers,
+    jobs = null,
     loadSettingsImpl = loadSettings,
     logger = defaultLogger,
     nowImpl = () => Date.now(),
     readApiKeyImpl = readApiKey
   } = {}) {
     this.now = nowImpl;
+    this.appendActivity = appendActivityImpl;
+    this.jobs = jobs;
     this.arrApi = arrApiImpl;
     this.hostProfileService = hostProfileService;
     this.inspectContainers = inspectContainersImpl;
@@ -124,6 +141,15 @@ export class WiringService {
    * which run each app's own connection tests against its existing config.
    */
   async describeWiring(context = {}) {
+    return (await this.gather(context)).report;
+  }
+
+  /**
+   * Reads everything once and returns both the public report and the internals
+   * the apply job needs. Applying re-gathers rather than trusting a report the
+   * caller sends back, so a stale browser tab cannot direct a write.
+   */
+  async gather(context = {}) {
     const logger = this.scopedLogger(context);
     const settings = await this.loadSettings();
     const hostAddress = hostAddressFrom(settings);
@@ -228,14 +254,290 @@ export class WiringService {
     const pathMappings = this.checkPathMappings(services, endpoints, mounts, hostAddress, downloadDirs?.completeDir);
 
     return {
-      ok: true,
-      checkedAt: new Date().toISOString(),
-      participants,
-      links,
-      rootFolders,
-      pathMappings,
-      ...this.summarize(links, rootFolders, participants)
+      settings,
+      hostAddress,
+      services,
+      endpoints,
+      mounts,
+      keys,
+      current,
+      logger,
+      report: {
+        ok: true,
+        checkedAt: new Date(this.now()).toISOString(),
+        participants,
+        links,
+        rootFolders,
+        pathMappings,
+        ...this.summarize(links, rootFolders, participants)
+      }
     };
+  }
+
+  requireJobs() {
+    if (!this.jobs) {
+      this.jobs = new JobRegistry({ logger: this.logger, persist: true });
+    }
+
+    return this.jobs;
+  }
+
+  /**
+   * Stack-level, so the subject carries no service id. `subjectKey` in the job
+   * registry then yields `wiring:`, which makes wiring exclusive with itself
+   * and non-conflicting with per-service jobs. That is what we want here.
+   */
+  startWiring(input = {}, context = {}) {
+    const job = this.requireJobs().create({ kind: "wiring", subject: { scope: "stack" }, steps: WIRING_STEPS });
+    return this.jobs.start(job, (ctx) => this.runWiring(ctx, input, context));
+  }
+
+  async runWiring(ctx, input, context) {
+    let plan = null;
+
+    await ctx.step("plan", async () => {
+      const gathered = await this.gather(context);
+      // Only what is genuinely missing. Drift, ambiguity, and blocked links are
+      // reported by the check and deliberately never written by this job.
+      const actionable = {
+        downloadClients: gathered.report.links.filter(
+          (link) => link.kind === "download-client" && link.state === RECONCILE_STATE.ABSENT
+        ),
+        applications: gathered.report.links.filter(
+          (link) => link.kind === "indexer-app" && link.state === RECONCILE_STATE.ABSENT
+        ),
+        rootFolders: gathered.report.rootFolders.filter((folder) => folder.state === RECONCILE_STATE.ABSENT)
+      };
+      const total =
+        actionable.downloadClients.length + actionable.applications.length + actionable.rootFolders.length;
+
+      if (total === 0) {
+        throw new StackarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
+      }
+
+      plan = { ...gathered, actionable };
+      return { detail: `${total} connection${total === 1 ? "" : "s"} to configure.` };
+    });
+
+    const { keys, current, logger } = plan;
+    const created = [];
+    const skipped = [];
+
+    await this.applyDownloadClients(ctx, plan, created, logger);
+    await this.applyRootFolders(ctx, plan, created, logger);
+    await this.applyApplications(ctx, plan, created, skipped, logger);
+
+    const verification = await ctx.step("verify", async () => {
+      const results = [];
+
+      for (const serviceId of new Set(created.map((entry) => entry.serviceId))) {
+        const link = current.get(serviceId)?.baseUrl;
+        const key = keys.get(serviceId);
+
+        if (!link || !key) {
+          continue;
+        }
+
+        const outcome =
+          serviceId === "prowlarr"
+            ? await this.runTests(() => this.arrApi.testAllApplications(link, key))
+            : await this.runTests(() => this.arrApi.testAllDownloadClients(serviceId, link, key));
+        results.push({ serviceId, ...outcome });
+      }
+
+      const failed = results.filter((entry) => !entry.ok);
+      return {
+        detail: failed.length
+          ? `${failed.length} app reported a failing connection.`
+          : `Every app confirmed its connections.`,
+        results
+      };
+    });
+
+    await this.appendActivity({
+      kind: "wiring-apply",
+      level: verification.results.some((entry) => !entry.ok) ? "warn" : "info",
+      message: `Configured ${created.length} connection${created.length === 1 ? "" : "s"} across the stack.`,
+      details: { created: created.map((entry) => entry.label) }
+    });
+
+    logger.info("wiring.applied", { created: created.length, skipped: skipped.length });
+
+    return {
+      created: created.map((entry) => entry.label),
+      skipped,
+      verification: verification.results,
+      summary: `Configured ${created.length} connection${created.length === 1 ? "" : "s"}.`
+    };
+  }
+
+  /**
+   * Builds the payload from the app's own schema, tests it, then writes it.
+   *
+   * The API key is supplied from the file we read it out of rather than copied
+   * from anything the app returned: Arr apps mask secret fields on read, and a
+   * client created from a masked value stores the mask and gets 403 forever.
+   */
+  async applyDownloadClients(ctx, plan, created, logger) {
+    const { actionable, current, keys } = plan;
+
+    if (actionable.downloadClients.length === 0) {
+      ctx.skip("downloadclients", "Every app already has its download client configured.");
+      return;
+    }
+
+    await ctx.step("downloadclients", async () => {
+      const downloadKey = keys.get("sabnzbd");
+
+      if (!downloadKey) {
+        throw new StackarrError("SABnzbd's API key could not be read, so no download client can be configured.", {
+          statusCode: 422
+        });
+      }
+
+      for (const link of actionable.downloadClients) {
+        const base = current.get(link.source)?.baseUrl;
+        const key = keys.get(link.source);
+        const schema = await this.arrApi.downloadClientSchema(link.source, base, key);
+
+        if (!schema.ok) {
+          throw new StackarrError(`${link.sourceName} would not describe its download client options: ${schema.error}`, {
+            statusCode: 502
+          });
+        }
+
+        const payload = buildDownloadClientPayload(schema.data, {
+          name: "SABnzbd",
+          host: link.address.host,
+          port: link.address.port,
+          apiKey: downloadKey
+        });
+
+        await this.writeChecked({
+          label: `${link.sourceName} → SABnzbd`,
+          test: () => this.arrApi.testDownloadClient(link.source, base, key, payload),
+          create: () => this.arrApi.createDownloadClient(link.source, base, key, payload),
+          serviceId: link.source,
+          created,
+          logger
+        });
+      }
+
+      return { detail: `Configured ${actionable.downloadClients.length}.` };
+    });
+  }
+
+  async applyRootFolders(ctx, plan, created, logger) {
+    const { actionable, current, keys } = plan;
+
+    if (actionable.rootFolders.length === 0) {
+      ctx.skip("rootfolders", "Every app already has a library folder inside the media mount.");
+      return;
+    }
+
+    await ctx.step("rootfolders", async () => {
+      for (const folder of actionable.rootFolders) {
+        const result = await this.arrApi.createRootFolder(
+          folder.serviceId,
+          current.get(folder.serviceId)?.baseUrl,
+          keys.get(folder.serviceId),
+          folder.expectedPath
+        );
+
+        if (!result.ok) {
+          throw new StackarrError(`${folder.name} rejected the library folder ${folder.expectedPath}: ${result.error}`, {
+            statusCode: 502
+          });
+        }
+
+        created.push({ serviceId: folder.serviceId, label: `${folder.name} library folder ${folder.expectedPath}` });
+        logger.info("wiring.rootfolder.created", { serviceId: folder.serviceId, path: folder.expectedPath });
+      }
+
+      return { detail: `Added ${actionable.rootFolders.length}.` };
+    });
+  }
+
+  async applyApplications(ctx, plan, created, skipped, logger) {
+    const { actionable, current, keys } = plan;
+
+    if (actionable.applications.length === 0) {
+      ctx.skip("applications", "Prowlarr already knows about every app, or is not part of this stack.");
+      return;
+    }
+
+    await ctx.step("applications", async () => {
+      const base = current.get("prowlarr")?.baseUrl;
+      const key = keys.get("prowlarr");
+      const schema = await this.arrApi.applicationSchema(base, key);
+
+      if (!schema.ok) {
+        throw new StackarrError(`Prowlarr would not describe its application options: ${schema.error}`, {
+          statusCode: 502
+        });
+      }
+
+      for (const link of actionable.applications) {
+        const targetKey = keys.get(link.target);
+
+        if (!targetKey) {
+          skipped.push(`${link.targetName} — its API key could not be read.`);
+          continue;
+        }
+
+        const payload = buildApplicationPayload(schema.data, {
+          implementation: PROWLARR_IMPLEMENTATION[link.target],
+          name: link.targetName,
+          prowlarrUrl: link.address.prowlarrUrl,
+          baseUrl: link.address.baseUrl,
+          apiKey: targetKey
+        });
+
+        await this.writeChecked({
+          label: `Prowlarr → ${link.targetName}`,
+          test: () => this.arrApi.testApplication(base, key, payload),
+          create: () => this.arrApi.createApplication(base, key, payload),
+          serviceId: "prowlarr",
+          created,
+          logger
+        });
+      }
+
+      return { detail: `Registered ${created.filter((entry) => entry.serviceId === "prowlarr").length}.` };
+    });
+  }
+
+  /**
+   * Test, then write.
+   *
+   * Arr apps validate on save too, so this is not the only guard — but testing
+   * first means a refusal is reported against the thing we were about to do,
+   * with the app's own description of why, instead of surfacing as a bare 400
+   * from a write that already half-happened. `forceSave` is never used: an app
+   * refusing a config it cannot reach is correct, and overriding that is how
+   * you end up with settings that look right and never work.
+   */
+  async writeChecked({ label, test, create, serviceId, created, logger }) {
+    const tested = await test();
+
+    if (!tested.ok) {
+      throw new StackarrError(`${label} was not configured: ${tested.error}`, { statusCode: 422 });
+    }
+
+    const rejection = describeValidation(tested.data);
+
+    if (rejection) {
+      throw new StackarrError(`${label} was not configured: ${rejection}`, { statusCode: 422 });
+    }
+
+    const result = await create();
+
+    if (!result.ok) {
+      throw new StackarrError(`${label} could not be saved: ${result.error}`, { statusCode: 502 });
+    }
+
+    created.push({ serviceId, label });
+    logger.info("wiring.created", { label });
   }
 
   /** One authenticated read per app, reused by every check below. */
@@ -246,7 +548,15 @@ export class WiringService {
       const endpoint = endpoints.get(service.id);
       const key = keys.get(service.id);
       const link = resolveLink(controller, endpoint, { hostAddress });
-      const entry = { reachable: false, error: null, downloadClients: [], rootFolders: [], applications: [], tests: null };
+      const entry = {
+        reachable: false,
+        error: null,
+        baseUrl: link.ok ? link.baseUrl : null,
+        downloadClients: [],
+        rootFolders: [],
+        applications: [],
+        tests: null
+      };
 
       if (!speaksArrApi(service.id) || !key || !link.ok) {
         entry.error = link.ok ? null : link.reason;

@@ -84,7 +84,10 @@ function sabClient(host = "198.51.100.10", port = 8080) {
     fields: [
       { name: "host", value: host },
       { name: "port", value: port },
-      // The Arr API really does return the download client's own key here.
+      // A real Arr masks this as "********". Seeding the actual key makes the
+      // fixture hostile on purpose: if the projection is ever loosened to a
+      // spread, the leak test below fails rather than passing by the remote
+      // app's good manners.
       { name: "apiKey", value: SAB_KEY },
       { name: "movieCategory", value: "movies" }
     ]
@@ -279,9 +282,7 @@ test("no API key ever reaches the response", async () => {
   const payload = JSON.stringify(await service.describeWiring());
 
   assert.ok(!payload.includes(RADARR_KEY), "the Arr's own key leaked");
-  // The Arr's download-client response carries SABnzbd's key in fields[].value,
-  // so a pass-through of the fetched object would publish it here.
-  assert.ok(!payload.includes(SAB_KEY), "SABnzbd's key leaked through the fetched download client");
+  assert.ok(!payload.includes(SAB_KEY), "a key present on a fetched object leaked through the projection");
   // The durable assertion: catches a key arriving by a route nobody anticipated.
   assert.equal(payload.match(/\b[0-9a-f]{32}\b/), null);
 });
