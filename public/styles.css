@@ -583,6 +583,9 @@ table {
 
 .row-icon-button {
   margin-left: 6px;
+  /* Buttons do not inherit colour, so without this they render in the user
+     agent's default grey rather than matching the table text. */
+  color: var(--text-color);
 }
 
 .row-icon-link {
