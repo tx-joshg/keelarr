@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { runCommand } from "./command-runner.js";
 
@@ -252,6 +252,41 @@ export function buildRollbackRecord(service, { imageId, imageRepoDigest, backedU
   };
 }
 
+/**
+ * Enforces the retention setting after a new backup lands. Backups are
+ * timestamped directories, so lexical order is chronological and the newest
+ * entries are simply the tail.
+ */
+export async function pruneServiceBackups(settings, serviceId, options = {}) {
+  const keep = Number(settings.backupRetention ?? 1);
+
+  // 0 (or anything non-positive) means keep everything.
+  if (!Number.isFinite(keep) || keep <= 0) {
+    return { pruned: 0, kept: null };
+  }
+
+  const root = path.join(settings.stackRoot, ".stackarr-backups", serviceId);
+  let stamps = [];
+
+  try {
+    stamps = (await readdir(root)).sort();
+  } catch {
+    return { pruned: 0, kept: 0 };
+  }
+
+  const doomed = stamps.slice(0, Math.max(0, stamps.length - keep));
+
+  for (const stamp of doomed) {
+    await (options.rmImpl || rm)(path.join(root, stamp), { recursive: true, force: true });
+  }
+
+  if (doomed.length) {
+    options.logger?.info("backup.pruned", { serviceId, pruned: doomed.length, kept: keep });
+  }
+
+  return { pruned: doomed.length, kept: Math.min(stamps.length, keep) };
+}
+
 export async function backupService(settings, service, options = {}) {
   const backedUpAt = new Date().toISOString();
   const timestamp = backedUpAt.replace(/[:.]/g, "-");
@@ -298,10 +333,14 @@ export async function backupService(settings, service, options = {}) {
     configSnapshot: rollback.configSnapshot ? "captured" : (snapshot.reason || "unavailable")
   });
 
+  // Prune after writing, so the new backup is always among those kept.
+  const pruned = await pruneServiceBackups(settings, service.id, options);
+
   return {
     backupDir,
     rollback,
-    configSnapshot: snapshot
+    configSnapshot: snapshot,
+    pruned: pruned.pruned
   };
 }
 

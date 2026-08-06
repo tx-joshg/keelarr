@@ -25,6 +25,9 @@ export const defaultSettings = {
   puid: "1000",
   pgid: "1000",
   ombiVersion: "latest",
+  // How many backups to keep per service. Every install, upgrade, and rollback
+  // writes one, so without a cap they grow forever. 0 means keep all.
+  backupRetention: 1,
   selectedServiceIds: ["prowlarr", "radarr", "sonarr", "bazarr", "trailarr", "ombi", "tautulli", "sabnzbd"],
   serviceOverrides: {},
   services: {}
@@ -62,6 +65,22 @@ export async function writeJson(filePath, value) {
     await rm(tempPath, { force: true });
     throw error;
   }
+}
+
+/**
+ * Keeping zero backups would leave nothing to roll back to, so anything below
+ * one is treated as "keep all" rather than "keep none" — the safe reading of
+ * an out-of-range value.
+ */
+export function sanitizeBackupRetention(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return defaultSettings.backupRetention;
+  }
+
+  const rounded = Math.floor(numeric);
+  return rounded <= 0 ? 0 : Math.min(rounded, 50);
 }
 
 function sanitizeSelectedServiceIds(value) {
@@ -127,6 +146,7 @@ export function normalizeSettings(input = {}) {
   merged.puid = String(merged.puid || defaultSettings.puid).trim();
   merged.pgid = String(merged.pgid || defaultSettings.pgid).trim();
   merged.ombiVersion = String(merged.ombiVersion || defaultSettings.ombiVersion).trim();
+  merged.backupRetention = sanitizeBackupRetention(merged.backupRetention);
   merged.selectedServiceIds = sanitizeSelectedServiceIds(merged.selectedServiceIds);
   merged.serviceOverrides = sanitizeServiceOverrides(merged.serviceOverrides);
 

@@ -1309,7 +1309,31 @@ function renderActivityView() {
   `;
 }
 
+function renderSelectRow(field) {
+  const value = String(state.settings?.[field.key] ?? "");
+
+  return `
+    <div class="form-row">
+      <label class="form-label" for="${escapeHtml(field.key)}">${escapeHtml(field.label)}</label>
+      <div class="form-input-wrap">
+        <select id="${escapeHtml(field.key)}" class="text-input" name="${escapeHtml(field.key)}">
+          ${field.options.map((option) => `
+            <option value="${escapeHtml(option.value)}" ${String(option.value) === value ? "selected" : ""}>
+              ${escapeHtml(option.label)}
+            </option>
+          `).join("")}
+        </select>
+        <div class="help-text">${escapeHtml(field.help)}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderInputRow(field) {
+  if (field.options) {
+    return renderSelectRow(field);
+  }
+
   const value = state.settings?.[field.key] ?? "";
   const warning = field.key === "plexLogsRoot" && hasTautulliWarning();
   const labelClass = warning ? "form-label form-label-warning" : field.advanced ? "form-label form-label-advanced" : "form-label";
@@ -1602,6 +1626,22 @@ function renderSettingsView() {
     }
   ];
 
+  const backupFields = [
+    {
+      key: "backupRetention",
+      label: "Backups Kept",
+      help: "Every install, upgrade, and rollback saves a backup with a config snapshot. Older ones are pruned automatically. Keeping more lets you roll back further, at the cost of disk.",
+      options: [
+        { value: "1", label: "Only the latest (default)" },
+        { value: "2", label: "Last 2" },
+        { value: "3", label: "Last 3" },
+        { value: "5", label: "Last 5" },
+        { value: "10", label: "Last 10" },
+        { value: "0", label: "Keep all (never prune)" }
+      ]
+    }
+  ];
+
   const manageRows = appOrder
     .map((id) => catalogMap().get(id))
     .filter(Boolean)
@@ -1626,6 +1666,10 @@ function renderSettingsView() {
       <fieldset class="fieldset">
         <legend class="legend legend-secondary">Runtime Identity</legend>
         ${identityFields.map((field) => renderInputRow(field)).join("")}
+      </fieldset>
+      <fieldset class="fieldset">
+        <legend class="legend legend-secondary">Backups</legend>
+        ${backupFields.map((field) => renderInputRow(field)).join("")}
       </fieldset>
       ${ui.advOpen && advancedFields.length
         ? `
@@ -2059,6 +2103,7 @@ function settingsPayload(options = {}) {
     puid: state.settings.puid,
     pgid: state.settings.pgid,
     ombiVersion: state.settings.ombiVersion,
+    backupRetention: state.settings.backupRetention,
     selectedServiceIds: selectedServiceIds(),
     ...(preferredAdapterId ? { preferredAdapterId } : {}),
     deploy
@@ -3016,7 +3061,9 @@ appNode.addEventListener("input", (event) => {
 
 appNode.addEventListener("change", (event) => {
   const target = event.target;
-  if (!(target instanceof HTMLInputElement)) {
+
+  // Selects fire `change` rather than `input`, so they are handled here too.
+  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
     return;
   }
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import { normalizeSettings, writeJson } from "../src/lib/store.js";
+import { normalizeSettings, sanitizeBackupRetention, writeJson } from "../src/lib/store.js";
 
 test("normalizes settings and builds selected services", () => {
   const settings = normalizeSettings({
@@ -60,4 +60,21 @@ test("writeJson does not clobber the existing file when serialization fails", as
 
   assert.deepEqual(JSON.parse(await readFile(target, "utf8")), { initialized: true });
   assert.deepEqual(await readdir(workDir), ["settings.json"]);
+});
+
+test("backup retention defaults to keeping only the latest", () => {
+  assert.equal(normalizeSettings({}).backupRetention, 1);
+});
+
+test("backup retention treats non-positive values as keep-all, not keep-none", () => {
+  // Keeping zero backups would silently remove the ability to roll back, so an
+  // out-of-range value resolves to the safe reading.
+  assert.equal(sanitizeBackupRetention(0), 0);
+  assert.equal(sanitizeBackupRetention(-5), 0);
+  assert.equal(sanitizeBackupRetention("3"), 3);
+  assert.equal(sanitizeBackupRetention(2.7), 2);
+  assert.equal(sanitizeBackupRetention("nonsense"), 1);
+  assert.equal(sanitizeBackupRetention(undefined), 1);
+  // Bounded so a typo cannot request thousands of snapshots.
+  assert.equal(sanitizeBackupRetention(9999), 50);
 });

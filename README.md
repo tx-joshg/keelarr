@@ -131,6 +131,20 @@ clears it, so a rolled-back service will not silently jump forward on the next
 deploy — and upgrading always clears the pin first, so it can still move
 forward when you want it to.
 
+### Backup retention
+
+Every install, upgrade, and rollback writes a backup with a config snapshot, so
+they accumulate — one afternoon of upgrade testing left nine snapshots for a
+single service. `Settings -> Backups -> Backups Kept` controls how many are
+retained per service; older ones are pruned automatically after each new
+backup lands.
+
+The default keeps **only the latest**. Keeping more lets you roll back further
+than one step, at the cost of disk. `Keep all` disables pruning entirely.
+
+A value of zero or below is read as "keep all" rather than "keep none", since
+keeping no backups would silently remove the ability to roll back at all.
+
 ### Configuration snapshots
 
 Reverting the image alone is not always enough. A major upgrade often migrates
