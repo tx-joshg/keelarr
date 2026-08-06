@@ -103,3 +103,18 @@ test("explainDeployFailure translates Docker's opaque pull errors", () => {
   assert.equal(explainDeployFailure("something else entirely"), null);
   assert.equal(explainDeployFailure(""), null);
 });
+
+test("config snapshot exclusions match either casing apps use", async () => {
+  const { CONFIG_SNAPSHOT_EXCLUDES } = await import("../src/lib/runtime.js");
+  const patterns = CONFIG_SNAPSHOT_EXCLUDES.join(" ");
+
+  // Trailarr writes `backups` and `logs`; the Arr apps write `Backups` and
+  // `MediaCover`. A single fixed spelling missed half of them, which is how a
+  // 13M database produced a 513M snapshot.
+  assert.match(patterns, /\[Bb\]ackups/);
+  assert.match(patterns, /\[Ll\]ogs/);
+  assert.match(patterns, /\[Mm\]edia\[Cc\]over/);
+  assert.match(patterns, /\[Cc\]ache/);
+  // Shipped frontend assets, not configuration.
+  assert.match(patterns, /\.\/web/);
+});

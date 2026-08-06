@@ -102,8 +102,18 @@ async function readTaggedImageId(settings, service, options = {}) {
 }
 
 // Regenerated on demand by the apps themselves, and large enough to dominate a
-// snapshot. Excluding them keeps a config capture to seconds and megabytes.
-const CONFIG_SNAPSHOT_EXCLUDES = ["./logs", "./MediaCover", "./Backups", "./cache", "./Cache"];
+// snapshot. `tar --exclude` matches case-sensitively and apps disagree on
+// casing — Trailarr uses `backups` while the Arr apps use `Backups` — so each
+// name is matched with a character class rather than one fixed spelling.
+// `web` is an app's shipped frontend bundle: on Trailarr it is 520M of assets
+// that reinstall themselves, and it dwarfed the 13M database it was wrapping.
+export const CONFIG_SNAPSHOT_EXCLUDES = [
+  "./[Ll]ogs",
+  "./[Mm]edia[Cc]over",
+  "./[Bb]ackups",
+  "./[Cc]ache",
+  "./web"
+];
 const SNAPSHOT_HELPER_IMAGE = "alpine:latest";
 export const CONFIG_SNAPSHOT_FILE = "config-snapshot.tar.gz";
 
@@ -168,11 +178,24 @@ export async function snapshotConfig(settings, service, backupDir, options = {})
     return { ok: false, skipped: false, reason: result.stderr || "Snapshot failed." };
   }
 
+  // Report the size so an unexpectedly huge capture is visible rather than
+  // quietly eating disk on every upgrade.
+  const sized = await runCommand(
+    settings.dockerBin,
+    [
+      "run", "--rm", "-v", `${backupDir}:/backup:ro`,
+      options.helperImage || SNAPSHOT_HELPER_IMAGE,
+      "sh", "-c", `du -h /backup/${CONFIG_SNAPSHOT_FILE} 2>/dev/null | cut -f1`
+    ],
+    { logger: options.logger, timeoutMs: 60_000 }
+  );
+
   return {
     ok: true,
     skipped: false,
     mountType: mount.type,
     mountSource: mount.source,
+    size: sized.ok ? (sized.stdout.trim() || null) : null,
     excluded: CONFIG_SNAPSHOT_EXCLUDES
   };
 }
@@ -255,7 +278,13 @@ export async function backupService(settings, service, options = {}) {
     imageRepoDigest: await readImageRepoDigest(settings, imageId, options),
     backedUpAt,
     configSnapshot: snapshot.ok
-      ? { file: CONFIG_SNAPSHOT_FILE, mountType: snapshot.mountType, mountSource: snapshot.mountSource, excluded: snapshot.excluded }
+      ? {
+          file: CONFIG_SNAPSHOT_FILE,
+          mountType: snapshot.mountType,
+          mountSource: snapshot.mountSource,
+          size: snapshot.size || null,
+          excluded: snapshot.excluded
+        }
       : null
   });
   await writeFile(path.join(backupDir, "rollback.json"), `${JSON.stringify(rollback, null, 2)}\n`, "utf8");
