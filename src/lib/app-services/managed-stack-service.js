@@ -9,6 +9,7 @@ import {
   findRollbackPoint,
   imageExistsLocally,
   readConfigMountSource,
+  restartService,
   restoreConfigSnapshot
 } from "../runtime.js";
 import { SHARED_NETWORK, isImportedMode } from "../service-catalog.js";
@@ -53,6 +54,7 @@ export class ManagedStackService {
     imageExistsLocallyImpl = imageExistsLocally,
     composeDownImpl = composeDown,
     readConfigMountSourceImpl = readConfigMountSource,
+    restartServiceImpl = restartService,
     restoreConfigSnapshotImpl = restoreConfigSnapshot,
     installServiceImpl = installService,
     jobs = null,
@@ -75,6 +77,7 @@ export class ManagedStackService {
     this.restoreConfigSnapshot = restoreConfigSnapshotImpl;
     this.composeDown = composeDownImpl;
     this.readConfigMountSource = readConfigMountSourceImpl;
+    this.restartService = restartServiceImpl;
     this.jobs = jobs;
     this.readComposeImage = readComposeImageImpl;
     this.setComposeImage = setComposeImageImpl;
@@ -552,6 +555,34 @@ export class ManagedStackService {
       stdout: result.stdout,
       stderr: result.stderr
     };
+  }
+
+  async restartManagedService(serviceId, context = {}) {
+    const settings = await this.loadSettings();
+    const service = this.requireService(settings, serviceId);
+    const logger = this.scopedLogger(context);
+    const result = await this.restartService(settings, service, { logger });
+
+    logger[result.ok ? "info" : "error"]("service.restart", {
+      serviceId: service.id,
+      ok: result.ok,
+      stderr: result.stderr
+    });
+
+    await this.appendActivity({
+      kind: "restart",
+      level: result.ok ? "info" : "error",
+      message: result.ok ? `Restarted ${service.name}.` : `Restart failed for ${service.name}.`
+    });
+
+    if (!result.ok) {
+      throw new StackarrError(`Could not restart ${service.name}.`, {
+        statusCode: 500,
+        details: { stdout: result.stdout, stderr: result.stderr }
+      });
+    }
+
+    return { ok: true, stdout: result.stdout, stderr: result.stderr };
   }
 
   async checkServiceUpdate(serviceId, context = {}) {

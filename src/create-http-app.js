@@ -231,6 +231,14 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
     }
   });
 
+  app.post("/api/services/:serviceId/restart", async (request, response, next) => {
+    try {
+      response.json(await stackarrApp.restartManagedService(request.params.serviceId, requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/services/:serviceId/check-update", async (request, response, next) => {
     try {
       response.json(await stackarrApp.checkServiceUpdate(request.params.serviceId, requestContext(request)));

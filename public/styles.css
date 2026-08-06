@@ -1575,3 +1575,80 @@ table {
   margin-top: 2px;
   color: var(--success-background);
 }
+
+/* Stack table: status as icons with hover context */
+
+.chip-cell {
+  text-align: center;
+}
+
+.chip-icon {
+  font-size: 15px;
+  cursor: help;
+}
+
+.chip-icon-good { color: var(--success-background); }
+.chip-icon-warn { color: var(--warning-color); }
+.chip-icon-danger { color: var(--danger-color); }
+.chip-icon-idle { color: var(--gray-icon); }
+
+.version-current { color: var(--success-background); cursor: help; }
+.version-stale { color: var(--danger-color); cursor: help; }
+.version-unknown { color: var(--help-text); cursor: help; }
+
+.row-menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.row-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 8;
+  min-width: 190px;
+  border: 1px solid var(--default-border);
+  border-radius: 6px;
+  background: var(--header-background);
+  padding: 6px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+}
+
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: transparent;
+  color: var(--text-color);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.row-menu-item i {
+  width: 14px;
+  color: var(--help-text);
+}
+
+.row-menu-item-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.row-menu-divider {
+  margin: 5px 4px;
+  border-top: 1px solid var(--line-color);
+}
+
+.row-menu-item[data-row-menu-action="remove"] i,
+.row-menu-item[data-row-menu-action="remove"] span {
+  color: var(--danger-color);
+}

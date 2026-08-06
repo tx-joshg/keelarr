@@ -526,6 +526,12 @@ export async function measurePath(settings, targetPath, options = {}) {
   return result.ok ? (result.stdout.trim() || null) : null;
 }
 
+export async function restartService(settings, service, options = {}) {
+  return runCommand(settings.dockerBin, composeArgs(service, "restart"), {
+    logger: options.logger
+  });
+}
+
 export async function composePs(settings, service, options = {}) {
   const result = await runCommand(settings.dockerBin, composeArgs(service, "ps", "--format", "json"), {
     logger: options.logger

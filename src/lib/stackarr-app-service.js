@@ -172,6 +172,10 @@ export class StackarrAppService {
     return this.managedStackService.installManagedService(serviceId, context);
   }
 
+  async restartManagedService(serviceId, context = {}) {
+    return this.managedStackService.restartManagedService(serviceId, context);
+  }
+
   async checkServiceUpdate(serviceId, context = {}) {
     return this.managedStackService.checkServiceUpdate(serviceId, context);
   }

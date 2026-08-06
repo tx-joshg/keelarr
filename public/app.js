@@ -34,6 +34,7 @@ const ui = {
   toastTimer: null,
   pathPicker: null,
   removal: null,
+  rowMenu: null,
   busy: null,
   selectedImportContainerId: null,
   pendingServices: new Set(),
@@ -301,6 +302,89 @@ function managementStateMeta(service) {
     default:
       return { label: "Catalog", tone: "manual", detail: "Selected in catalog only." };
   }
+}
+
+/**
+ * Compose ownership as one icon. The distinction that matters is whether
+ * Stackarr can operate this service, not the internal state name.
+ */
+function composeIconMeta(service) {
+  if (service.managementState === "managed") {
+    return { icon: "fa-solid fa-circle-check", tone: "good", title: "Managed by Stackarr — compose files in place and owned by this stack." };
+  }
+
+  if (service.managementState === "draft") {
+    return { icon: "fa-solid fa-file-pen", tone: "warn", title: "Draft generated from a live container. Review it, then cut over." };
+  }
+
+  if (service.managementState === "detected") {
+    return { icon: "fa-solid fa-eye", tone: "warn", title: "Running outside Stackarr. Generate a draft to adopt it." };
+  }
+
+  if (service.managementState === "generated") {
+    return { icon: "fa-solid fa-file-code", tone: "idle", title: "Compose files written, but nothing is running yet." };
+  }
+
+  return { icon: "fa-regular fa-circle", tone: "idle", title: "Not installed. In the catalog only." };
+}
+
+/** Container state as one icon. */
+function runtimeIconMeta(service) {
+  if (isServiceRunning(service)) {
+    return { icon: "fa-solid fa-play", tone: "good", title: "Container is running." };
+  }
+
+  if (service.runtimeStatus === "restarting") {
+    return { icon: "fa-solid fa-rotate", tone: "warn", title: "Container is restarting." };
+  }
+
+  if (service.runtimeStatus === "exited" || service.runtimeStatus === "dead") {
+    return { icon: "fa-solid fa-circle-stop", tone: "danger", title: `Container is ${service.runtimeStatus}.` };
+  }
+
+  return { icon: "fa-regular fa-circle", tone: "idle", title: "Not deployed." };
+}
+
+/**
+ * Health collapsed to three answers, because "reachable" vs "running" vs
+ * "healthy" described how we learned it rather than what the user needs to
+ * know. The tooltip carries the detail.
+ */
+function healthIconMeta(service) {
+  const detail = [
+    service.httpStatus ? `HTTP ${service.httpStatus}` : null,
+    service.latencyMs ? `${service.latencyMs} ms` : null
+  ].filter(Boolean).join(" · ");
+
+  if (service.healthStatus === "unhealthy" || service.runtimeStatus === "exited" || service.runtimeStatus === "dead") {
+    return { icon: "fa-solid fa-heart-crack", tone: "danger", title: "Not healthy. The container reports a failing healthcheck or has stopped." };
+  }
+
+  if (service.healthStatus === "starting") {
+    return { icon: "fa-solid fa-hourglass-half", tone: "warn", title: "Still starting up." };
+  }
+
+  if (service.healthStatus === "healthy") {
+    return { icon: "fa-solid fa-heart", tone: "good", title: "Healthy — the container's own healthcheck passes." };
+  }
+
+  if (service.reachable) {
+    return {
+      icon: "fa-solid fa-heart",
+      tone: "good",
+      title: `Responding${detail ? ` (${detail})` : ""}. This image has no built-in healthcheck, so Stackarr checked the app URL.`
+    };
+  }
+
+  if (!isServiceRunning(service)) {
+    return { icon: "fa-regular fa-circle", tone: "idle", title: "Not running." };
+  }
+
+  return {
+    icon: "fa-solid fa-circle-question",
+    tone: "idle",
+    title: "Running, but health could not be confirmed. No healthcheck, and the app URL is not reachable from the controller."
+  };
 }
 
 function runtimeStatusMeta(service) {
@@ -853,16 +937,7 @@ function renderToolbar() {
     .join("");
 
   const right = ui.view === "stack"
-    ? `
-      <div class="view-toggle">
-        <button type="button" class="view-toggle-button view-toggle-button-active" aria-label="Table view">
-          <i class="fa-solid fa-table-list"></i>
-        </button>
-        <button type="button" class="view-toggle-button" aria-label="Poster view">
-          <i class="fa-solid fa-table-cells-large"></i>
-        </button>
-      </div>
-    `
+    ? ""
     : '<div class="toolbar-spacer"></div>';
 
   return `
@@ -890,6 +965,35 @@ function renderWarningBanner() {
   `;
 }
 
+function renderRowMenu(service) {
+  if (ui.rowMenu !== service.id) {
+    return "";
+  }
+
+  const item = (action, icon, label, enabled = true, title = "") => `
+    <button type="button" class="row-menu-item${enabled ? "" : " row-menu-item-disabled"}"
+      ${enabled ? `data-row-menu-action="${escapeHtml(action)}" data-service-id="${escapeHtml(service.id)}"` : "disabled"}
+      ${title ? `title="${escapeHtml(title)}"` : ""}>
+      <i class="${escapeHtml(icon)}"></i><span>${escapeHtml(label)}</span>
+    </button>
+  `;
+
+  const running = isServiceRunning(service);
+  const installed = service.managementState !== "catalog";
+
+  return `
+    <div class="row-menu">
+      ${item("upgrade", "fa-solid fa-circle-up", "Upgrade", installed,
+        service.updateStatus === "ready" ? "An update is available." : "Pulls the latest image.")}
+      ${item("rollback", "fa-solid fa-clock-rotate-left", "Downgrade", canRollbackImage(service),
+        canRollbackImage(service) ? `Roll back to ${service.rollbackPoint?.taggedImage || "the previous image"}.` : "No previous image recorded yet.")}
+      ${item("restart", "fa-solid fa-arrows-rotate", "Restart", running, running ? "" : "Not running.")}
+      <div class="row-menu-divider"></div>
+      ${item("remove", "fa-solid fa-trash-can", "Remove", installed)}
+    </div>
+  `;
+}
+
 function renderStackView() {
   const services = selectedServices();
 
@@ -899,141 +1003,50 @@ function renderStackView() {
 
   const rows = services
     .map((service) => {
-      const running = isServiceRunning(service);
       const pending = ui.pendingServices.has(service.id);
-      const statusIcon = pending
-        ? '<i class="fa-solid fa-spinner fa-spin secondary-copy"></i>'
-        : running
-          ? '<i class="fa-solid fa-circle-check status-icon-good"></i>'
-          : '<i class="fa-solid fa-circle-minus status-icon-idle"></i>';
-      const composeLabel = service.generated
-        ? renderStatusPill("Generated", "info")
-        : renderStatusPill("Missing", "manual");
-      const runtimeMeta = runtimeStatusMeta(service);
-      const runtimeLabel = renderStatusPill(runtimeMeta.label, runtimeMeta.tone);
-      const healthMeta = healthStatusMeta(service);
-      const healthLabel = renderStatusPill(healthMeta.label, healthMeta.tone);
-      const updateMeta = updateStatusMeta(service);
-      const updateLabel = renderStatusPill(updateMeta.label, updateMeta.tone);
-      const managementMeta = managementStateMeta(service);
-      const versionTag = imageTagFromRef(service.observedImage);
-      const imageIdTag = shortImageId(service.observedImageId);
-      // Prefer the release the image reports over the tag, which is usually
-      // just "latest" and says nothing about what is actually running.
-      const versionParts = [
-        service.appVersion ? `v${String(service.appVersion).replace(/^v/, "")}` : `ref ${versionTag}`,
-        imageIdTag ? `image ${imageIdTag}` : null,
-        managementMeta.detail
-      ].filter(Boolean);
-      const versionDetail = versionParts.join(" · ");
-      const usageMarkup = renderUsageMetrics(service);
+      const compose = composeIconMeta(service);
+      const runtime = runtimeIconMeta(service);
+      const health = healthIconMeta(service);
       const openUrl = resolveServiceOpenUrl(service);
-      let primaryAction = "deploy";
-      let primaryTitle = "Deploy";
-      let primaryIcon = "fa-solid fa-cloud-arrow-up";
-      let primaryColor = "var(--success-background)";
-      let primaryContainerId = "";
 
-      if (service.managementState === "managed") {
-        primaryAction = running ? "upgrade" : "deploy";
-        primaryTitle = running ? "Upgrade" : "Deploy";
-        primaryIcon = running ? "fa-solid fa-circle-up" : "fa-solid fa-cloud-arrow-up";
-        primaryColor = running ? "var(--primary-color)" : "var(--success-background)";
-      } else if (service.managementState === "draft" || service.managementState === "detected") {
-        primaryAction = "review-adoption";
-        primaryTitle = "Review Adoption";
-        primaryIcon = "fa-solid fa-file-import";
-        primaryColor = "var(--warning-background)";
-        primaryContainerId = service.observedContainerId || "";
-      }
+      // Version currency, since that is the thing worth colouring.
+      const current = service.updateStatus === "current";
+      const outOfDate = service.updateStatus === "ready";
+      const versionClass = current ? "version-current" : outOfDate ? "version-stale" : "version-unknown";
+      const versionTitle = current
+        ? "Up to date."
+        : outOfDate
+          ? "An update is available. Use the row menu to upgrade."
+          : "Update status unknown. Run Check Updates.";
+      const version = service.appVersion
+        ? `v${String(service.appVersion).replace(/^v/, "")}`
+        : imageTagFromRef(service.observedImage);
+
+      const icon = (meta) => `<i class="${escapeHtml(meta.icon)} chip-icon chip-icon-${escapeHtml(meta.tone)}" title="${escapeHtml(meta.title)}"></i>`;
 
       return `
         <tr>
-          <td class="status-cell">${statusIcon}</td>
+          <td class="status-cell">${pending ? '<i class="fa-solid fa-spinner fa-spin secondary-copy"></i>' : icon(runtime)}</td>
           <td class="cell-truncate">
-            <a href="#" data-app-link="${escapeHtml(service.id)}">${escapeHtml(service.name)}</a>
+            <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)}">${escapeHtml(service.name)}</a>
             <div class="secondary-copy">${escapeHtml(service.observedContainerName)}</div>
           </td>
           <td class="cell-truncate">
             <div>${escapeHtml(service.observedImage)}</div>
-            <div class="secondary-copy">${escapeHtml(versionDetail)}</div>
+            <div class="secondary-copy ${versionClass}" title="${escapeHtml(versionTitle)}">${escapeHtml(version)}</div>
           </td>
           <td>${escapeHtml(String(service.port))}</td>
-          <td>${composeLabel}</td>
-          <td>${runtimeLabel}</td>
-          <td>${usageMarkup}</td>
-          <td class="cell-truncate">
-            ${healthLabel}
-            <div class="secondary-copy">${service.httpStatus ? `${escapeHtml(String(service.httpStatus))}${service.latencyMs ? ` · ${escapeHtml(String(service.latencyMs))} ms` : ""}` : escapeHtml(managementMeta.label)}</div>
-          </td>
-          <td class="cell-truncate">${updateLabel}</td>
+          <td class="chip-cell">${icon(compose)}</td>
+          <td>${renderUsageMetrics(service)}</td>
+          <td class="chip-cell">${icon(health)}</td>
           <td class="row-actions">
-            <button
-              type="button"
-              class="row-icon-button"
-              data-stack-action="${escapeHtml(primaryAction)}"
-              data-service-id="${escapeHtml(service.id)}"
-              data-container-id="${escapeHtml(primaryContainerId)}"
-              style="color:${primaryColor};"
-              title="${escapeHtml(primaryTitle)}"
-              ${pending ? "disabled" : ""}
-            >
-              <i class="${escapeHtml(primaryIcon)}"></i>
-            </button>
-            ${service.managementState !== "catalog"
-              ? `
-                <button
-                  type="button"
-                  class="row-icon-button"
-                  data-stack-action="remove"
-                  data-service-id="${escapeHtml(service.id)}"
-                  style="color:var(--danger-color);"
-                  title="Remove ${escapeHtml(service.name)}"
-                  ${pending ? "disabled" : ""}
-                >
-                  <i class="fa-solid fa-trash-can"></i>
-                </button>
-              `
-              : ""}
-            ${canRollbackImage(service)
-              ? `
-                <button
-                  type="button"
-                  class="row-icon-button"
-                  data-stack-action="rollback"
-                  data-service-id="${escapeHtml(service.id)}"
-                  style="color:var(--advanced-color);"
-                  title="Roll back to previous image (${escapeHtml(service.rollbackPoint.taggedImage || service.rollbackPoint.imageRef)})"
-                  ${pending ? "disabled" : ""}
-                >
-                  <i class="fa-solid fa-clock-rotate-left"></i>
-                </button>
-              `
-              : ""}
-            ${canRevertCutover(service)
-              ? `
-                <button
-                  type="button"
-                  class="row-icon-button"
-                  data-stack-action="revert-cutover"
-                  data-service-id="${escapeHtml(service.id)}"
-                  style="color:var(--warning-color);"
-                  title="Revert to ${escapeHtml(service.rollbackContainerName)}"
-                  ${pending ? "disabled" : ""}
-                >
-                  <i class="fa-solid fa-rotate-left"></i>
-                </button>
-              `
-              : ""}
-            <a
-              class="row-icon-link"
-              href="${escapeHtml(openUrl)}"
-              target="_blank"
-              rel="noreferrer noopener"
-              title="Open app"
-            >
-              <i class="fa-solid fa-arrow-up-right-from-square"></i>
-            </a>
+            <div class="row-menu-wrap">
+              <button type="button" class="row-icon-button" data-row-menu="${escapeHtml(service.id)}"
+                title="Actions" aria-label="Actions for ${escapeHtml(service.name)}" ${pending ? "disabled" : ""}>
+                <i class="fa-solid fa-ellipsis-vertical"></i>
+              </button>
+              ${renderRowMenu(service)}
+            </div>
           </td>
         </tr>
       `;
@@ -1052,14 +1065,12 @@ function renderStackView() {
         <thead>
           <tr>
             <th style="width:4%;"></th>
-            <th style="width:14%;">App</th>
-            <th style="width:28%;">Image / Source</th>
+            <th style="width:18%;">App</th>
+            <th style="width:34%;">Image / Version</th>
             <th style="width:8%;">Port</th>
-            <th style="width:10%;">Compose</th>
-            <th style="width:10%;">Runtime</th>
-            <th style="width:14%;">Usage</th>
-            <th style="width:12%;">Health</th>
-            <th style="width:8%;">Update</th>
+            <th style="width:8%;">Compose</th>
+            <th style="width:16%;">Usage</th>
+            <th style="width:8%;">Health</th>
             <th style="width:4%;"></th>
           </tr>
         </thead>
@@ -2883,6 +2894,58 @@ appNode.addEventListener("click", (event) => {
     ui.job = null;
     render();
     return;
+  }
+
+  const menuToggle = event.target.closest("[data-row-menu]");
+  if (menuToggle) {
+    const id = menuToggle.dataset.rowMenu;
+    ui.rowMenu = ui.rowMenu === id ? null : id;
+    render();
+    return;
+  }
+
+  const menuAction = event.target.closest("[data-row-menu-action]");
+  if (menuAction) {
+    const action = menuAction.dataset.rowMenuAction;
+    const serviceId = menuAction.dataset.serviceId;
+    ui.rowMenu = null;
+    render();
+
+    const service = selectedServices().find((candidate) => candidate.id === serviceId);
+
+    if (action === "remove") {
+      runBusy("Checking what would be removed...", () => openRemovalDialog(serviceId)).catch(showError);
+      return;
+    }
+
+    if (action === "rollback" && service) {
+      openCutoverDialog({
+        mode: "rollback",
+        serviceId,
+        serviceName: service.name,
+        containerName: service.observedContainerName,
+        rollbackImage: service.rollbackPoint?.taggedImage || service.rollbackPoint?.imageRef,
+        hasConfigSnapshot: service.rollbackPoint?.hasConfigSnapshot === true,
+        snapshotTakenAt: service.rollbackPoint?.backedUpAt || null
+      });
+      return;
+    }
+
+    if (action === "upgrade" || action === "restart") {
+      runBusy(
+        action === "upgrade" ? `Upgrading ${serviceId}...` : `Restarting ${serviceId}...`,
+        () => serviceAction(serviceId, action)
+      ).catch(showError);
+      return;
+    }
+
+    return;
+  }
+
+  // Any other click closes an open row menu.
+  if (ui.rowMenu && !event.target.closest(".row-menu")) {
+    ui.rowMenu = null;
+    render();
   }
 
   const stackTarget = event.target.closest("[data-stack-action]");
