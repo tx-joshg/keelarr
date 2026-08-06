@@ -1,9 +1,18 @@
 import { access } from "node:fs/promises";
+import { hostname } from "node:os";
 
 import { scanDockerInventory } from "./import-scanner.js";
 import { readActivity, readUpdateState } from "./store.js";
-import { composePs } from "./runtime.js";
+import { composePs, inspectContainers } from "./runtime.js";
 import { probeAppUrl } from "./health.js";
+import {
+  LAN_CLIENT,
+  buildEndpointFromInventory,
+  inspectNetworkDrivers,
+  loadControllerEndpoint,
+  resolveLink
+} from "./wiring/topology.js";
+import { getServiceDefinition } from "./service-catalog.js";
 
 async function fileExists(filePath) {
   try {
@@ -23,12 +32,15 @@ function isLoopbackAppUrl(value) {
   }
 }
 
-function shouldProbeService(settings, service, inventoryItem) {
+function shouldProbeService(settings, service, inventoryItem, probeUrl) {
   if (settings.initialized !== true) {
     return false;
   }
 
-  if (!service?.appUrl || isLoopbackAppUrl(service.appUrl)) {
+  // No resolved address means this host's networking cannot carry a request
+  // from the controller to this app at all. Probing anyway would either time
+  // out or, worse, reach something else that happens to answer.
+  if (!probeUrl || isLoopbackAppUrl(probeUrl)) {
     return false;
   }
 
@@ -194,9 +206,39 @@ function buildDiagnostics(settings) {
   return diagnostics;
 }
 
+function hostAddressFrom(settings) {
+  try {
+    return new URL(settings.hostUrl).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The two lookups the address resolver needs, both cached.
+ *
+ * Network drivers change only when a network is created or removed, and the
+ * controller's own attachment cannot change without restarting this process, so
+ * neither costs anything after the first refresh.
+ */
+async function loadTopology(settings, items, { inspectContainersImpl, inspectNetworkDriversImpl }) {
+  const drivers = await inspectNetworkDriversImpl(
+    settings,
+    items.flatMap((item) => (item.networks || []).map((network) => network.name))
+  );
+  const controller = await loadControllerEndpoint(settings, {
+    inspectContainersImpl,
+    hostname: hostname()
+  });
+
+  return { controller, drivers, hostAddress: hostAddressFrom(settings) };
+}
+
 export async function buildDashboardState(settings, dependencies = {}) {
   const {
     composePsImpl = composePs,
+    inspectContainersImpl = inspectContainers,
+    inspectNetworkDriversImpl = inspectNetworkDrivers,
     probeServiceImpl = probeAppUrl,
     readActivityImpl = readActivity,
     readUpdateStateImpl = readUpdateState,
@@ -213,19 +255,44 @@ export async function buildDashboardState(settings, dependencies = {}) {
         })
   ]);
   const shouldProbe = settings.initialized === true;
+
+  // Both addresses come from the same resolver the wiring check uses, because
+  // composing hostUrl with a port is wrong in ways that look like success: on
+  // this host it points SABnzbd's health check at the NAS admin panel, which
+  // answers 200 and hides the app being down.
+  const { controller, drivers, hostAddress } = shouldProbe
+    ? await loadTopology(settings, inventory.items, { inspectContainersImpl, inspectNetworkDriversImpl })
+    : { controller: LAN_CLIENT, drivers: new Map(), hostAddress: null };
+
   const services = await Promise.all(settings.selectedServiceIds.map(async (serviceId) => {
     const service = settings.services[serviceId];
     const inventoryItem = selectInventoryItemForService(service, inventory.items);
+    const endpoint = buildEndpointFromInventory({
+      serviceId,
+      name: service.name,
+      containerName: service.containerName,
+      fallbackPort: getServiceDefinition(serviceId)?.defaultPort || service.port,
+      item: inventoryItem,
+      networkDrivers: drivers
+    });
+    // What Stackarr must call to check the app, and what the person must click
+    // to open it. Different network positions, so genuinely different answers.
+    const fromController = resolveLink(controller, endpoint, { hostAddress });
+    const fromBrowser = resolveLink(LAN_CLIENT, endpoint, { hostAddress });
+    const probeUrl = fromController.ok ? fromController.baseUrl : null;
+    const appUrl = fromBrowser.ok ? fromBrowser.baseUrl : service.appUrl;
+
     const [composeExists, envExists, probe] = await Promise.all([
       fileExists(service.composePath),
       fileExists(service.envPath),
-      shouldProbe && shouldProbeService(settings, service, inventoryItem)
-        ? probeServiceImpl(service)
+      shouldProbe && shouldProbeService(settings, service, inventoryItem, probeUrl)
+        ? probeServiceImpl({ ...service, appUrl: probeUrl })
         : Promise.resolve({
             reachable: false,
             latencyMs: null,
             httpStatus: null,
-            error: null
+            error: null,
+            notProbed: !probeUrl ? fromController.reason : null
           })
     ]);
     const generated = composeExists && envExists;
@@ -245,6 +312,15 @@ export async function buildDashboardState(settings, dependencies = {}) {
 
     return {
       ...service,
+      appUrl,
+      // Named so the dashboard can say "not checked from here" rather than
+      // rendering an unreachable-by-design app as though it were down.
+      probe: {
+        url: probeUrl,
+        strategy: fromController.strategy,
+        reason: fromController.reason,
+        checked: Boolean(probeUrl)
+      },
       generated,
       runtimeSource,
       managementState,

@@ -462,17 +462,13 @@ function resolveUiHostBase() {
   return new URL(`${current.protocol}//${current.hostname}`);
 }
 
+/**
+ * The server resolves this now, from the browser's network position rather than
+ * the controller's. What used to be here guessed at macvlan by matching the
+ * `qnet-static` name prefix, which worked on one vendor's NAS by coincidence.
+ */
 function resolveServiceOpenUrl(service) {
-  const qnetAddress = service.networks.find((network) => network.address)?.address || null;
-  if (service.observedNetworkMode?.startsWith("qnet-static") && qnetAddress) {
-    return `http://${qnetAddress}:${service.port}`;
-  }
-
-  const publishedHostPort = service.publishings.find((entry) => entry.hostPort)?.hostPort || null;
-  const base = resolveUiHostBase();
-  const openPort = publishedHostPort || service.port;
-
-  return `${base.protocol}//${base.hostname}:${openPort}`;
+  return service.appUrl;
 }
 
 function hasTautulliWarning() {
