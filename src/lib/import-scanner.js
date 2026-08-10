@@ -331,7 +331,8 @@ async function buildInventoryItem(inspect, options = {}) {
 }
 
 async function loadContainerInventory(dockerBin, options = {}) {
-  const idsResult = await runCommand(dockerBin, ["ps", "--filter", "status=running", "-aq"], {
+  const run = options.runCommandImpl || runCommand;
+  const idsResult = await run(dockerBin, ["ps", "--filter", "status=running", "-aq"], {
     logger: options.logger
   });
   if (!idsResult.ok) {
@@ -347,7 +348,7 @@ async function loadContainerInventory(dockerBin, options = {}) {
     return [];
   }
 
-  const inspectResult = await runCommand(dockerBin, ["inspect", ...containerIds], {
+  const inspectResult = await run(dockerBin, ["inspect", ...containerIds], {
     logger: options.logger
   });
   if (!inspectResult.ok) {
@@ -366,7 +367,8 @@ async function loadImageEnvironmentByRef(dockerBin, inventory, options = {}) {
     return new Map();
   }
 
-  const inspectResult = await runCommand(dockerBin, ["image", "inspect", ...imageRefs], {
+  const run = options.runCommandImpl || runCommand;
+  const inspectResult = await run(dockerBin, ["image", "inspect", ...imageRefs], {
     logger: options.logger
   });
 
@@ -397,49 +399,74 @@ async function loadImageEnvironmentByRef(dockerBin, inventory, options = {}) {
   return environmentByRef;
 }
 
-// `docker stats --no-stream` has to sample every container and takes seconds
-// on a NAS. CPU and memory are decorative, and stale-by-a-few-seconds numbers
-// are fine, so the dashboard should not pay that cost on every refresh.
-const STATS_CACHE_TTL_MS = 15_000;
+/**
+ * `docker stats --no-stream` costs seconds regardless of how many containers it
+ * is given — measured at 1.7s for one container and 2.2s for eleven on a QNAP,
+ * because computing a CPU percentage needs two samples about a second apart.
+ * Narrowing the container list therefore buys nothing.
+ *
+ * So the numbers are refreshed in the background and never awaited by a request.
+ * CPU and memory are decorative; a value a few seconds stale costs the reader
+ * nothing, while a dashboard that freezes for two seconds costs them plenty.
+ */
+const STATS_CACHE_TTL_MS = 30_000;
+const EMPTY_STATS = Object.freeze({ byContainerId: new Map(), byContainerName: new Map() });
+
 let statsCache = null;
+let statsRefresh = null;
 
 export function clearContainerStatsCache() {
   statsCache = null;
+  statsRefresh = null;
 }
 
-async function loadContainerStats(dockerBin, inventory, options = {}) {
+/** Resolves once any in-flight background sample has landed. For tests. */
+export function settleContainerStats() {
+  return statsRefresh || Promise.resolve();
+}
+
+function loadContainerStats(dockerBin, inventory, options = {}) {
   const containerIds = inventory
     .map((inspect) => inspect.Id)
     .filter(Boolean);
 
   if (!containerIds.length) {
-    return {
-      byContainerId: new Map(),
-      byContainerName: new Map()
-    };
+    return EMPTY_STATS;
   }
 
   const cacheKey = containerIds.slice().sort().join(",");
   const now = options.nowImpl ? options.nowImpl() : Date.now();
+  const fresh = statsCache && statsCache.key === cacheKey && now - statsCache.at < STATS_CACHE_TTL_MS;
 
-  if (statsCache && statsCache.key === cacheKey && now - statsCache.at < STATS_CACHE_TTL_MS) {
-    return statsCache.value;
+  if (!fresh && !statsRefresh) {
+    statsRefresh = sampleContainerStats(dockerBin, containerIds, cacheKey, options)
+      // A failed sample must never surface as an unhandled rejection or break a
+      // refresh: the dashboard simply keeps showing the numbers it already had.
+      .catch(() => {})
+      .finally(() => {
+        statsRefresh = null;
+      });
   }
 
-  const result = await runCommand(dockerBin, ["stats", "--no-stream", "--format", "{{json .}}", ...containerIds], {
+  // Whatever is on hand, immediately. Entries for containers that have since
+  // gone are never looked up, and ones that have just appeared read as null
+  // until the sample in flight lands.
+  return statsCache?.value || EMPTY_STATS;
+}
+
+async function sampleContainerStats(dockerBin, containerIds, cacheKey, options = {}) {
+  const run = options.runCommandImpl || runCommand;
+  const result = await run(dockerBin, ["stats", "--no-stream", "--format", "{{json .}}", ...containerIds], {
     logger: options.logger
   });
 
   if (!result.ok) {
-    return {
-      byContainerId: new Map(),
-      byContainerName: new Map()
-    };
+    return EMPTY_STATS;
   }
 
   const byContainerId = new Map();
   const byContainerName = new Map();
-  const cachedAt = now;
+  const cachedAt = options.nowImpl ? options.nowImpl() : Date.now();
 
   for (const line of result.stdout.split("\n")) {
     try {
@@ -481,7 +508,7 @@ export function shouldIncludeInventoryItem(item) {
 export async function scanDockerInventory(settings, options = {}) {
   const inventory = await loadContainerInventory(settings.dockerBin, options);
   const imageEnvironmentByRef = await loadImageEnvironmentByRef(settings.dockerBin, inventory, options);
-  const stats = await loadContainerStats(settings.dockerBin, inventory, options);
+  const stats = loadContainerStats(settings.dockerBin, inventory, options);
   const items = await Promise.all(inventory.map((inspect) => buildInventoryItem(inspect, {
     ...options,
     imageEnvironmentByRef,
