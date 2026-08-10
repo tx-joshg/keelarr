@@ -3,6 +3,7 @@ import { StackarrError } from "../errors.js";
 import { JobRegistry } from "../jobs.js";
 import { appendActivity, loadSettings } from "../store.js";
 import { buildApplicationPayload, buildDownloadClientPayload, describeValidation } from "../wiring/payloads.js";
+import { attachController, planControllerAttachments } from "../wiring/attach.js";
 import { inspectContainers } from "../runtime.js";
 import { arrApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
@@ -83,6 +84,34 @@ function unreadable(app, fallbackReason) {
   };
 }
 
+/**
+ * What Stackarr actually relies on to know this app is alive.
+ *
+ * Worth stating outright: an app the controller cannot reach is not
+ * unmonitored if Docker is health-checking it, and one with neither is a real
+ * gap the operator should know about rather than infer from a silent row.
+ */
+function describeMonitoring(endpoint, controllerLink) {
+  if (controllerLink.ok) {
+    return {
+      level: "probe",
+      summary: `Checked over HTTP at ${controllerLink.baseUrl}.`
+    };
+  }
+
+  if (endpoint.hasHealthcheck) {
+    return {
+      level: "healthcheck",
+      summary: `Stackarr cannot reach this app directly, but the container reports its own health, which is a real signal.`
+    };
+  }
+
+  return {
+    level: "process",
+    summary: `Stackarr cannot reach this app and the container has no healthcheck, so only the process is known to be up — nothing confirms it is serving.`
+  };
+}
+
 function describeApplication(application) {
   if (!application) {
     return null;
@@ -102,6 +131,7 @@ export class WiringService {
   constructor({
     appendActivityImpl = appendActivity,
     arrApiImpl = arrApi,
+    attachControllerImpl = attachController,
     hostProfileService = null,
     inspectContainersImpl = inspectContainers,
     inspectNetworkDriversImpl = inspectNetworkDrivers,
@@ -113,6 +143,7 @@ export class WiringService {
   } = {}) {
     this.now = nowImpl;
     this.appendActivity = appendActivityImpl;
+    this.attachController = attachControllerImpl;
     this.jobs = jobs;
     this.arrApi = arrApiImpl;
     this.hostProfileService = hostProfileService;
@@ -233,6 +264,7 @@ export class WiringService {
           containerPort: endpoint.containerPort
         },
         apiKey: descriptor,
+        monitoring: describeMonitoring(endpoint, controllerLink),
         controllerLink: {
           ok: controllerLink.ok,
           baseUrl: controllerLink.baseUrl,
@@ -257,6 +289,7 @@ export class WiringService {
       settings,
       hostAddress,
       services,
+      controller,
       endpoints,
       mounts,
       keys,
@@ -272,6 +305,44 @@ export class WiringService {
         ...this.summarize(links, rootFolders, participants)
       }
     };
+  }
+
+  /**
+   * Joins the controller to the networks its services live on.
+   *
+   * Run at startup rather than during a check, because the check is read-only
+   * and must stay that way. Running it every start is what makes it survive the
+   * controller being recreated — the attachment lives on the container, not in
+   * a Compose file, so it is re-derived rather than remembered.
+   */
+  async attachToServiceNetworks(context = {}) {
+    const logger = this.scopedLogger(context);
+
+    try {
+      const { controller, endpoints } = await this.gather(context);
+      const plan = planControllerAttachments(controller, [...endpoints.values()]);
+
+      if (plan.length === 0) {
+        return { attached: [], skipped: [] };
+      }
+
+      const result = await this.attachController(await this.loadSettings(), plan, { logger });
+
+      for (const entry of result.attached) {
+        logger.info("wiring.controller_attached", { network: entry.network, services: entry.services });
+      }
+
+      for (const entry of result.skipped) {
+        logger.warn("wiring.controller_attach_skipped", { network: entry.network, reason: entry.reason });
+      }
+
+      return result;
+    } catch (error) {
+      // Monitoring reach is a convenience. Failing to widen it must never stop
+      // the controller from starting.
+      logger.warn("wiring.controller_attach_failed", { message: error.message });
+      return { attached: [], skipped: [] };
+    }
   }
 
   requireJobs() {

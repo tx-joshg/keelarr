@@ -17,6 +17,7 @@ export const ENDPOINT_KIND = Object.freeze({
 
 export const LINK_STRATEGY = Object.freeze({
   SHARED_NETWORK: "shared-network",
+  SHARED_BRIDGE_IP: "shared-bridge-ip",
   MACVLAN_IP: "macvlan-ip",
   HOST_NETWORK: "host-network",
   HOST_PUBLISHED: "host-published"
@@ -193,6 +194,7 @@ export function buildEndpoint({
     containerName,
     running,
     startedAt: inspect?.State?.StartedAt || null,
+    hasHealthcheck: Boolean(inspect?.Config?.Healthcheck?.Test?.length),
     networkMode,
     kind: classify(networkMode, networks, running),
     containerPort: readContainerPort(inspect, fallbackPort),
@@ -408,6 +410,25 @@ export function resolveLink(source, target, { hostAddress } = {}) {
     );
   }
 
+  // Docker's default bridge carries no DNS, so a shared membership there gives
+  // no name to use — but it does give a route. The address is re-derived from a
+  // live inspect on every check, so a bridge IP changing on recreate is fine.
+  const sharedDefaultBridge = target.networks.find(
+    (network) =>
+      network.name === DEFAULT_BRIDGE_NETWORK &&
+      network.address &&
+      source.networks.some((entry) => entry.name === DEFAULT_BRIDGE_NETWORK)
+  );
+
+  if (sharedDefaultBridge) {
+    return linked(
+      LINK_STRATEGY.SHARED_BRIDGE_IP,
+      sharedDefaultBridge.address,
+      target.containerPort,
+      `${source.name} and ${target.name} are both on Docker's default bridge, which has no DNS, so ${target.name} is reached at its address on that network.`
+    );
+  }
+
   if (target.kind === ENDPOINT_KIND.MACVLAN) {
     const address = macvlanAddress(target);
 
@@ -433,7 +454,7 @@ export function resolveLink(source, target, { hostAddress } = {}) {
 
   if (source.kind === ENDPOINT_KIND.BRIDGE) {
     return blocked(
-      `${source.name} and ${target.name} are on separate Docker bridge networks, and this host does not route a container's request back to a port published on the host. Put both containers on the stackarr network, or move one to host networking.`
+      `${source.name} and ${target.name} are on separate Docker bridge networks, and this host does not route a container's request back to a port published on the host.`
     );
   }
 

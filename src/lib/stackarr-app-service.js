@@ -55,6 +55,10 @@ export class StackarrAppService {
    */
   async initialize() {
     await this.cutoverService.jobs.hydrate();
+    // Re-derived on every start, because the controller's network attachments
+    // live on the container rather than in a Compose file and are lost whenever
+    // it is recreated.
+    await this.wiringService.attachToServiceNetworks();
   }
 
   async loadSettings() {

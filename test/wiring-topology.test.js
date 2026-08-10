@@ -194,7 +194,7 @@ test("a fresh catalog stack has no blocked links at all", () => {
   }
 });
 
-test("Docker's default bridge does not count as a shared network", () => {
+test("the default bridge is addressed by IP, because it carries no DNS", () => {
   const onDefaultBridge = (serviceId, port) =>
     buildEndpoint({
       serviceId,
@@ -210,13 +210,17 @@ test("Docker's default bridge does not count as a shared network", () => {
       })
     });
 
-  // The default bridge has no embedded DNS, so `http://tautulli:8181` would
-  // resolve to nothing. Falling through to blocked is correct.
   const link = resolveLink(onDefaultBridge("radarr", 7878), onDefaultBridge("tautulli", 8181), {
     hostAddress: HOST_ADDRESS
   });
 
-  assert.equal(link.blocked, true);
+  // Sharing the default bridge is a real route, so it is used — but by address.
+  // `http://tautulli:8181` would resolve to nothing, since only user-defined
+  // networks carry Docker's embedded DNS.
+  assert.equal(link.ok, true);
+  assert.equal(link.strategy, LINK_STRATEGY.SHARED_BRIDGE_IP);
+  assert.ok(!link.baseUrl.includes("tautulli"), "the container name must never be used on the default bridge");
+  assert.match(link.baseUrl, /^http:\/\/172\.17\.0\.\d+:8181$/);
 });
 
 test("a remapped published port is addressed by its host port, not the container port", () => {

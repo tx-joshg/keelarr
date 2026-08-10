@@ -2558,18 +2558,26 @@ function renderWiringModal() {
             ? "Stackarr does not need an API key for this app"
             : key.reason;
 
+      // Tone follows how the app is actually watched, not whether Stackarr
+      // personally reached it. A container reporting its own health is fine.
+      const monitoring = participant.monitoring || { level: "probe", summary: "" };
+      const tone = monitoring.level === "process" ? "warn" : "ok";
+      const icon = monitoring.level === "probe"
+        ? "fa-solid fa-satellite-dish"
+        : monitoring.level === "healthcheck"
+          ? "fa-solid fa-heart-pulse"
+          : "fa-solid fa-circle-question";
+
       return `
-        <li class="wiring-row wiring-row-${key.state === "found" || key.state === "unsupported" ? "ok" : "warn"}">
-          <span class="wiring-row-icon"><i class="fa-solid fa-key"></i></span>
+        <li class="wiring-row wiring-row-${tone}">
+          <span class="wiring-row-icon"><i class="${icon}"></i></span>
           <span class="wiring-row-body">
             <span class="wiring-row-title">
               ${escapeHtml(participant.name)}
               <span class="wiring-row-state">${escapeHtml(participant.topology.kind)}</span>
             </span>
-            <span class="wiring-row-reason">${escapeHtml(note)}</span>
-            ${participant.controllerLink.ok
-              ? ""
-              : `<span class="wiring-row-reason wiring-row-test-fail">${escapeHtml(participant.controllerLink.reason)}</span>`}
+            <span class="wiring-row-reason">${escapeHtml(monitoring.summary)}</span>
+            <span class="wiring-row-reason wiring-row-detail">${escapeHtml(note)}</span>
           </span>
         </li>
       `;

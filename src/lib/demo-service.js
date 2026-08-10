@@ -872,6 +872,10 @@ export class DemoStackarrAppService {
         name: settings.services[id].name,
         running: true,
         topology: { kind: "bridge", networkMode: "stackarr", containerPort: settings.services[id].port },
+        monitoring: {
+          level: "probe",
+          summary: `Checked over HTTP at http://${id}:${settings.services[id].port}.`
+        },
         apiKey: ["radarr", "sonarr", "lidarr", "prowlarr"].includes(id)
           ? { found: true, state: "found", source: "/config/config.xml", fingerprint: "demo1234" }
           : id === "sabnzbd"
