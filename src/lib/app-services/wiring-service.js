@@ -4,13 +4,20 @@ import { createLogger } from "../logger.js";
 import { StackarrError } from "../errors.js";
 import { JobRegistry } from "../jobs.js";
 import { appendActivity, loadSettings } from "../store.js";
-import { buildApplicationPayload, buildDownloadClientPayload, describeValidation, missingCategoryFor } from "../wiring/payloads.js";
+import {
+  buildApplicationPayload,
+  buildDownloadClientPayload,
+  buildRootFolderPayload,
+  describeValidation,
+  missingCategoryFor
+} from "../wiring/payloads.js";
 import { attachController, planControllerAttachments } from "../wiring/attach.js";
 import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
-import { arrApi, speaksArrApi } from "../wiring/app-clients.js";
+import { arrApi, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
 import { buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
 import { planPathMapping, planRootFolder, readMounts } from "../wiring/path-plan.js";
+import { ensureLibraryFolder } from "../wiring/provision.js";
 import {
   RECONCILE_STATE,
   reconcileApplication,
@@ -133,6 +140,7 @@ export class WiringService {
   constructor({
     appendActivityImpl = appendActivity,
     arrApiImpl = arrApi,
+    ensureLibraryFolderImpl = ensureLibraryFolder,
     attachControllerImpl = attachController,
     ensureSharedNetworkImpl = ensureSharedNetwork,
     hostProfileService = null,
@@ -151,6 +159,7 @@ export class WiringService {
       }
     },
     readApiKeyImpl = readApiKey,
+    sabnzbdApiImpl = sabnzbdApi,
     sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   } = {}) {
     this.now = nowImpl;
@@ -159,6 +168,7 @@ export class WiringService {
     this.ensureSharedNetwork = ensureSharedNetworkImpl;
     this.jobs = jobs;
     this.arrApi = arrApiImpl;
+    this.ensureLibraryFolder = ensureLibraryFolderImpl;
     this.hostProfileService = hostProfileService;
     this.inspectContainers = inspectContainersImpl;
     this.inspectNetworkDrivers = inspectNetworkDriversImpl;
@@ -166,6 +176,7 @@ export class WiringService {
     this.logger = logger.child({ component: "wiring-service" });
     this.pathExists = pathExistsImpl;
     this.readApiKey = readApiKeyImpl;
+    this.sabnzbdApi = sabnzbdApiImpl;
     this.sleep = sleepImpl;
   }
 
@@ -545,11 +556,24 @@ export class WiringService {
         const missingCategory = missingCategoryFor(schema.data, link.source, downloadCategories);
 
         if (missingCategory) {
-          this.outcome.failed.push({
-            label: `${link.sourceName} → SABnzbd`,
-            reason: `SABnzbd has no "${missingCategory}" category, and ${link.sourceName} will not save a download client without one. Add it in SABnzbd under Config → Categories, then run the check again.`
-          });
-          continue;
+          // Adding it rather than asking the operator to. Stackarr already
+          // writes download clients into these apps; refusing to add the
+          // category that makes one work is an inconsistent place to stop.
+          const added = await this.sabnzbdApi.createCategory(
+            current.get("sabnzbd")?.baseUrl,
+            downloadKey,
+            missingCategory
+          );
+
+          if (!added.ok) {
+            this.outcome.failed.push({
+              label: `${link.sourceName} → SABnzbd`,
+              reason: `${link.sourceName} needs a "${missingCategory}" download category and SABnzbd would not add one: ${added.error}`
+            });
+            continue;
+          }
+
+          this.outcome.notes.push(`Added the "${missingCategory}" category to SABnzbd so ${link.sourceName} can separate its downloads.`);
         }
 
         const payload = buildDownloadClientPayload(schema.data, {
@@ -584,24 +608,44 @@ export class WiringService {
     await ctx.step("rootfolders", async () => {
       const failedBefore = this.outcome.failed.length;
       for (const folder of actionable.rootFolders) {
-        // An app will not accept a library folder that is not there, and
-        // creating directories inside someone's media share is not Stackarr's
-        // call to make. Saying so beats a wall of validation errors about
-        // fields that only look wrong because the path was never valid.
-        if (!(await this.pathExists(folder.expectedPath))) {
-          this.outcome.failed.push({
-            label: `${folder.name} library folder`,
-            reason: `${folder.expectedPath} does not exist. Create it, then run the check again.`
-          });
+        // The app will not accept a folder that is not there, and the path is
+        // inside the media root the operator configured, so Stackarr creates
+        // it. Note the translation: the app sees /Media, the controller sees
+        // /share/Media, and checking the container path here would test a
+        // directory that can never exist on this filesystem.
+        const ready = await this.ensureLibraryFolder(plan.mounts.get(folder.serviceId) || [], folder.expectedPath);
+
+        if (!ready.ok) {
+          this.outcome.failed.push({ label: `${folder.name} library folder`, reason: ready.reason });
           continue;
         }
 
-        const result = await this.arrApi.createRootFolder(
-          folder.serviceId,
-          current.get(folder.serviceId)?.baseUrl,
-          keys.get(folder.serviceId),
-          folder.expectedPath
-        );
+        if (ready.created) {
+          this.outcome.notes.push(`Created ${ready.hostPath} for ${folder.name}'s library.`);
+        }
+
+        const base = current.get(folder.serviceId)?.baseUrl;
+        const key = keys.get(folder.serviceId);
+        // Lidarr will not take a bare path; it wants a name and default
+        // profiles, whose ids differ per install and so are read, not assumed.
+        const [quality, metadata] = folder.serviceId === "lidarr"
+          ? await Promise.all([
+              this.arrApi.listQualityProfiles(folder.serviceId, base, key),
+              this.arrApi.listMetadataProfiles(folder.serviceId, base, key)
+            ])
+          : [{ data: [] }, { data: [] }];
+
+        const { payload, missing } = buildRootFolderPayload(folder.serviceId, folder.expectedPath, {
+          qualityProfiles: quality?.data || [],
+          metadataProfiles: metadata?.data || []
+        });
+
+        if (missing) {
+          this.outcome.failed.push({ label: `${folder.name} library folder`, reason: missing });
+          continue;
+        }
+
+        const result = await this.arrApi.createRootFolder(folder.serviceId, base, key, payload);
 
         if (!result.ok) {
           this.outcome.failed.push({

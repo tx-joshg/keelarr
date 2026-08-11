@@ -81,6 +81,19 @@ function createHarness(overrides = {}) {
     jobs: new JobRegistry({ logger: silentLogger }),
     sleepImpl: overrides.sleepImpl || (async () => {}),
     pathExistsImpl: async () => overrides.pathExists !== false,
+    ensureLibraryFolderImpl: async (_mounts, containerPath) =>
+      overrides.folderCreatable === false
+        ? { ok: false, reason: `${containerPath} is not backed by a host directory Stackarr can reach.` }
+        : { ok: true, created: overrides.pathExists === false, hostPath: `/share${containerPath}` },
+    sabnzbdApiImpl: {
+      listCategories: async () => ({ ok: true, data: overrides.categories || [], error: null }),
+      createCategory: async (_base, _key, name) => {
+        calls.push({ call: "create-category", name });
+        return overrides.categoryCreatable === false
+          ? { ok: false, data: null, error: "SABnzbd rejected the request." }
+          : { ok: true, data: {}, error: null };
+      }
+    },
     appendActivityImpl: async (entry) => activity.push(entry),
     loadSettingsImpl: async () => settings,
     // Built from the selection so a test can scope the stack it exercises.
@@ -142,8 +155,10 @@ function createHarness(overrides = {}) {
         calls.push({ call: "create-application", body });
         return { ok: true, data: { id: 2 }, error: null };
       },
-      createRootFolder: async (serviceId, _base, _key, folderPath) => {
-        calls.push({ call: "create-rootfolder", serviceId, folderPath });
+      listQualityProfiles: async () => ({ ok: true, data: overrides.profiles ?? [{ id: 1, name: "Standard" }], error: null }),
+      listMetadataProfiles: async () => ({ ok: true, data: overrides.profiles ?? [{ id: 2, name: "Standard" }], error: null }),
+      createRootFolder: async (serviceId, _base, _key, body) => {
+        calls.push({ call: "create-rootfolder", serviceId, folderPath: body.path, body });
         return { ok: true, data: { id: 3 }, error: null };
       }
     }
@@ -389,7 +404,7 @@ test("a category the download client has is not flagged", () => {
   assert.equal(missingCategoryFor(schema, "radarr", ["movies", "tv"]), null);
 });
 
-test("a link needing a missing category is reported without being attempted", async () => {
+test("a category the app needs is created rather than left to the operator", async () => {
   const { service, calls } = createHarness({
     selected: ["lidarr", "sabnzbd"],
     downloadSchemaFields: [
@@ -403,22 +418,46 @@ test("a link needing a missing category is reported without being attempted", as
   const job = await settle(service.startWiring());
 
   assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
-  assert.equal(calls.filter((entry) => entry.call === "create-client").length, 0);
-  assert.equal(calls.filter((entry) => entry.call === "test-client").length, 0, "no point testing a payload the app will refuse");
-  assert.match(job.result.failed[0].reason, /no "music" category/);
-  assert.match(job.result.failed[0].reason, /Config → Categories/);
+  assert.deepEqual(calls.filter((e) => e.call === "create-category").map((e) => e.name), ["music"]);
+  // And the link is then configured, rather than reported as a chore.
+  assert.ok(calls.some((entry) => entry.call === "create-client"));
+  assert.match(job.result.notes.join(" "), /Added the "music" category/);
 });
 
-test("a library folder whose directory does not exist is reported, not attempted", async () => {
-  // Lidarr answers a missing path with four chained validation errors about
-  // fields that only look wrong because the path was never valid. Saying the
-  // one true thing is more use than relaying all four.
+test("a category the download client refuses to add is reported, and nothing is written", async () => {
+  const { service, calls } = createHarness({
+    selected: ["lidarr", "sabnzbd"],
+    downloadSchemaFields: [
+      { name: "host", value: "localhost" },
+      { name: "apiKey", privacy: "apiKey" },
+      { name: "musicCategory", value: "music" }
+    ],
+    categories: ["movies", "tv"],
+    categoryCreatable: false
+  });
+  const job = await settle(service.startWiring());
+
+  assert.equal(calls.filter((entry) => entry.call === "create-client").length, 0);
+  assert.match(job.result.failed[0].reason, /would not add one/);
+});
+
+test("a missing library folder is created, then configured", async () => {
   const { service, calls } = createHarness({ rootFolders: [], pathExists: false });
   const job = await settle(service.startWiring());
 
-  assert.equal(calls.filter((entry) => entry.call === "create-rootfolder").length, 0);
-  assert.match(job.result.failed.find((f) => /library folder/.test(f.label)).reason, /does not exist\. Create it/);
   assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.ok(calls.some((entry) => entry.call === "create-rootfolder"));
+  assert.match(job.result.notes.join(" "), /Created \/share\/Media\/Movies/);
+});
+
+test("a library folder that cannot be created is reported, not attempted", async () => {
+  // Nothing to create it inside, so the app would only answer with validation
+  // errors about fields that look wrong because the path was never valid.
+  const { service, calls } = createHarness({ rootFolders: [], folderCreatable: false });
+  const job = await settle(service.startWiring());
+
+  assert.equal(calls.filter((entry) => entry.call === "create-rootfolder").length, 0);
+  assert.match(job.result.failed.find((f) => /library folder/.test(f.label)).reason, /not backed by a host directory/);
 });
 
 test("a recommendation is not treated as a refusal", async () => {
@@ -435,4 +474,37 @@ test("a recommendation is not treated as a refusal", async () => {
 
   assert.ok(calls.some((entry) => entry.call === "create-client"), "advice should not stop the write");
   assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+});
+
+test("Lidarr's library folder carries the name and profiles it requires", async () => {
+  // A bare path is answered with four validation errors that look like four
+  // separate problems. Radarr and Sonarr accept one, Lidarr does not.
+  const { service, calls } = createHarness({ selected: ["lidarr", "sabnzbd"], rootFolders: [], pathExists: false });
+  await settle(service.startWiring());
+
+  const body = calls.find((entry) => entry.call === "create-rootfolder").body;
+  assert.equal(body.path, "/Media/Music");
+  assert.equal(body.name, "Music");
+  assert.equal(body.defaultQualityProfileId, 1);
+  assert.equal(body.defaultMetadataProfileId, 2);
+});
+
+test("Radarr's library folder stays a bare path", async () => {
+  const { service, calls } = createHarness({ rootFolders: [], pathExists: false });
+  await settle(service.startWiring());
+
+  assert.deepEqual(calls.find((entry) => entry.call === "create-rootfolder").body, { path: "/Media/Movies" });
+});
+
+test("an app with no profiles yet is reported rather than sent an invalid folder", async () => {
+  const { service, calls } = createHarness({
+    selected: ["lidarr", "sabnzbd"],
+    rootFolders: [],
+    pathExists: false,
+    profiles: []
+  });
+  const job = await settle(service.startWiring());
+
+  assert.equal(calls.filter((entry) => entry.call === "create-rootfolder").length, 0);
+  assert.match(job.result.failed.find((f) => /library folder/.test(f.label)).reason, /no quality profile/);
 });

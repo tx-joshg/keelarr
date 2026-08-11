@@ -76,6 +76,44 @@ export function missingCategoryFor(schemas, serviceId, availableCategories) {
   return wanted && !availableCategories.includes(wanted) ? wanted : null;
 }
 
+/**
+ * The body an app wants for a new library folder.
+ *
+ * Radarr and Sonarr accept a bare path. Lidarr does not: it requires a name and
+ * default quality and metadata profiles, and answers a bare path with four
+ * validation errors that all look like separate problems. Profiles are picked
+ * from what the app already has rather than invented, since the ids differ per
+ * install.
+ */
+export function buildRootFolderPayload(serviceId, folderPath, { qualityProfiles = [], metadataProfiles = [] } = {}) {
+  if (serviceId !== "lidarr") {
+    return { payload: { path: folderPath }, missing: null };
+  }
+
+  const quality = qualityProfiles.find((entry) => Number(entry?.id) > 0);
+  const metadata = metadataProfiles.find((entry) => Number(entry?.id) > 0);
+
+  if (!quality || !metadata) {
+    return {
+      payload: null,
+      missing: `${serviceId} has no ${quality ? "metadata" : "quality"} profile to attach a library folder to yet.`
+    };
+  }
+
+  return {
+    payload: {
+      path: folderPath,
+      name: folderPath.split("/").filter(Boolean).pop() || "Library",
+      defaultQualityProfileId: quality.id,
+      defaultMetadataProfileId: metadata.id,
+      defaultMonitorOption: "all",
+      defaultNewItemMonitorOption: "all",
+      defaultTags: []
+    },
+    missing: null
+  };
+}
+
 export function buildApplicationPayload(schemas, { implementation, name, prowlarrUrl, baseUrl, apiKey }) {
   const schema = findSchema(schemas, implementation);
 

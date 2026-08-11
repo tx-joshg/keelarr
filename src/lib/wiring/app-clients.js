@@ -104,6 +104,66 @@ function api(serviceId, resource) {
 }
 
 /**
+ * SABnzbd's API, which is shaped nothing like the Arr apps'.
+ *
+ * Everything is one endpoint driven by a `mode` parameter, and the key is a
+ * parameter rather than a header. It is sent in a POST body rather than a query
+ * string on purpose: a key in a URL ends up in the app's own access log, and
+ * SABnzbd accepts either.
+ */
+export async function sabnzbdRequest(baseUrl, apiKey, params, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  const body = new URLSearchParams({ ...params, output: "json", apikey: apiKey });
+
+  try {
+    const response = await fetch(`${String(baseUrl).replace(/\/+$/, "")}/api`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    if (!response.ok) {
+      return { ok: false, data: null, error: `SABnzbd answered ${response.status}.` };
+    }
+
+    const payload = await response.json();
+
+    // SABnzbd reports failure in the body with a 200 status.
+    return payload?.status === false
+      ? { ok: false, data: null, error: payload.error || "SABnzbd rejected the request." }
+      : { ok: true, data: payload, error: null };
+  } catch (error) {
+    const reason = error.name === "TimeoutError" ? `No answer within ${timeoutMs / 1000}s.` : error.message;
+    return { ok: false, data: null, error: reason };
+  }
+}
+
+export const sabnzbdApi = {
+  listCategories: async (base, key) => {
+    const result = await sabnzbdRequest(base, key, { mode: "get_config", section: "categories" });
+    return result.ok
+      ? { ok: true, data: (result.data?.config?.categories || []).map((entry) => entry.name), error: null }
+      : result;
+  },
+
+  /**
+   * Adds a category, mirroring how the existing ones are set up: a folder of
+   * the same name under the completed-downloads directory, which is what keeps
+   * each app's downloads separated.
+   */
+  createCategory: (base, key, name) =>
+    sabnzbdRequest(base, key, {
+      mode: "set_config",
+      section: "categories",
+      keyword: name,
+      name,
+      dir: name,
+      script: "Default",
+      priority: "-100"
+    })
+};
+
+/**
  * The read-only surface the wiring check needs.
  *
  * `testall` is included despite being a POST: it runs each app's own connection
@@ -111,9 +171,8 @@ function api(serviceId, resource) {
  * lets a read-only check report whether existing wiring actually works, rather
  * than only whether it looks plausible.
  *
- * SABnzbd is deliberately absent. Its API takes the key as a query parameter,
- * which would write the secret into its access log, and we do not need it —
- * each Arr's own download-client test already proves reachability and the key.
+ * SABnzbd's own surface is separate, above, because its API is shaped nothing
+ * like these.
  */
 export const arrApi = {
   systemStatus: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "system/status") }),
@@ -139,7 +198,9 @@ export const arrApi = {
   // anyway — these calls exist to fail early with a clearer message, not to
   // substitute for that.
   testDownloadClient: (serviceId, base, key, body) =>
-    arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient/test"), body, timeoutMs: 25_000 }),
+    // Generous: the app is making its own network round trip to a third
+    // service, and a slow answer is not the same as a wrong one.
+    arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient/test"), body, timeoutMs: 45_000 }),
   testApplication: (base, key, body) =>
     arrRequest(base, key, { method: "POST", path: "/api/v1/applications/test", body, timeoutMs: 25_000 }),
 
@@ -147,6 +208,8 @@ export const arrApi = {
     arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient"), body, timeoutMs: 25_000 }),
   createApplication: (base, key, body) =>
     arrRequest(base, key, { method: "POST", path: "/api/v1/applications", body, timeoutMs: 25_000 }),
-  createRootFolder: (serviceId, base, key, folderPath) =>
-    arrRequest(base, key, { method: "POST", path: api(serviceId, "rootfolder"), body: { path: folderPath } })
+  listQualityProfiles: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "qualityprofile") }),
+  listMetadataProfiles: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "metadataprofile") }),
+  createRootFolder: (serviceId, base, key, body) =>
+    arrRequest(base, key, { method: "POST", path: api(serviceId, "rootfolder"), body, timeoutMs: 25_000 })
 };
