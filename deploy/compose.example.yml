@@ -14,14 +14,28 @@ services:
     volumes:
       - ${STACKARR_DATA_DIR:-../data}:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-      # Keep host paths identical inside the container so detection, validation,
-      # Compose generation, and backups all use the same absolute paths.
-      - ${HOST_STACK_ROOT}:${HOST_STACK_ROOT}
-      - ${HOST_CONFIG_ROOT}:${HOST_CONFIG_ROOT}
-      - ${HOST_MEDIA_ROOT}:${HOST_MEDIA_ROOT}
-      - ${HOST_DOWNLOADS_ROOT}:${HOST_DOWNLOADS_ROOT}
-      # Remove this line if Plex logs are not available on the host.
-      - ${HOST_PLEX_LOGS_ROOT}:${HOST_PLEX_LOGS_ROOT}:ro
+      # This directory, so Stackarr can keep the .env below in step with the
+      # paths chosen in its own settings. Relative, so it resolves against
+      # wherever this file lives rather than a path guessed from the outside.
+      - ./:/app/deploy-host
+      # Every host path is mounted at the same absolute path inside, so
+      # detection, validation, Compose generation, and backups all agree with
+      # the host. Each has a default so the first `up` works with no editing;
+      # the setup wizard then detects the right ones for this machine and
+      # rewrites the .env, which takes effect on the next recreate.
+      #
+      # The defaults sit under $HOME rather than /srv or /opt so that the first
+      # start cannot fail on file sharing: Docker Desktop only allows bind
+      # mounts from a short list of shared locations, and a home directory is
+      # always on it while /srv and /opt are not. They are placeholders — the
+      # wizard replaces them with this machine's real paths.
+      - ${HOST_STACK_ROOT:-${HOME:-/srv}/stackarr/stacks}:${HOST_STACK_ROOT:-${HOME:-/srv}/stackarr/stacks}
+      - ${HOST_CONFIG_ROOT:-${HOME:-/srv}/stackarr/config}:${HOST_CONFIG_ROOT:-${HOME:-/srv}/stackarr/config}
+      - ${HOST_MEDIA_ROOT:-${HOME:-/srv}/stackarr/media}:${HOST_MEDIA_ROOT:-${HOME:-/srv}/stackarr/media}
+      - ${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/stackarr/media/downloads}:${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/stackarr/media/downloads}
+      # Only used by Tautulli. Harmless at the default; point it at your Plex
+      # log directory to enable Plex log health.
+      - ${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/stackarr/plex-logs}:${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/stackarr/plex-logs}:ro
     # No networks are declared here on purpose. The controller creates the
     # shared `stackarr` network and joins itself to it at startup, so a brand
     # new host needs nothing set up beforehand.

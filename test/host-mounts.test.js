@@ -140,3 +140,24 @@ test("a candidate without the compose file in it is not accepted", async () => {
 test("a controller with no compose labels resolves to nothing rather than guessing", async () => {
   assert.equal(await resolveControllerEnvPath({ workingDir: null, mounts: [] }), null);
 });
+
+test("the mounted deploy directory is used before anything is deduced", async () => {
+  // A relative bind in the Compose file resolves against that file's own
+  // directory, so this path is known rather than worked out from labels.
+  const found = await resolveControllerEnvPath(
+    { workingDir: "/somewhere/else", composeFile: "/somewhere/else/compose.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/app/deploy-host/.env" }
+  );
+
+  assert.equal(found, "/app/deploy-host/.env");
+});
+
+test("without that mount it still falls back to deducing the path", async () => {
+  // Controllers deployed before the mount existed must keep working.
+  const found = await resolveControllerEnvPath(
+    { workingDir: "/opt/stackarr/deploy", composeFile: "/opt/stackarr/deploy/compose.example.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/opt/stackarr/deploy/compose.example.yml" }
+  );
+
+  assert.equal(found, "/opt/stackarr/deploy/.env");
+});

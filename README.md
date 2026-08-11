@@ -330,6 +330,17 @@ cp .env.example .env
 docker compose -f compose.example.yml up -d --build
 ```
 
+Nothing needs editing first. Every path has a working default, so the controller
+starts, and its setup wizard then detects the right ones for this machine — a
+QNAP's `/share/Media`, a Synology's `/volume1/media`, a plain Linux box's
+`/srv/media`. Saving those settings rewrites `.env`, and one more
+`docker compose up -d` puts the mounts where they belong.
+
+That ordering is deliberate. The paths are questions the wizard already asks, so
+asking them again in a file you have to get right before anything will start is
+work for no reason — and a wrong value there used to fail with
+`invalid spec: ::ro: empty section between colons`.
+
 Important:
 
 - `HOST_STACK_ROOT`, `HOST_CONFIG_ROOT`, `HOST_MEDIA_ROOT`, and `HOST_DOWNLOADS_ROOT` in `.env` must match the real host paths

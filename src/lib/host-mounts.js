@@ -48,6 +48,15 @@ export const CONTROLLER_ENV_FILE = "deploy/.env";
  * joined onto each mounted root. A candidate only counts when the compose file
  * is actually sitting in it, which keeps this from picking a lookalike.
  */
+/**
+ * Where the deploy directory is mounted when the Compose file brings it along.
+ *
+ * A relative bind resolves against the Compose file's own directory, so this is
+ * known rather than deduced. Everything below it is a fallback for controllers
+ * deployed before that mount existed.
+ */
+export const DEPLOY_MOUNT = "/app/deploy-host";
+
 export async function resolveControllerEnvPath({ workingDir, composeFile, mounts = [] }, options = {}) {
   const exists = options.pathExistsImpl || (async (target) => {
     try {
@@ -57,6 +66,12 @@ export async function resolveControllerEnvPath({ workingDir, composeFile, mounts
       return false;
     }
   });
+
+  // The mounted directory first: no guessing, and it works regardless of how
+  // the host spells the path outside.
+  if (await exists(path.join(DEPLOY_MOUNT, ".env"))) {
+    return path.join(DEPLOY_MOUNT, ".env");
+  }
 
   if (!workingDir) {
     return null;
