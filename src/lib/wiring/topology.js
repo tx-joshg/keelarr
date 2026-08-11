@@ -195,6 +195,10 @@ export function buildEndpoint({
     running,
     startedAt: inspect?.State?.StartedAt || null,
     hasHealthcheck: Boolean(inspect?.Config?.Healthcheck?.Test?.length),
+    // Kept so callers can ask what this container can actually see. For the
+    // controller that is the difference between a real path and an invisible
+    // one, whatever the host filesystem says.
+    mounts: (inspect?.Mounts || []).map((mount) => ({ source: mount.Source, target: mount.Destination })),
     networkMode,
     kind: classify(networkMode, networks, running),
     containerPort: readContainerPort(inspect, fallbackPort),

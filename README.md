@@ -249,6 +249,35 @@ Prowlarr applications are registered with `syncLevel: addOnly`, so indexers you 
 
 Identity is matched on implementation plus address, never on the entry's name — users rename these — and API keys are never persisted, never logged, and never returned by the API. The check reports only the key's source file and a truncated `sha256` fingerprint. Objects fetched from an app are re-projected field by field rather than passed through, so what reaches the response is always a decision rather than whatever the remote app happened to send.
 
+## Host Paths And The Controller
+
+The controller can only see what its own Compose file mounted. A directory that
+plainly exists on the host is invisible to it otherwise, and every existence
+check inside the container then reports it missing — technically true, and
+thoroughly misleading.
+
+Those five host paths therefore live in two places by necessity: in
+`settings.json`, where the app reads them, and in `deploy/.env`, where Compose
+reads them before the container it configures exists. A process inside that
+container cannot tell Compose what to mount, so the file cannot be eliminated.
+
+What it can do is stop drifting. Saving host settings rewrites `deploy/.env`
+from them, preserving the values Stackarr does not own — port, log level, and
+the data directory, which is where settings themselves live. Recreate the
+controller for new paths to take effect; the app says so rather than leaving it
+to be discovered.
+
+When the two do disagree, the dashboard names the variable that fixes it instead
+of reporting the path as missing.
+
+## The Three Scenarios
+
+Setup, deployment, wiring, and removal are checked against three situations that
+differ in what already exists: building new, deleting and redeploying, and
+adopting a stack that predates Stackarr. They catch different bugs, and a change
+that improves one has more than once broken another. See
+[docs/scenarios.md](docs/scenarios.md).
+
 ## What Is Still Deliberately Missing
 
 - Authentication and multi-user access control

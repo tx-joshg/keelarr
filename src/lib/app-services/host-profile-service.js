@@ -1,4 +1,9 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
+
 import { writeStacks } from "../generator.js";
+import { inspectContainers } from "../runtime.js";
+import { findUnmountedRoots, renderControllerEnv, resolveControllerEnvPath } from "../host-mounts.js";
 import {
   applyDetectionSuggestions,
   detectHostEnvironment,
@@ -26,23 +31,29 @@ export class HostProfileService {
   constructor({
     appendActivityImpl = appendActivity,
     detectHostEnvironmentImpl = detectHostEnvironment,
+    inspectContainersImpl = inspectContainers,
     loadSettingsImpl = loadSettings,
+    readFileImpl = readFile,
     logger = defaultLogger,
     normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
     validateHostProfileImpl = validateHostProfile,
+    writeFileImpl = writeFile,
     writeStacksImpl = writeStacks,
     hostDetectionTtlMs = 60_000
   } = {}) {
     this.appendActivity = appendActivityImpl;
     this.detectHostEnvironment = detectHostEnvironmentImpl;
+    this.inspectContainers = inspectContainersImpl;
     this.loadSettingsImpl = loadSettingsImpl;
+    this.readFile = readFileImpl;
     this.logger = logger.child({
       component: "host-profile-service"
     });
     this.normalizeSettings = normalizeSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.validateHostProfile = validateHostProfileImpl;
+    this.writeFile = writeFileImpl;
     this.writeStacks = writeStacksImpl;
     this.hostDetectionTtlMs = hostDetectionTtlMs;
     this.hostDetectionCache = null;
@@ -239,6 +250,7 @@ export class HostProfileService {
     }
 
     const settings = await this.saveSettings(candidateSettings);
+    const controllerEnv = await this.syncControllerEnv(settings, logger);
     logger.info("host.settings_saved", {
       adapterId: settings.adapterType,
       validationWarnings: validation.warnings
@@ -257,7 +269,78 @@ export class HostProfileService {
       settings,
       detection: inspection,
       validation,
+      controllerEnv,
       effectiveSettings: inspection.effectiveSettings
+    };
+  }
+
+  /**
+   * Keeps the controller's own env file in step with these settings.
+   *
+   * The same host paths were being stored in both places with nothing
+   * reconciling them, so a root changed here left the container mounting the
+   * old one — and every check then reported a directory that plainly exists as
+   * missing. Writing it from settings removes the second source of truth.
+   *
+   * Returns what happened rather than throwing: failing to update a deployment
+   * file is not a reason to refuse a settings save, and when the file cannot be
+   * reached from inside the container the rendered content is handed back so it
+   * can be applied by hand.
+   */
+  async syncControllerEnv(settings, logger) {
+    try {
+      const controller = await this.readControllerDefinition(settings, logger);
+      const target = await resolveControllerEnvPath(controller);
+      const previous = target ? await this.readFileSafely(target) : "";
+      const content = renderControllerEnv(settings, previous);
+      // Only a change to the mounted paths needs a recreate. Rewriting the same
+      // values on every save should not keep telling the operator to restart.
+      const pathsChanged = findUnmountedRoots(settings, controller.mounts).length > 0;
+
+      if (!target) {
+        return {
+          written: false,
+          pathsChanged,
+          path: null,
+          content,
+          message: "Stackarr could not reach its own deploy directory from inside the container, so deploy/.env was not updated. Apply these values by hand and recreate the controller."
+        };
+      }
+
+      await this.writeFile(target, content, "utf8");
+      logger.info("host.controller_env_written", { path: target });
+
+      return {
+        written: true,
+        pathsChanged,
+        path: target,
+        content,
+        message: `Updated ${target}. Recreate the controller for the new paths to take effect.`
+      };
+    } catch (error) {
+      logger.warn("host.controller_env_failed", { message: error.message });
+      return { written: false, path: null, content: null, message: `Could not update deploy/.env: ${error.message}` };
+    }
+  }
+
+  async readFileSafely(target) {
+    try {
+      return await this.readFile(target, "utf8");
+    } catch {
+      return "";
+    }
+  }
+
+  /** The controller's own compose labels and mounts, read from its container. */
+  async readControllerDefinition(settings, logger) {
+    const inspects = await this.inspectContainers(settings, [hostname(), "stackarr"], { logger });
+    const inspect = inspects[0] || null;
+    const labels = inspect?.Config?.Labels || {};
+
+    return {
+      workingDir: labels["com.docker.compose.project.working_dir"] || null,
+      composeFile: (labels["com.docker.compose.project.config_files"] || "").split(",")[0] || null,
+      mounts: (inspect?.Mounts || []).map((mount) => ({ source: mount.Source, target: mount.Destination }))
     };
   }
 

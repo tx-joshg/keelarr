@@ -13,6 +13,7 @@ import {
   resolveLink
 } from "./wiring/topology.js";
 import { getServiceDefinition } from "./service-catalog.js";
+import { findUnmountedRoots } from "./host-mounts.js";
 
 async function fileExists(filePath) {
   try {
@@ -179,8 +180,10 @@ function deriveUpdateStatus(service, generated, runtimeSource, storedStatus) {
   return storedStatus || "unchecked";
 }
 
-function buildDiagnostics(settings) {
-  const diagnostics = [];
+function buildDiagnostics(settings, controllerMounts = []) {
+  // First, because a root the controller cannot see makes every other check
+  // about that path meaningless.
+  const diagnostics = findUnmountedRoots(settings, controllerMounts);
 
   if (!settings.downloadsRoot.startsWith(settings.mediaRoot)) {
     diagnostics.push({
@@ -349,7 +352,7 @@ export async function buildDashboardState(settings, dependencies = {}) {
     configured: settings.initialized === true,
     settings,
     services,
-    diagnostics: buildDiagnostics(settings),
+    diagnostics: buildDiagnostics(settings, controller?.mounts || []),
     activity
   };
 }

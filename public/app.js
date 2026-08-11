@@ -2180,7 +2180,21 @@ async function saveSettingsOnly() {
   });
   setLatestResult("Settings Saved", data);
   ui.view = "settings";
-  showToast("Host settings saved.", "success");
+
+  // Host paths live in two places by necessity: here, and in the controller's
+  // own Compose env file, which has to exist before the container it configures
+  // does. Stackarr keeps that file in step, but only a recreate applies it —
+  // saying so beats leaving it to be discovered when a path reads as missing.
+  const env = data.controllerEnv;
+
+  if (env && !env.written) {
+    showToast(env.message || "Host settings saved, but deploy/.env could not be updated.", "warn");
+  } else if (env?.pathsChanged) {
+    showToast("Host settings saved. Recreate the Stackarr container to apply the new paths.", "warn");
+  } else {
+    showToast("Host settings saved.", "success");
+  }
+
   await loadState();
 }
 

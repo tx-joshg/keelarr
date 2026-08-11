@@ -82,7 +82,8 @@ export class StackarrAppService {
       settings,
       detection,
       effectiveSettings,
-      validation
+      validation,
+      controllerEnv
     } = await this.hostProfileService.saveProfile(input, context);
     const state = await this.dashboardService.buildState();
 
@@ -91,6 +92,9 @@ export class StackarrAppService {
       generated: [],
       hostDetection: detection,
       validation,
+      // Whether the controller's own env file could be brought into line, so
+      // the UI can say a restart is needed rather than leaving it to be found.
+      controllerEnv,
       effectiveSettings,
       settings
     };
