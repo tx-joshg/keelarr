@@ -13,9 +13,18 @@ const DEFAULT_BRIDGE_NETWORK = "bridge";
  *
  * Pure: returns the plan, attaches nothing.
  */
-export function planControllerAttachments(controller, endpoints) {
+export function planControllerAttachments(controller, endpoints, sharedNetwork = null) {
   const joined = new Set((controller?.networks || []).map((network) => network.name));
   const plan = new Map();
+
+  // The shared network is where catalog services land, so the controller joins
+  // it whether or not anything is on it yet. This is what lets a clean host
+  // work with no manual setup: the controller's own Compose file declares no
+  // networks at all, and the first service deployed is reachable immediately
+  // rather than after the next controller restart.
+  if (sharedNetwork && !joined.has(sharedNetwork)) {
+    plan.set(sharedNetwork, []);
+  }
 
   for (const endpoint of endpoints) {
     if (!endpoint?.running) {

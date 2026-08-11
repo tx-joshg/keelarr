@@ -4,7 +4,7 @@ import { JobRegistry } from "../jobs.js";
 import { appendActivity, loadSettings } from "../store.js";
 import { buildApplicationPayload, buildDownloadClientPayload, describeValidation } from "../wiring/payloads.js";
 import { attachController, planControllerAttachments } from "../wiring/attach.js";
-import { inspectContainers } from "../runtime.js";
+import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
 import { arrApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
 import { buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
@@ -15,7 +15,7 @@ import {
   reconcileDownloadClient,
   reconcileRootFolder
 } from "../wiring/reconcile.js";
-import { getServiceDefinition } from "../service-catalog.js";
+import { SHARED_NETWORK, getServiceDefinition } from "../service-catalog.js";
 
 const defaultLogger = createLogger();
 
@@ -132,6 +132,7 @@ export class WiringService {
     appendActivityImpl = appendActivity,
     arrApiImpl = arrApi,
     attachControllerImpl = attachController,
+    ensureSharedNetworkImpl = ensureSharedNetwork,
     hostProfileService = null,
     inspectContainersImpl = inspectContainers,
     inspectNetworkDriversImpl = inspectNetworkDrivers,
@@ -144,6 +145,7 @@ export class WiringService {
     this.now = nowImpl;
     this.appendActivity = appendActivityImpl;
     this.attachController = attachControllerImpl;
+    this.ensureSharedNetwork = ensureSharedNetworkImpl;
     this.jobs = jobs;
     this.arrApi = arrApiImpl;
     this.hostProfileService = hostProfileService;
@@ -319,14 +321,19 @@ export class WiringService {
     const logger = this.scopedLogger(context);
 
     try {
+      const settings = await this.loadSettings();
+      // Created here rather than by Compose: QNAP's Container Station cannot
+      // create a Compose-owned bridge network, but accepts this call fine.
+      await this.ensureSharedNetwork(settings, SHARED_NETWORK, { logger });
+
       const { controller, endpoints } = await this.gather(context);
-      const plan = planControllerAttachments(controller, [...endpoints.values()]);
+      const plan = planControllerAttachments(controller, [...endpoints.values()], SHARED_NETWORK);
 
       if (plan.length === 0) {
         return { attached: [], skipped: [] };
       }
 
-      const result = await this.attachController(await this.loadSettings(), plan, { logger });
+      const result = await this.attachController(settings, plan, { logger });
 
       for (const entry of result.attached) {
         logger.info("wiring.controller_attached", { network: entry.network, services: entry.services });

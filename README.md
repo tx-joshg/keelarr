@@ -298,6 +298,7 @@ docker compose -f compose.example.yml up -d --build
 Important:
 
 - `HOST_STACK_ROOT`, `HOST_CONFIG_ROOT`, `HOST_MEDIA_ROOT`, and `HOST_DOWNLOADS_ROOT` in `.env` must match the real host paths
+- the controller creates the shared `stackarr` Docker network on first start; nothing needs to exist beforehand
 - those paths are mounted into the container at the exact same absolute paths so generated Compose files, backups, and adoption scans stay aligned with the host
 - remove the Plex logs mount line from `compose.example.yml` if you do not use Tautulli or do not want Plex log health support yet
 - controller logs are written to `${STACKARR_DATA_DIR}/stackarr.log` and also mirrored to `docker logs stackarr`

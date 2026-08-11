@@ -22,6 +22,22 @@ const app = (name, kind, networks, running = true) => ({
 
 const userBridge = (name) => [{ name, address: "172.29.0.2", driver: "bridge" }];
 
+test("the controller joins the shared network even with nothing on it yet", () => {
+  // This is what lets a clean host work with no manual setup: the controller's
+  // Compose file declares no networks, so it starts on its own default bridge
+  // and pulls itself onto the shared network here. Without this, the first
+  // catalog service deployed would be unreachable until the next restart.
+  const plan = planControllerAttachments(controller("deploy_default"), [], "stackarr");
+
+  assert.deepEqual(plan, [{ network: "stackarr", services: [] }]);
+});
+
+test("the shared network is not joined twice when already attached", () => {
+  const plan = planControllerAttachments(controller("stackarr"), [], "stackarr");
+
+  assert.deepEqual(plan, []);
+});
+
 test("the controller joins a user-defined network it is missing", () => {
   const plan = planControllerAttachments(controller("stackarr"), [
     app("Ombi", ENDPOINT_KIND.BRIDGE, userBridge("ombi_default"))
