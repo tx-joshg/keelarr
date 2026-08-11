@@ -13,7 +13,7 @@ import {
 } from "../wiring/payloads.js";
 import { attachController, planControllerAttachments } from "../wiring/attach.js";
 import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
-import { arrApi, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
+import { arrApi, bazarrApi, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
 import { readContainerFile } from "../runtime.js";
 import { LAN_CLIENT, buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
@@ -24,7 +24,8 @@ import {
   RECONCILE_STATE,
   reconcileApplication,
   reconcileDownloadClient,
-  reconcileRootFolder
+  reconcileRootFolder,
+  reconcileSettingsLink
 } from "../wiring/reconcile.js";
 import { SHARED_NETWORK, getServiceDefinition } from "../service-catalog.js";
 
@@ -41,6 +42,7 @@ export const WIRING_STEPS = [
   { name: "downloadclients", label: "Add the download client to each app" },
   { name: "rootfolders", label: "Add library folders" },
   { name: "applications", label: "Register the apps with Prowlarr" },
+  { name: "subtitles", label: "Point Bazarr at the library apps" },
   { name: "verify", label: "Run each app's own connection tests" }
 ];
 
@@ -171,6 +173,7 @@ export class WiringService {
     },
     readApiKeyImpl = readApiKey,
     readContainerFileImpl = readContainerFile,
+    bazarrApiImpl = bazarrApi,
     sabnzbdApiImpl = sabnzbdApi,
     sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   } = {}) {
@@ -189,6 +192,7 @@ export class WiringService {
     this.pathExists = pathExistsImpl;
     this.readApiKey = readApiKeyImpl;
     this.readContainerFile = readContainerFileImpl;
+    this.bazarrApi = bazarrApiImpl;
     this.sabnzbdApi = sabnzbdApiImpl;
     this.sleep = sleepImpl;
   }
@@ -330,7 +334,8 @@ export class WiringService {
     const prerequisites = findMissingPrerequisites({ apps: current, services, appUrls });
     const links = [
       ...this.checkDownloadClients(services, endpoints, current, hostAddress, mounts),
-      ...this.checkProwlarrApplications(services, endpoints, current, hostAddress)
+      ...this.checkProwlarrApplications(services, endpoints, current, hostAddress),
+      ...this.checkBazarrLinks(services, endpoints, current, hostAddress)
     ];
     const rootFolders = this.checkRootFolders(services, current, mounts, settings);
     const pathMappings = this.checkPathMappings(services, endpoints, mounts, hostAddress, downloadDirs?.completeDir);
@@ -466,10 +471,16 @@ export class WiringService {
         applications: gathered.report.links.filter(
           (link) => link.kind === "indexer-app" && link.state === RECONCILE_STATE.ABSENT
         ),
-        rootFolders: gathered.report.rootFolders.filter((folder) => folder.state === RECONCILE_STATE.ABSENT)
+        rootFolders: gathered.report.rootFolders.filter((folder) => folder.state === RECONCILE_STATE.ABSENT),
+        subtitles: gathered.report.links.filter(
+          (link) => link.kind === "subtitle-source" && link.state === RECONCILE_STATE.ABSENT
+        )
       };
       const total =
-        actionable.downloadClients.length + actionable.applications.length + actionable.rootFolders.length;
+        actionable.downloadClients.length +
+        actionable.applications.length +
+        actionable.rootFolders.length +
+        actionable.subtitles.length;
 
       if (total === 0) {
         throw new StackarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
@@ -491,6 +502,7 @@ export class WiringService {
     await this.applyDownloadClients(ctx, plan, created, logger);
     await this.applyRootFolders(ctx, plan, created, logger);
     await this.applyApplications(ctx, plan, created, skipped, logger);
+    await this.applySubtitleLinks(ctx, plan, created, logger);
 
     const verification = await ctx.step("verify", async () => {
       const results = [];
@@ -499,7 +511,9 @@ export class WiringService {
         const link = current.get(serviceId)?.baseUrl;
         const key = keys.get(serviceId);
 
-        if (!link || !key) {
+        // Only apps with a testall endpoint. Bazarr has none, and asking for
+        // one returns a 404 that reads as a failing connection.
+        if (!link || !key || !speaksArrApi(serviceId)) {
           continue;
         }
 
@@ -739,6 +753,93 @@ export class WiringService {
   }
 
   /**
+   * Points Bazarr at the apps whose libraries it subtitles.
+   *
+   * One settings write rather than one per link: Bazarr holds them in a single
+   * document, and patching it twice would mean reading back between writes to
+   * avoid the second undoing the first.
+   */
+  async applySubtitleLinks(ctx, plan, created, logger) {
+    const { actionable, current, keys } = plan;
+
+    if (actionable.subtitles.length === 0) {
+      ctx.skip("subtitles", "Bazarr already points at the library apps, or is not part of this stack.");
+      return;
+    }
+
+    await ctx.step("subtitles", async () => {
+      const failedBefore = this.outcome.failed.length;
+      const base = current.get("bazarr")?.baseUrl;
+      const key = keys.get("bazarr");
+      // Flat `settings-<section>-<field>` keys: the shape Bazarr's own UI posts,
+      // and the only one it acts on.
+      const params = {};
+      const wanted = [];
+
+      for (const link of actionable.subtitles) {
+        const targetKey = keys.get(link.target);
+
+        if (!targetKey) {
+          this.outcome.failed.push({
+            label: `Bazarr → ${link.targetName}`,
+            reason: `${link.targetName}'s API key could not be read, so Bazarr cannot be pointed at it.`
+          });
+          continue;
+        }
+
+        Object.assign(params, {
+          [`settings-general-use_${link.target}`]: "true",
+          [`settings-${link.target}-ip`]: link.address.host,
+          [`settings-${link.target}-port`]: String(link.address.port),
+          [`settings-${link.target}-apikey`]: targetKey,
+          [`settings-${link.target}-ssl`]: "false",
+          [`settings-${link.target}-base_url`]: "/"
+        });
+        wanted.push(link);
+      }
+
+      if (wanted.length === 0) {
+        return { detail: this.describeOutcome(actionable.subtitles.length, failedBefore) };
+      }
+
+      const result = await this.bazarrApi.updateSettings(base, key, params);
+
+      if (!result.ok) {
+        for (const link of wanted) {
+          this.outcome.failed.push({ label: `Bazarr → ${link.targetName}`, reason: result.error });
+        }
+
+        return { detail: this.describeOutcome(actionable.subtitles.length, failedBefore) };
+      }
+
+      // Read back rather than trust the status. Bazarr answers 204 whether or
+      // not it applied anything — a nested-JSON body is accepted and silently
+      // discarded — so a success here would otherwise be a claim, not a fact.
+      const after = await this.bazarrApi.getSettings(base, key);
+
+      for (const link of wanted) {
+        const applied = after.ok
+          && after.data?.general?.[`use_${link.target}`] === true
+          && String(after.data?.[link.target]?.ip) === String(link.address.host);
+
+        if (applied) {
+          created.push({ serviceId: "bazarr", label: `Bazarr → ${link.targetName}` });
+          logger.info("wiring.created", { label: `Bazarr → ${link.targetName}` });
+        } else {
+          this.outcome.failed.push({
+            label: `Bazarr → ${link.targetName}`,
+            reason: after.ok
+              ? "Bazarr accepted the change but did not apply it."
+              : `Bazarr accepted the change but could not be read back: ${after.error}`
+          });
+        }
+      }
+
+      return { detail: this.describeOutcome(actionable.subtitles.length, failedBefore) };
+    });
+  }
+
+  /**
    * Test, then write.
    *
    * Arr apps validate on save too, so this is not the only guard — but testing
@@ -811,6 +912,24 @@ export class WiringService {
         applications: [],
         tests: null
       };
+
+      if (service.id === "bazarr") {
+        if (key && link.ok) {
+          const settings = await this.bazarrApi.getSettings(link.baseUrl, key);
+          entry.reachable = settings.ok;
+          entry.error = settings.ok ? null : settings.error;
+          entry.bazarrSettings = settings.data || null;
+          // Counted, not read: which languages someone wants is their choice,
+          // and having none is why a fully wired Bazarr still does nothing.
+          const profiles = await this.bazarrApi.getLanguageProfiles(link.baseUrl, key);
+          entry.languageProfiles = profiles.ok ? (profiles.data || []).length : null;
+        } else {
+          entry.error = link.ok ? null : link.reason;
+        }
+
+        current.set(service.id, entry);
+        continue;
+      }
 
       if (!speaksArrApi(service.id) || !key || !link.ok) {
         entry.error = link.ok ? null : link.reason;
@@ -1040,6 +1159,62 @@ export class WiringService {
         test: result.state === RECONCILE_STATE.CORRECT ? app.tests : null
       };
     });
+  }
+
+  /**
+   * Bazarr talks to Radarr and Sonarr to know what needs subtitles. It keeps
+   * each as a block of settings rather than an entry in a collection, so the
+   * address goes over as separate host and port fields.
+   */
+  checkBazarrLinks(services, endpoints, current, hostAddress) {
+    const bazarr = services.find((service) => service.id === "bazarr");
+
+    if (!bazarr) {
+      return [];
+    }
+
+    const app = current.get("bazarr");
+
+    return services
+      .filter((service) => ["radarr", "sonarr"].includes(service.id))
+      .map((service) => {
+        const base = {
+          id: `bazarr->${service.id}:subtitles`,
+          kind: "subtitle-source",
+          source: "bazarr",
+          sourceName: "Bazarr",
+          target: service.id,
+          targetName: service.name
+        };
+
+        if (!app?.reachable) {
+          return { ...base, ...unreadable(app, "Stackarr could not read Bazarr's configuration.") };
+        }
+
+        const link = resolveLink(endpoints.get("bazarr"), endpoints.get(service.id), { hostAddress });
+
+        if (!link.ok) {
+          return { ...base, state: "blocked", reason: link.reason, address: null };
+        }
+
+        const result = reconcileSettingsLink({
+          enabled: app.bazarrSettings?.general?.[`use_${service.id}`] === true,
+          current: app.bazarrSettings?.[service.id],
+          desired: { ip: link.host, port: link.port },
+          describe: `${service.name} in Bazarr`
+        });
+
+        return {
+          ...base,
+          state: result.state,
+          address: { baseUrl: link.baseUrl, host: link.host, port: link.port, strategy: link.strategy },
+          addressReason: link.reason,
+          actual: result.target ? { ip: result.target.ip, port: result.target.port } : null,
+          changes: result.changes,
+          reason: result.reason,
+          test: null
+        };
+      });
   }
 
   checkRootFolders(services, current, mounts, settings) {

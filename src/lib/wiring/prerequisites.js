@@ -17,6 +17,7 @@ const SETTINGS_PATH = {
   radarr: "/settings/indexers",
   sonarr: "/settings/indexers",
   lidarr: "/settings/indexers",
+  bazarr: "/settings/languages",
   sabnzbd: "/config/server/",
   tautulli: "/settings"
 };
@@ -84,6 +85,21 @@ export function findMissingPrerequisites({ apps, services, appUrls = {} }) {
       summary: "SABnzbd has no Usenet server configured.",
       consequence: "Downloads cannot start, however well the rest of the stack is wired.",
       link: settingsLinkFor("sabnzbd", appUrls.sabnzbd)
+    });
+  }
+
+  const subtitles = apps.get("bazarr");
+
+  if (has("bazarr") && subtitles?.reachable && subtitles.languageProfiles === 0) {
+    missing.push({
+      serviceId: "bazarr",
+      name: "Bazarr",
+      requirement: "language-profile",
+      summary: "Bazarr has no language profile, so it does not know which subtitles to look for.",
+      // A preference rather than a credential, but it fails the same way: fully
+      // wired and unable to do its job until a person decides.
+      consequence: "It will not fetch subtitles until at least one language is chosen.",
+      link: settingsLinkFor("bazarr", appUrls.bazarr)
     });
   }
 

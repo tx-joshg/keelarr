@@ -172,6 +172,68 @@ export const sabnzbdApi = {
 };
 
 /**
+ * Bazarr's API, which is settings-shaped rather than resource-shaped.
+ *
+ * The Arr apps expose collections you POST a new item to. Bazarr has one
+ * settings document you patch, and it type-checks what it is given: sending the
+ * string "False" for a boolean is answered with 406 and a complaint naming the
+ * expected type. So values go over as JSON, where a boolean stays a boolean.
+ */
+export const bazarrApi = {
+  systemStatus: (base, key) => bazarrRequest(base, key, "/api/system/status"),
+  getSettings: (base, key) => bazarrRequest(base, key, "/api/system/settings"),
+  getLanguageProfiles: async (base, key) => {
+    const result = await bazarrRequest(base, key, "/api/system/languages/profiles");
+    return result.ok ? { ok: true, data: Array.isArray(result.data) ? result.data : [], error: null } : result;
+  },
+  /**
+   * Writes settings the way Bazarr's own UI does: form-encoded keys named
+   * `settings-<section>-<field>`.
+   *
+   * Nested JSON is accepted with 204 and silently ignored — verified against a
+   * live instance, where the values came back unchanged. Since a 204 means
+   * nothing either way, callers must read back rather than trust the status.
+   *
+   * Generous timeout: enabling a link makes Bazarr reach out to that app, and
+   * the request does not return until it has.
+   */
+  updateSettings: (base, key, params) =>
+    bazarrRequest(base, key, "/api/system/settings", {
+      method: "POST",
+      form: params,
+      timeoutMs: 90_000
+    })
+};
+
+async function bazarrRequest(baseUrl, apiKey, path, { method = "GET", form = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  try {
+    const response = await fetch(`${String(baseUrl).replace(/\/+$/, "")}${path}`, {
+      method,
+      headers: {
+        "X-API-KEY": apiKey,
+        Accept: "application/json",
+        ...(form ? { "Content-Type": "application/x-www-form-urlencoded" } : {})
+      },
+      body: form ? new URLSearchParams(form) : undefined,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      // Its validation errors name the field and the expected type, which is
+      // more use than the status alone.
+      return { ok: false, data: null, error: text.trim().slice(0, 200) || `Bazarr answered ${response.status}.` };
+    }
+
+    return { ok: true, data: text ? JSON.parse(text) : null, error: null };
+  } catch (error) {
+    const reason = error.name === "TimeoutError" ? `No answer within ${timeoutMs / 1000}s.` : error.message;
+    return { ok: false, data: null, error: reason };
+  }
+}
+
+/**
  * The read-only surface the wiring check needs.
  *
  * `testall` is included despite being a POST: it runs each app's own connection

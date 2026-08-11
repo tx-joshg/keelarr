@@ -64,7 +64,7 @@ function inspectFor(name, port, { networkMode = "stackarr", address = "172.30.0.
 
 const DRIVERS = new Map([["stackarr", "bridge"]]);
 
-const PORTS = { radarr: 7878, sonarr: 8989, lidarr: 8686, sabnzbd: 8080, prowlarr: 9696 };
+const PORTS = { radarr: 7878, sonarr: 8989, lidarr: 8686, sabnzbd: 8080, prowlarr: 9696, bazarr: 6767 };
 
 function createHarness(overrides = {}) {
   const calls = [];
@@ -85,6 +85,31 @@ function createHarness(overrides = {}) {
       overrides.folderCreatable === false
         ? { ok: false, reason: `${containerPath} is not backed by a host directory Stackarr can reach.` }
         : { ok: true, created: overrides.pathExists === false, hostPath: `/share${containerPath}` },
+    bazarrApiImpl: (() => {
+      const state = overrides.bazarrSettings || { general: {} };
+
+      return {
+        getSettings: async () => ({ ok: true, data: state, error: null }),
+        getLanguageProfiles: async () => ({ ok: true, data: [{ id: 1 }], error: null }),
+        updateSettings: async (_base, _key, params) => {
+          calls.push({ call: "bazarr-settings", params });
+
+          // Mirrors the real thing: 204 either way, and only applied when the
+          // caller sends the flat form keys Bazarr actually honours.
+          if (!overrides.bazarrIgnoresWrites) {
+            for (const [key, value] of Object.entries(params)) {
+              const match = key.match(/^settings-([^-]+)-(.+)$/);
+              if (!match) continue;
+              const [, section, field] = match;
+              state[section] = state[section] || {};
+              state[section][field] = value === "true" ? true : value === "false" ? false : value;
+            }
+          }
+
+          return { ok: true, data: null, error: null };
+        }
+      };
+    })(),
     sabnzbdApiImpl: {
       listCategories: async () => ({ ok: true, data: overrides.categories || [], error: null }),
       createCategory: async (_base, _key, name) => {
@@ -112,7 +137,14 @@ function createHarness(overrides = {}) {
       return stillStarting
         ? { key: null, descriptor: { found: false, state: "pending", reason: "not written yet" }, downloadSettings: null }
         : {
-      key: { sabnzbd: SAB_KEY, radarr: RADARR_KEY, lidarr: RADARR_KEY, prowlarr: PROWLARR_KEY }[target.id] || null,
+      key: (overrides.unreadableKeys || []).includes(target.id) ? null : {
+        sabnzbd: SAB_KEY,
+        radarr: RADARR_KEY,
+        sonarr: RADARR_KEY,
+        lidarr: RADARR_KEY,
+        prowlarr: PROWLARR_KEY,
+        bazarr: PROWLARR_KEY
+      }[target.id] || null,
       descriptor: { found: true, state: "found", source: "/config/config.xml", fingerprint: "aabbccdd" },
       downloadSettings:
         target.id === "sabnzbd"
@@ -507,4 +539,66 @@ test("an app with no profiles yet is reported rather than sent an invalid folder
 
   assert.equal(calls.filter((entry) => entry.call === "create-rootfolder").length, 0);
   assert.match(job.result.failed.find((f) => /library folder/.test(f.label)).reason, /no quality profile/);
+});
+
+test("every declared step is either run or explicitly skipped", async () => {
+  // A step left pending means its handler was never reached. That happened for
+  // real: applySubtitleLinks existed but nothing called it, and the job still
+  // reported success with the step sitting untouched.
+  const { service } = createHarness();
+  const job = await settle(service.startWiring());
+
+  const untouched = job.steps.filter((step) => step.status === "pending" || step.status === "running");
+  assert.deepEqual(untouched.map((step) => step.name), [], "a declared step was never reached");
+});
+
+test("Bazarr is pointed at the library apps in one settings write", async () => {
+  const { service, calls } = createHarness({
+    selected: ["bazarr", "radarr", "sonarr"],
+    bazarrSettings: { general: { use_radarr: false, use_sonarr: false }, radarr: {}, sonarr: {} }
+  });
+  const job = await settle(service.startWiring());
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+
+  // One write, not one per link: Bazarr holds both in a single document, so a
+  // second patch would need a read-back to avoid undoing the first.
+  const writes = calls.filter((entry) => entry.call === "bazarr-settings");
+  assert.equal(writes.length, 1);
+  // The flat form shape is the only one Bazarr acts on; nested JSON is accepted
+  // with 204 and silently discarded.
+  assert.equal(writes[0].params["settings-general-use_radarr"], "true");
+  assert.equal(writes[0].params["settings-general-use_sonarr"], "true");
+  assert.equal(writes[0].params["settings-radarr-port"], "7878");
+  assert.deepEqual(job.result.created, ["Bazarr → Radarr", "Bazarr → Sonarr"]);
+});
+
+test("a write Bazarr accepts but does not apply is reported, not counted as success", async () => {
+  // It answers 204 whether or not anything changed, so trusting the status
+  // means reporting configuration that was never written.
+  const { service } = createHarness({
+    selected: ["bazarr", "radarr"],
+    bazarrSettings: { general: { use_radarr: false }, radarr: {} },
+    bazarrIgnoresWrites: true
+  });
+  const job = await settle(service.startWiring());
+
+  assert.deepEqual(job.result.created, []);
+  assert.match(job.result.failed[0].reason, /accepted the change but did not apply it/);
+});
+
+test("Bazarr is not pointed at an app whose key could not be read", async () => {
+  // Writing the link without a key would leave Bazarr enabled and unable to
+  // authenticate, which looks configured and never works.
+  const { service, calls } = createHarness({
+    selected: ["bazarr", "radarr", "sonarr"],
+    bazarrSettings: { general: { use_radarr: false, use_sonarr: false }, radarr: {}, sonarr: {} },
+    unreadableKeys: ["sonarr"]
+  });
+  const job = await settle(service.startWiring());
+
+  const params = calls.find((entry) => entry.call === "bazarr-settings").params;
+  assert.equal(params["settings-general-use_radarr"], "true");
+  assert.equal(params["settings-general-use_sonarr"], undefined, "an app with no readable key must be left out");
+  assert.match(job.result.failed.find((f) => /Sonarr/.test(f.label)).reason, /API key could not be read/);
 });

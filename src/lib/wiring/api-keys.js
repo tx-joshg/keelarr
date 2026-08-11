@@ -13,7 +13,8 @@ const KEY_SOURCES = {
   sonarr: { path: "/config/config.xml", format: "arr" },
   lidarr: { path: "/config/config.xml", format: "arr" },
   prowlarr: { path: "/config/config.xml", format: "arr" },
-  sabnzbd: { path: "/config/sabnzbd.ini", format: "sabnzbd" }
+  sabnzbd: { path: "/config/sabnzbd.ini", format: "sabnzbd" },
+  bazarr: { path: "/config/config/config.yaml", format: "bazarr" }
 };
 
 export function hasReadableApiKey(serviceId) {
@@ -80,6 +81,37 @@ export function parseSabnzbdConfig(text) {
 }
 
 /**
+ * Bazarr's own key, from the `auth:` block of its config.
+ *
+ * Scoped to that block deliberately: the same file also holds `apikey` under
+ * `sonarr:` and `radarr:` — the keys of the apps Bazarr talks to — and a plain
+ * search for the field would return whichever came first.
+ */
+export function parseBazarrApiKey(text) {
+  const lines = String(text || "").split("\n");
+  const start = lines.findIndex((line) => /^auth:\s*$/.test(line));
+
+  if (start === -1) {
+    return null;
+  }
+
+  for (const line of lines.slice(start + 1)) {
+    // Any unindented line ends the block.
+    if (/^\S/.test(line)) {
+      break;
+    }
+
+    const match = line.match(/^\s+apikey:\s*['"]?([0-9a-fA-F]{32})['"]?\s*$/);
+
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+/**
  * A short, non-reversible label for a key.
  *
  * Enough to answer "is the key Prowlarr stored for Radarr still the key Radarr
@@ -133,7 +165,11 @@ export async function readApiKey(settings, service, options = {}) {
   }
 
   const parsed = source.format === "sabnzbd" ? parseSabnzbdConfig(text) : null;
-  const key = parsed ? parsed.apiKey : parseArrApiKey(text);
+  const key = parsed
+    ? parsed.apiKey
+    : source.format === "bazarr"
+      ? parseBazarrApiKey(text)
+      : parseArrApiKey(text);
 
   if (!key) {
     return {

@@ -125,6 +125,48 @@ export function reconcileApplication(existing = [], desired) {
 }
 
 /**
+ * Reconciles a link held as fields in a settings document rather than as an
+ * entry in a collection.
+ *
+ * Bazarr keeps one `sonarr:` block and one `radarr:` block, so there is nothing
+ * to match on and nothing to duplicate — only whether the block points at the
+ * right place and is switched on. `absent` means the toggle is off; `drift`
+ * means it is on but aimed somewhere else, which is still never overwritten.
+ */
+export function reconcileSettingsLink({ enabled, current, desired, describe }) {
+  const changes = Object.keys(desired)
+    .filter((field) => String(current?.[field] ?? "") !== String(desired[field]))
+    .map((field) => ({ field, from: current?.[field] ?? null, to: desired[field] }));
+
+  if (!enabled) {
+    return {
+      state: RECONCILE_STATE.ABSENT,
+      target: null,
+      changes,
+      reason: `${describe} is not enabled.`
+    };
+  }
+
+  if (changes.length === 0) {
+    return {
+      state: RECONCILE_STATE.CORRECT,
+      target: current,
+      changes: [],
+      reason: `${describe} is already configured correctly.`
+    };
+  }
+
+  return {
+    state: RECONCILE_STATE.DRIFT,
+    target: current,
+    changes,
+    reason: `${describe} is enabled but points elsewhere: ${changes
+      .map((change) => `${change.field} is ${change.from}, expected ${change.to}`)
+      .join(", ")}.`
+  };
+}
+
+/**
  * Root folders are compared by containment rather than by exact path, because
  * the folder a user picked inside their media mount is their business. A
  * library at /Media/Films is correct; only having nothing there is not.
