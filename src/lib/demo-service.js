@@ -891,6 +891,20 @@ export class DemoStackarrAppService {
       })),
       links,
       rootFolders,
+      // A demo stack has no indexer either, and showing that is more useful
+      // than pretending every stack arrives complete.
+      prerequisites: has("prowlarr")
+        ? [
+            {
+              serviceId: "prowlarr",
+              name: "Prowlarr",
+              requirement: "indexer",
+              summary: "Prowlarr has no indexers, so it has nothing to sync into the apps connected to it.",
+              consequence: "Nothing in this stack can find releases until at least one indexer exists.",
+              link: "http://localhost:9696/settings/indexers"
+            }
+          ]
+        : [],
       pathMappings: acquirers.map((id) => ({
         serviceId: id,
         name: settings.services[id].name,
@@ -898,9 +912,11 @@ export class DemoStackarrAppService {
         mapping: null,
         reason: "The download client and this app both see completed downloads at /Media/Downloads/complete, so no mapping is required."
       })),
-      summary: { total: counted, correct: counted, drift: 0, ambiguous: 0, absent: 0, blocked: 0, unknown: 0 },
-      readiness: "ready",
-      readinessMessage: `Stack ready. All ${counted} connections are configured correctly.`
+      summary: { total: counted, correct: counted, drift: 0, ambiguous: 0, absent: 0, blocked: 0, pending: 0, unknown: 0 },
+      readiness: has("prowlarr") ? "needs-you" : "ready",
+      readinessMessage: has("prowlarr")
+        ? `All ${counted} connections are configured correctly, but Prowlarr still needs something only you can provide.`
+        : `Stack ready. All ${counted} connections are configured correctly.`
     };
   }
 

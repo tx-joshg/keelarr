@@ -2489,6 +2489,7 @@ const WIRING_STATE_META = {
 
 const WIRING_READINESS_META = {
   ready: { tone: "ok", icon: "fa-solid fa-circle-check" },
+  "needs-you": { tone: "warn", icon: "fa-solid fa-hand" },
   incomplete: { tone: "warn", icon: "fa-solid fa-triangle-exclamation" },
   blocked: { tone: "danger", icon: "fa-solid fa-ban" },
   pending: { tone: "muted", icon: "fa-solid fa-hourglass-half" }
@@ -2618,6 +2619,8 @@ function renderWiringModal() {
           <span>${escapeHtml(report.readinessMessage)}</span>
         </div>
 
+        ${renderWiringPrerequisites(report)}
+
         <div class="wiring-section-title">Connections</div>
         <ul class="wiring-list">${linkRows}</ul>
 
@@ -2651,6 +2654,52 @@ function renderWiringModal() {
             : ""}
         </div>
       </div>
+    </div>
+  `;
+}
+
+/**
+ * The things Stackarr cannot do for you, with a way to go and do them.
+ *
+ * These are credentials — an indexer key, a Usenet account, a Plex token — and
+ * they are the reason a stack can be perfectly wired and still unable to find a
+ * single release. Each row says what breaks without it and links straight to
+ * the page that fixes it, using the address a browser can actually reach.
+ */
+function renderWiringPrerequisites(report) {
+  const items = report.prerequisites || [];
+
+  if (items.length === 0) {
+    return "";
+  }
+
+  const rows = items
+    .map((item) => `
+      <li class="wiring-row wiring-row-warn">
+        <span class="wiring-row-icon"><i class="fa-solid fa-key"></i></span>
+        <span class="wiring-row-body">
+          <span class="wiring-row-title">
+            ${escapeHtml(item.name)}
+            <span class="wiring-row-state">${escapeHtml(item.requirement.replace(/-/g, " "))}</span>
+          </span>
+          <span class="wiring-row-reason">${escapeHtml(item.summary)}</span>
+          <span class="wiring-row-reason wiring-row-detail">${escapeHtml(item.consequence)}</span>
+          ${item.link
+            ? `<a class="wiring-row-link" href="${escapeHtml(item.link)}" target="_blank" rel="noreferrer noopener">
+                 Open ${escapeHtml(item.name)} settings <i class="fa-solid fa-arrow-up-right-from-square"></i>
+               </a>`
+            : ""}
+        </span>
+      </li>
+    `)
+    .join("");
+
+  return `
+    <div class="wiring-section-title">Needs you</div>
+    <ul class="wiring-list">${rows}</ul>
+    <div class="wiring-row-reason wiring-needs-you-note">
+      Stackarr configures everything that is not a secret. These carry your own credentials, so it reports them
+      rather than holding them.
     </div>
   `;
 }

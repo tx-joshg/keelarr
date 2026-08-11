@@ -15,9 +15,11 @@ import { attachController, planControllerAttachments } from "../wiring/attach.js
 import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
 import { arrApi, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
-import { buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
+import { readContainerFile } from "../runtime.js";
+import { LAN_CLIENT, buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
 import { planPathMapping, planRootFolder, readMounts } from "../wiring/path-plan.js";
 import { ensureLibraryFolder } from "../wiring/provision.js";
+import { findMissingPrerequisites, settingsLinkFor } from "../wiring/prerequisites.js";
 import {
   RECONCILE_STATE,
   reconcileApplication,
@@ -46,7 +48,16 @@ const READINESS = Object.freeze({
   READY: "ready",
   INCOMPLETE: "incomplete",
   BLOCKED: "blocked",
-  PENDING: "pending"
+  PENDING: "pending",
+  /**
+   * Every connection Stackarr manages is correct, but the stack still cannot do
+   * its job because something only the operator can supply is missing.
+   *
+   * Worth its own state. Reporting "ready" here would be true about the wiring
+   * and false about the thing the operator actually cares about: a stack with
+   * no indexer is perfectly wired and cannot find a single release.
+   */
+  NEEDS_YOU: "needs-you"
 });
 
 function hostAddressFrom(settings) {
@@ -159,6 +170,7 @@ export class WiringService {
       }
     },
     readApiKeyImpl = readApiKey,
+    readContainerFileImpl = readContainerFile,
     sabnzbdApiImpl = sabnzbdApi,
     sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   } = {}) {
@@ -176,6 +188,7 @@ export class WiringService {
     this.logger = logger.child({ component: "wiring-service" });
     this.pathExists = pathExistsImpl;
     this.readApiKey = readApiKeyImpl;
+    this.readContainerFile = readContainerFileImpl;
     this.sabnzbdApi = sabnzbdApiImpl;
     this.sleep = sleepImpl;
   }
@@ -304,6 +317,17 @@ export class WiringService {
     }
 
     const current = await this.readCurrentConfig(services, endpoints, controller, keys, hostAddress, logger);
+    await this.readPrerequisiteState(services, current, keys, settings, logger);
+
+    // Links the operator clicks, so resolved from a browser's position rather
+    // than the controller's — a container name would not resolve for them.
+    const appUrls = Object.fromEntries(
+      services.map((service) => {
+        const link = resolveLink(LAN_CLIENT, endpoints.get(service.id), { hostAddress });
+        return [service.id, link.ok ? link.baseUrl : service.appUrl];
+      })
+    );
+    const prerequisites = findMissingPrerequisites({ apps: current, services, appUrls });
     const links = [
       ...this.checkDownloadClients(services, endpoints, current, hostAddress, mounts),
       ...this.checkProwlarrApplications(services, endpoints, current, hostAddress)
@@ -330,7 +354,8 @@ export class WiringService {
         links,
         rootFolders,
         pathMappings,
-        ...this.summarize(links, rootFolders, participants)
+        prerequisites,
+        ...this.summarize(links, rootFolders, participants, prerequisites)
       }
     };
   }
@@ -811,16 +836,22 @@ export class WiringService {
       entry.version = status.data?.version || null;
 
       if (service.id === "prowlarr") {
-        const applications = await this.arrApi.listApplications(link.baseUrl, key);
+        const [applications, indexers] = await Promise.all([
+          this.arrApi.listApplications(link.baseUrl, key),
+          this.countIndexers(service.id, link.baseUrl, key)
+        ]);
         entry.applications = applications.data || [];
+        entry.indexerCount = indexers;
         entry.tests = await this.runTests(() => this.arrApi.testAllApplications(link.baseUrl, key));
       } else {
-        const [clients, folders] = await Promise.all([
+        const [clients, folders, indexers] = await Promise.all([
           this.arrApi.listDownloadClients(service.id, link.baseUrl, key),
-          this.arrApi.listRootFolders(service.id, link.baseUrl, key)
+          this.arrApi.listRootFolders(service.id, link.baseUrl, key),
+          this.countIndexers(service.id, link.baseUrl, key)
         ]);
         entry.downloadClients = clients.data || [];
         entry.rootFolders = folders.data || [];
+        entry.indexerCount = indexers;
         entry.tests = await this.runTests(() =>
           this.arrApi.testAllDownloadClients(service.id, link.baseUrl, key)
         );
@@ -831,6 +862,49 @@ export class WiringService {
     }
 
     return current;
+  }
+
+  /**
+   * How many indexers an app has. Null when it cannot be determined, which the
+   * prerequisite check reads as "no opinion" rather than "none" — claiming an
+   * app has no indexers because a call failed would send the operator hunting
+   * for a problem that is not there.
+   */
+  async countIndexers(serviceId, baseUrl, key) {
+    if (typeof this.arrApi.listIndexers !== "function") {
+      return null;
+    }
+
+    const result = await this.arrApi.listIndexers(serviceId, baseUrl, key);
+    return result?.ok ? (result.data || []).length : null;
+  }
+
+  /**
+   * Reads the few things only the operator can supply, so the report can say
+   * what is missing. Counted or checked for presence, never read: an indexer
+   * key and a Usenet password are the operator's, and Stackarr has no use for
+   * their values.
+   */
+  async readPrerequisiteState(services, current, keys, settings, logger) {
+    const downloader = services.find((service) => service.id === "sabnzbd");
+
+    if (downloader && keys.get("sabnzbd") && current.get("sabnzbd")?.baseUrl && this.sabnzbdApi.countServers) {
+      const servers = await this.sabnzbdApi.countServers(current.get("sabnzbd").baseUrl, keys.get("sabnzbd"));
+      current.get("sabnzbd").serverCount = servers.ok ? servers.data : null;
+      current.get("sabnzbd").reachable = servers.ok;
+    }
+
+    const analytics = services.find((service) => service.id === "tautulli");
+
+    if (analytics) {
+      // Tautulli keeps its Plex link in a plain ini, so presence is readable
+      // without touching the token itself.
+      const text = await this.readContainerFile(settings, analytics.containerName, "/config/config.ini", { logger });
+      const entry = current.get("tautulli") || {};
+      entry.plexLinked = text === null ? null : /^\s*pms_ip\s*=\s*\S+/m.test(text);
+      entry.reachable = text !== null;
+      current.set("tautulli", entry);
+    }
   }
 
   /**
@@ -1024,7 +1098,7 @@ export class WiringService {
       });
   }
 
-  summarize(links, rootFolders, participants) {
+  summarize(links, rootFolders, participants, prerequisites = []) {
     const states = [...links, ...rootFolders]
       .map((entry) => entry.state)
       .filter((state) => state !== "not-applicable");
@@ -1068,6 +1142,18 @@ export class WiringService {
     }
 
     if (summary.correct === summary.total && summary.total > 0) {
+      // Connections first, then whether the stack can actually acquire
+      // anything. Both are reported, because they fail independently.
+      if (prerequisites.length > 0) {
+        return {
+          summary,
+          readiness: READINESS.NEEDS_YOU,
+          readinessMessage: `All ${summary.total} connections are configured correctly, but ${prerequisites
+            .map((entry) => entry.name)
+            .join(" and ")} still ${prerequisites.length === 1 ? "needs" : "need"} something only you can provide.`
+        };
+      }
+
       return {
         summary,
         readiness: READINESS.READY,
@@ -1086,7 +1172,9 @@ export class WiringService {
     return {
       summary,
       readiness: READINESS.INCOMPLETE,
-      readinessMessage: `${summary.correct} of ${summary.total} connections are configured: ${outstanding.join(", ")}.`
+      readinessMessage: `${summary.correct} of ${summary.total} connections are configured: ${outstanding.join(", ")}.${
+        prerequisites.length ? ` ${prerequisites.length} thing${prerequisites.length === 1 ? "" : "s"} also need${prerequisites.length === 1 ? "s" : ""} you.` : ""
+      }`
     };
   }
 }

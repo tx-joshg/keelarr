@@ -139,6 +139,14 @@ export async function sabnzbdRequest(baseUrl, apiKey, params, { timeoutMs = DEFA
 }
 
 export const sabnzbdApi = {
+  /** Counted, never read: these are the operator's paid Usenet credentials. */
+  countServers: async (base, key) => {
+    const result = await sabnzbdRequest(base, key, { mode: "get_config", section: "servers" });
+    return result.ok
+      ? { ok: true, data: (result.data?.config?.servers || []).length, error: null }
+      : result;
+  },
+
   listCategories: async (base, key) => {
     const result = await sabnzbdRequest(base, key, { mode: "get_config", section: "categories" });
     return result.ok
@@ -181,6 +189,9 @@ export const arrApi = {
   listRemotePathMappings: (serviceId, base, key) =>
     arrRequest(base, key, { path: api(serviceId, "remotepathmapping") }),
   listApplications: (base, key) => arrRequest(base, key, { path: "/api/v1/applications" }),
+  // Only ever counted. Indexers carry paid credentials, so Stackarr reads
+  // whether any exist and never touches them.
+  listIndexers: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "indexer") }),
   testAllDownloadClients: (serviceId, base, key) =>
     arrRequest(base, key, { method: "POST", path: api(serviceId, "downloadclient/testall") }),
   testAllApplications: (base, key) => arrRequest(base, key, { method: "POST", path: "/api/v1/applications/testall" }),

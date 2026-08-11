@@ -235,6 +235,12 @@ Each connection is reported in one of six states:
 | `blocked` | This host's networking cannot carry the connection at all |
 | `pending` | The app has only just started and has not written its API key yet |
 
+A seventh state sits alongside these: **needs you**. Stackarr configures everything that is not a secret, so what remains is credentials it cannot hold — an indexer key, a Usenet account, a Plex token. The check reports each one, what it breaks, and a link straight to the page that fixes it.
+
+That distinction matters because the two fail independently. A stack whose every connection is correct and whose Prowlarr has no indexers is perfectly wired and cannot find a single release, so the verdict says so rather than reporting `ready`.
+
+These are not read, only counted or checked for presence. Arr apps mask fields marked `privacy: apiKey`, so an indexer key already configured in Radarr comes back as `***` and could not be copied into Prowlarr even if that were wanted. Detection and a link are genuinely the most that can be done, and handing credentials to a controller that has no authentication yet would be a worse place for them than the app that needs them.
+
 `pending` is deliberately distinct from `absent`. A freshly installed app writes `config.xml` a few seconds after first start, and reporting that as missing turns a normal startup into a false alarm.
 
 **Configure** then acts on the `absent` rows only, as a job you can watch. Payloads are built by patching values into the schema each app publishes, so fields Stackarr does not name keep the app's own defaults — your categories and priorities survive. Each payload is tested against the app before it is saved, and a refusal is reported with the app's own words rather than overridden: Arr apps offer a `forceSave` escape hatch, and using it produces configuration that looks right and never works.
@@ -247,7 +253,7 @@ Identity is matched on implementation plus address, never on the entry's name �
 
 - Authentication and multi-user access control
 - Repairing app-to-app configuration that already exists (Stackarr adds missing connections, but a link that points somewhere unexpected is reported for you to change inside the app)
-- Indexer setup, which carries credentials Stackarr has no business holding
+- Indexer, Usenet account, and Plex credentials — detected and linked to, never held
 - Remote path mapping writes (disagreeing paths are detected and described, but not yet corrected)
 - Reverse proxy and certificate automation
 - One-click indexer/download-client/provider setup inside each app
