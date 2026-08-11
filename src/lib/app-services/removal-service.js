@@ -236,17 +236,37 @@ export class RemovalService {
     const removed = [];
     const kept = [];
 
-    // A final snapshot makes even a full removal recoverable, so it runs
-    // whenever config is about to be destroyed and backups are being kept.
-    if (input.removeConfig && !input.removeBackups) {
+    // A snapshot runs whenever backups are being kept, not only when config is
+    // about to be destroyed. Its other job is to archive the stack files: an
+    // imported service's compose.yml is the only remaining record of what it
+    // actually was, and reinstalling without it produces a catalog default
+    // pointing at the wrong config location.
+    let restoreFrom = null;
+
+    if (!input.removeBackups) {
       await ctx.step("snapshot", async () => {
-        const result = await this.backupService(settings, service, { logger: stepLogger });
-        return { detail: `Final snapshot saved to ${result.backupDir}.` };
+        try {
+          const result = await this.backupService(settings, service, { logger: stepLogger });
+          restoreFrom = result?.backupDir || null;
+        } catch (error) {
+          // When the configuration is about to be destroyed, an unsaved
+          // snapshot is the difference between recoverable and gone, so the
+          // removal stops. When it is being kept, the data is not at risk and
+          // losing the archive only costs the ability to reinstall as the same
+          // service — worth reporting, not worth refusing.
+          if (input.removeConfig) {
+            throw error;
+          }
+
+          return { detail: `Could not archive the stack files: ${error.message}. Reinstalling will start this app fresh.` };
+        }
+
+        return restoreFrom
+          ? { detail: `Snapshot saved to ${restoreFrom}.` }
+          : { detail: "No snapshot was produced, so reinstalling will start this app fresh." };
       });
     } else {
-      ctx.skip("snapshot", input.removeBackups
-        ? "Backups are being deleted, so a final snapshot would be pointless."
-        : "Configuration is being kept.");
+      ctx.skip("snapshot", "Backups are being deleted, so a snapshot would be pointless.");
     }
 
     await ctx.step("stop", async () => {
@@ -328,7 +348,24 @@ export class RemovalService {
 
     await ctx.step("finalize", async () => {
       const nextOverrides = { ...(settings.serviceOverrides || {}) };
-      delete nextOverrides[service.id];
+
+      if (restoreFrom && !input.removeConfig) {
+        // Keep just enough to reinstall the same service. Dropping the whole
+        // entry turns an imported service into a catalog one, which then looks
+        // for its configuration at a path that has never existed.
+        nextOverrides[service.id] = {
+          ...(nextOverrides[service.id] || {}),
+          mode: service.managedMode,
+          image: service.image,
+          port: service.port,
+          containerName: service.containerName,
+          restartPolicy: service.restartPolicy,
+          networkMode: service.networkMode,
+          restoreFrom
+        };
+      } else {
+        delete nextOverrides[service.id];
+      }
 
       await this.saveSettings({
         ...settings,

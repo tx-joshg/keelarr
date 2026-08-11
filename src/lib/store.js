@@ -122,7 +122,11 @@ function sanitizeServiceOverrides(value) {
       reviewNotesPath: typeof item.reviewNotesPath === "string" ? item.reviewNotesPath : null,
       importedAt: typeof item.importedAt === "string" ? item.importedAt : null,
       cutoverAt: typeof item.cutoverAt === "string" ? item.cutoverAt : null,
-      rollbackContainerName: typeof item.rollbackContainerName === "string" ? item.rollbackContainerName : null
+      rollbackContainerName: typeof item.rollbackContainerName === "string" ? item.rollbackContainerName : null,
+      // Set when a service was removed with its configuration kept: the backup
+      // directory holding the stack files needed to bring it back as the same
+      // service rather than as a fresh catalog one.
+      restoreFrom: typeof item.restoreFrom === "string" ? item.restoreFrom : null
     };
   }
 

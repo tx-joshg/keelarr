@@ -213,7 +213,10 @@ export function buildServiceFromCatalog(baseSettings, id, override = {}) {
     cutoverAt: override.cutoverAt || null,
     // Present only while a preserved pre-cutover container still exists, so
     // the dashboard knows whether revert is available.
-    rollbackContainerName: override.rollbackContainerName || null
+    rollbackContainerName: override.rollbackContainerName || null,
+    // Where a previous removal archived this service's stack files, so a
+    // reinstall can restore the service it was rather than a catalog default.
+    restoreFrom: override.restoreFrom || null
   };
 
   return service;

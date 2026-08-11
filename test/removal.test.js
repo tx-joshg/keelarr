@@ -196,12 +196,61 @@ test("a failure to stop the container aborts before anything is deleted", async 
   assert.equal(job.steps.find((s) => s.name === "config").status, STEP_STATUS.PENDING);
 });
 
-test("finalize deselects the service and clears its stored state", async () => {
+test("finalize deselects the service and keeps a record of how to bring it back", async () => {
   const { service, saved } = createService();
   await settle(service.startRemoval("radarr", { confirmContainerName: "radarr" }));
+  const override = saved.at(-1).serviceOverrides.radarr;
 
   assert.ok(!saved.at(-1).selectedServiceIds.includes("radarr"));
+  // Config was kept, so the identity is kept too. Dropping it turns an
+  // imported service into a catalog one on reinstall, pointing at a config
+  // path that has never existed — the app returns empty.
+  assert.ok(override, "a service whose config was kept must remember what it was");
+  assert.equal(override.containerName, "radarr");
+  assert.ok(override.restoreFrom, "the archived stack location must be recorded");
+});
+
+test("finalize clears stored state entirely when the config is deleted too", async () => {
+  const { service, saved } = createService();
+  await settle(service.startRemoval("radarr", { confirmContainerName: "radarr", removeConfig: true }));
+
+  assert.ok(!saved.at(-1).selectedServiceIds.includes("radarr"));
+  // Nothing left to come back to, so keeping a restore record would promise
+  // something that cannot be delivered.
   assert.equal(saved.at(-1).serviceOverrides.radarr, undefined);
+});
+
+test("a removal still succeeds when the stack files cannot be archived", async () => {
+  const { service } = createService({
+    impls: {
+      backupServiceImpl: async () => {
+        throw new Error("backup volume is full");
+      }
+    }
+  });
+  const job = await settle(service.startRemoval("radarr", { confirmContainerName: "radarr" }));
+
+  // The config is being kept, so nothing is at risk. Losing the archive costs
+  // only the ability to reinstall as the same service, and the step says so.
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.match(job.steps.find((s) => s.name === "snapshot").detail, /start this app fresh/);
+});
+
+test("a removal that destroys config aborts when the snapshot fails", async () => {
+  const { service } = createService({
+    impls: {
+      backupServiceImpl: async () => {
+        throw new Error("backup volume is full");
+      }
+    }
+  });
+  const job = await settle(
+    service.startRemoval("radarr", { confirmContainerName: "radarr", removeConfig: true })
+  );
+
+  // Here the snapshot is the difference between recoverable and gone.
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.match(job.error.message, /backup volume is full/);
 });
 
 test("removeImage treats 'no such image' and 'in use' as non-failures", async () => {

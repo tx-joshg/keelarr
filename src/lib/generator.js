@@ -1,5 +1,5 @@
 import path from "node:path";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 
 import YAML from "yaml";
 
@@ -131,6 +131,45 @@ export async function writeDraftFiles(draft) {
   };
 }
 
+/**
+ * Puts an archived stack back before generation runs.
+ *
+ * A service removed with its configuration kept records where its stack files
+ * were archived. Restoring them is what lets an imported service come back as
+ * itself: its compose file is the only surviving description of the image,
+ * network mode, and — critically — the named volume holding its database.
+ * Regenerating from the catalog instead produces a service pointing at a bind
+ * path that has never existed, which starts up empty.
+ *
+ * Never overwrites a stack that is already in place.
+ */
+export async function restoreArchivedStack(service) {
+  if (!service?.restoreFrom || (await fileExists(service.composePath))) {
+    return null;
+  }
+
+  const archivedCompose = path.join(service.restoreFrom, "compose.yml");
+
+  if (!(await fileExists(archivedCompose))) {
+    return null;
+  }
+
+  await mkdir(service.stackDir, { recursive: true });
+  await copyFile(archivedCompose, service.composePath);
+
+  // Imported stacks are self-contained and may have no .env at all, so its
+  // absence is normal rather than a failure.
+  const archivedEnv = path.join(service.restoreFrom, ".env");
+
+  if (await fileExists(archivedEnv)) {
+    await copyFile(archivedEnv, service.envPath);
+  } else if (!(await fileExists(service.envPath))) {
+    await writeFile(service.envPath, "", "utf8");
+  }
+
+  return { serviceId: service.id, restoredFrom: service.restoreFrom };
+}
+
 export async function writeStacks(settings, serviceIds = settings.selectedServiceIds) {
   const writes = [];
 
@@ -142,6 +181,8 @@ export async function writeStacks(settings, serviceIds = settings.selectedServic
     }
 
     if (isImportedMode(service.managedMode)) {
+      await restoreArchivedStack(service);
+
       const composeExists = await fileExists(service.composePath);
       const envExists = await fileExists(service.envPath);
 
