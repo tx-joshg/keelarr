@@ -12,6 +12,9 @@ const appOrder = [
 
 const state = {
   configured: false,
+  // Null until the first /api/auth/status answers. Nothing else is fetched
+  // before then, because every other endpoint is behind the password.
+  auth: null,
   catalog: [],
   settings: null,
   services: [],
@@ -44,7 +47,11 @@ const ui = {
   cutover: null,
   // Latest cutover/revert job snapshot, polled while it runs.
   job: null,
-  jobTimer: null
+  jobTimer: null,
+  authPassword: "",
+  authConfirm: "",
+  authError: null,
+  authBusy: false
 };
 
 const appNode = document.querySelector("#app");
@@ -64,6 +71,19 @@ async function request(url, options = {}) {
     ...options
   });
   const data = await response.json();
+
+  // A session can lapse under a page that is already open. Rather than let
+  // every caller surface "Sign in to continue." as a red banner over a stale
+  // dashboard, put the sign-in screen back up.
+  if (response.status === 401 && state.auth) {
+    state.auth = {
+      ...state.auth,
+      configured: data.details?.configured ?? state.auth.configured,
+      authenticated: false
+    };
+    ui.authError = null;
+    render();
+  }
 
   if (!response.ok || data.ok === false) {
     const error = new Error(data.error || "Request failed.");
@@ -1998,7 +2018,65 @@ function renderCurrentView() {
   return renderSettingsView();
 }
 
+/**
+ * The sign-in screen, shown instead of the dashboard.
+ *
+ * It deliberately renders on its own rather than as a modal over the stack:
+ * with no session there is no state to show behind it, and a blurred-out
+ * dashboard would only imply otherwise.
+ */
+function renderAuthGate() {
+  const firstRun = !state.auth?.configured;
+  const minLength = state.auth?.minPasswordLength || 8;
+
+  appNode.innerHTML = `
+    <div class="auth-shell">
+      <form class="auth-card" data-auth-form>
+        <div class="brand-mark auth-mark">SA</div>
+        <h1 class="auth-title">${firstRun ? "Set a password" : "Sign in"}</h1>
+        <p class="auth-lead">
+          ${firstRun
+            ? `Stackarr controls Docker on this machine, so it needs a password before it will do anything else. Choose one of at least ${minLength} characters.`
+            : "Enter the password you set for this Stackarr."}
+        </p>
+        <label class="auth-field">
+          <span>Password</span>
+          <input
+            type="password"
+            name="authPassword"
+            autocomplete="${firstRun ? "new-password" : "current-password"}"
+            value="${escapeHtml(ui.authPassword)}"
+            autofocus
+          >
+        </label>
+        ${firstRun ? `
+          <label class="auth-field">
+            <span>Confirm password</span>
+            <input type="password" name="authConfirm" autocomplete="new-password" value="${escapeHtml(ui.authConfirm)}">
+          </label>
+        ` : ""}
+        ${ui.authError ? `<p class="auth-error">${escapeHtml(ui.authError)}</p>` : ""}
+        <button class="button button-primary auth-submit" type="submit" ${ui.authBusy ? "disabled" : ""}>
+          ${ui.authBusy ? "Working..." : (firstRun ? "Set password and continue" : "Sign in")}
+        </button>
+        ${firstRun ? `
+          <p class="auth-note">
+            There is no password reset. If you lose it, delete <code>auth.json</code> from Stackarr's data directory and this screen comes back.
+          </p>
+        ` : ""}
+      </form>
+    </div>
+  `;
+
+  appNode.querySelector('input[name="authPassword"]')?.focus();
+}
+
 function render() {
+  if (state.auth && state.auth.required && !state.auth.authenticated) {
+    renderAuthGate();
+    return;
+  }
+
   if (!state.settings) {
     appNode.innerHTML = '<div class="app-shell"><div class="page-content">Loading...</div></div>';
     return;
@@ -2027,7 +2105,9 @@ function render() {
           <div class="header-icons">
             <span class="header-icon header-icon-warning" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
             <span class="header-icon header-icon-donate" aria-hidden="true"><i class="fa-solid fa-heart"></i></span>
-            <span class="header-icon header-icon-account" aria-hidden="true"><i class="fa-solid fa-user"></i></span>
+            ${state.auth?.required
+              ? '<button class="header-icon header-icon-account" type="button" data-auth-signout title="Sign out"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>'
+              : '<span class="header-icon header-icon-account" aria-hidden="true"><i class="fa-solid fa-user"></i></span>'}
           </div>
         </header>
         <div class="app-body">
@@ -2144,6 +2224,64 @@ function settingsPayload(options = {}) {
     ...(preferredAdapterId ? { preferredAdapterId } : {}),
     deploy
   };
+}
+
+async function loadAuth() {
+  const response = await fetch("/api/auth/status");
+  const data = await response.json();
+  state.auth = data;
+  return data;
+}
+
+async function submitAuth() {
+  // A second Enter while the first is still in flight would otherwise send the
+  // password twice and race two renders.
+  if (ui.authBusy) {
+    return;
+  }
+
+  const firstRun = !state.auth?.configured;
+  const password = ui.authPassword;
+
+  if (firstRun && password !== ui.authConfirm) {
+    ui.authError = "Those two passwords do not match.";
+    render();
+    return;
+  }
+
+  ui.authBusy = true;
+  ui.authError = null;
+  render();
+
+  try {
+    await request(firstRun ? "/api/auth/setup" : "/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password })
+    });
+    // Cleared on the way in rather than held for a retry: nothing else in the
+    // page has any use for it.
+    ui.authPassword = "";
+    ui.authConfirm = "";
+    state.auth = { ...state.auth, configured: true, authenticated: true };
+    await loadState();
+    await reattachJob().catch(() => {});
+  } catch (error) {
+    ui.authError = error.message;
+    state.auth = { ...state.auth, authenticated: false };
+  } finally {
+    ui.authBusy = false;
+    render();
+  }
+}
+
+async function signOut() {
+  await fetch("/api/auth/logout", { method: "POST" });
+  state.auth = { ...state.auth, authenticated: false };
+  state.settings = null;
+  ui.authPassword = "";
+  ui.authConfirm = "";
+  ui.authError = null;
+  render();
 }
 
 async function loadState() {
@@ -3073,7 +3211,21 @@ function showError(error) {
   showToast(error.message || "Something went wrong.", "error");
 }
 
+appNode.addEventListener("submit", (event) => {
+  if (!event.target.closest("[data-auth-form]")) {
+    return;
+  }
+
+  event.preventDefault();
+  submitAuth().catch(showError);
+});
+
 appNode.addEventListener("click", (event) => {
+  if (event.target.closest("[data-auth-signout]")) {
+    signOut().catch(showError);
+    return;
+  }
+
   if (event.target.closest("[data-result-dismiss]")) {
     ui.latestResult = null;
     render();
@@ -3476,6 +3628,18 @@ appNode.addEventListener("input", (event) => {
     return;
   }
 
+  // Kept out of state.settings, and out of any re-render: retyping a password
+  // because the field lost focus is its own small punishment.
+  if (target.name === "authPassword") {
+    ui.authPassword = target.value;
+    return;
+  }
+
+  if (target.name === "authConfirm") {
+    ui.authConfirm = target.value;
+    return;
+  }
+
   if (target.dataset.removalOption && ui.removal) {
     ui.removal[target.dataset.removalOption] = target.checked;
     render();
@@ -3514,6 +3678,10 @@ appNode.addEventListener("input", (event) => {
 appNode.addEventListener("change", (event) => {
   const target = event.target;
 
+  if (target.name === "authPassword" || target.name === "authConfirm") {
+    return;
+  }
+
   // Selects fire `change` rather than `input`, so they are handled here too.
   if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
     return;
@@ -3527,6 +3695,17 @@ appNode.addEventListener("change", (event) => {
 });
 
 appNode.addEventListener("keydown", (event) => {
+  const authForm = event.target.closest?.("[data-auth-form]");
+
+  // Enter in a password field submits. Handled explicitly rather than left to
+  // the browser's implicit submission, and the default is suppressed so the
+  // form is submitted exactly once either way.
+  if (authForm && event.key === "Enter") {
+    event.preventDefault();
+    authForm.requestSubmit();
+    return;
+  }
+
   if (!ui.cutover?.open) {
     return;
   }
@@ -3542,7 +3721,15 @@ appNode.addEventListener("keydown", (event) => {
   }
 });
 
-loadState()
-  // A failed reattach must not block the dashboard from rendering.
-  .then(() => reattachJob().catch((error) => console.warn("Job reattach failed.", error)))
+loadAuth()
+  .then(async (auth) => {
+    if (auth.required && !auth.authenticated) {
+      render();
+      return;
+    }
+
+    await loadState();
+    // A failed reattach must not block the dashboard from rendering.
+    await reattachJob().catch((error) => console.warn("Job reattach failed.", error));
+  })
   .catch(showError);

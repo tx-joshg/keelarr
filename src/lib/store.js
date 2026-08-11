@@ -1,7 +1,8 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 
 import {
   activityPath,
+  authPath,
   dataDir,
   jobsPath,
   settingsPath,
@@ -211,6 +212,21 @@ export async function readUpdateState() {
 export async function writeUpdateState(nextState) {
   await writeJson(updatesPath, nextState);
   return nextState;
+}
+
+export async function readAuth() {
+  return readJson(authPath, null);
+}
+
+export async function writeAuth(record) {
+  await writeJson(authPath, record);
+
+  // Readable only by the account that runs the controller. The file holds the
+  // password hash and the session signing secret, and the data directory is a
+  // bind mount that other users on the host can otherwise read.
+  await chmod(authPath, 0o600).catch(() => {});
+
+  return record;
 }
 
 export async function readJobs() {

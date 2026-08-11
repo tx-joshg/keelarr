@@ -175,7 +175,7 @@ Make Stackarr safe enough for broader real-world use.
 
 Required work:
 
-- controller authentication
+- controller authentication — done: one password, set on first run, gating every `/api` route
 - secret handling rules
 - mutation protection
 - safer install guidance

@@ -625,9 +625,12 @@ For `v1`:
 - do not encourage public exposure without auth
 - do not commit secrets into Git-managed stack definitions
 
-Future product requirement:
+Implemented:
 
-- controller authentication before any public deployment guidance
+- controller authentication: one password, chosen on first run, required by
+  every `/api` route except the health probe. Stored as a salted scrypt hash;
+  sessions are HMAC-signed cookies so a controller restart does not sign you
+  out. The demo runs without it, having no Docker socket behind it.
 
 ## Error Handling
 

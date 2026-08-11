@@ -84,6 +84,5 @@ would be the fix.
 
 ## Known Gaps
 
-- no authentication on the controller
 - `tautulli` reports no version because its image labels itself `master`
 - Synology support is unimplemented

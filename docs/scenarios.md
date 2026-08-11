@@ -23,16 +23,19 @@ A host with Docker and nothing else.
 1. The controller starts from the documented quick start alone. It creates the
    shared network itself — nothing is declared external, and nothing has to
    exist first.
-2. The setup wizard detects the host, and every path it suggests is a path the
+2. The first page asks for a password and nothing else works until one is set.
+   The container's own healthcheck still passes, because it probes
+   `/api/health`, which is deliberately outside the gate.
+3. The setup wizard detects the host, and every path it suggests is a path the
    controller can actually see. A root outside its own mounts is reported as
    unmounted, naming the variable that fixes it, rather than as missing.
-3. Deploying writes `compose.yml` and `.env` per service and brings them up on
+4. Deploying writes `compose.yml` and `.env` per service and brings them up on
    the shared network.
-4. Wiring runs on its own afterwards. Download clients, library folders and
+5. Wiring runs on its own afterwards. Download clients, library folders and
    Prowlarr applications are configured without being asked for, and what an
    app needs in order to accept them — a download category, a library directory
    — is created rather than left as homework.
-5. The check ends at **needs you**, listing only what Stackarr cannot supply:
+6. The check ends at **needs you**, listing only what Stackarr cannot supply:
    an indexer key, a Usenet account, a Plex token. Each with what it breaks and
    a link to the page that fixes it.
 
@@ -56,6 +59,9 @@ The same host, after removing every service but keeping configuration.
 4. The app returns with its database intact: same API key, same library, same
    indexers, same download client. Nothing is reconfigured by hand.
 5. Wiring reports everything already correct and writes nothing.
+6. Recreating the controller itself does not ask for a new password, and does
+   not sign anyone out: the hash lives in `data/`, and the session cookie is
+   signed rather than held in memory.
 
 **The trap:** configuration in a named volume looks like nothing at all once the
 container is gone. Resolve it while the container still exists, or a 112MB
@@ -79,6 +85,8 @@ is being introduced to manage them.
 5. Existing configuration is read, never overwritten. A download client already
    pointing somewhere is reported as drift; two of them are ambiguous and are
    left alone.
+6. The password is Stackarr's own, set on first run like any other install. It
+   is not an account in any of the adopted apps and does not touch their logins.
 
 **The trap:** composing an address from the host URL and a port. It produces
 something that answers — on a QNAP, the NAS admin interface — and a health check

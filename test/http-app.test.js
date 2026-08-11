@@ -85,7 +85,8 @@ test("http app serves demo state through the API facade", async () => {
   const app = createHttpApp({
     publicDir,
     stackarrApp: new DemoStackarrAppService(),
-    logger
+    logger,
+    requireAuth: false
   });
   const server = await startServer(app);
 
@@ -110,7 +111,7 @@ test("http app serves demo state through the API facade", async () => {
 
 test("cutover returns 202 with a pollable job instead of blocking the request", async () => {
   const demo = new DemoStackarrAppService();
-  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger() });
+  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger(), requireAuth: false });
   const server = await startServer(app);
 
   try {
@@ -149,7 +150,7 @@ test("cutover returns 202 with a pollable job instead of blocking the request", 
 
 test("cutover rejects a request whose confirmation does not match", async () => {
   const demo = new DemoStackarrAppService();
-  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger() });
+  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger(), requireAuth: false });
   const server = await startServer(app);
 
   try {
@@ -174,7 +175,7 @@ test("cutover rejects a request whose confirmation does not match", async () => 
 });
 
 test("an unknown job id is a 404 rather than an empty success", async () => {
-  const app = createHttpApp({ publicDir, stackarrApp: new DemoStackarrAppService(), logger: createTestLogger() });
+  const app = createHttpApp({ publicDir, stackarrApp: new DemoStackarrAppService(), logger: createTestLogger(), requireAuth: false });
   const server = await startServer(app);
 
   try {
@@ -197,7 +198,8 @@ test("http app logs request failures with request ids", async () => {
         throw error;
       }
     },
-    logger
+    logger,
+    requireAuth: false
   });
   const server = await startServer(app);
 

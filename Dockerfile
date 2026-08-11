@@ -20,6 +20,6 @@ ENV NODE_ENV=production \
 EXPOSE 4687
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -q -O - http://127.0.0.1:4687/api/state >/dev/null 2>&1 || exit 1
+  CMD wget -q -O - http://127.0.0.1:4687/api/health >/dev/null 2>&1 || exit 1
 
 CMD ["npm", "start"]

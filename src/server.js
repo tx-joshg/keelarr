@@ -15,7 +15,8 @@ const logger = createLogger({
     app: "stackarr"
   }
 });
-const stackarrApp = process.env.STACKARR_DEMO === "1"
+const demoMode = process.env.STACKARR_DEMO === "1";
+const stackarrApp = demoMode
   ? new DemoStackarrAppService()
   : new StackarrAppService({
       logger
@@ -23,7 +24,11 @@ const stackarrApp = process.env.STACKARR_DEMO === "1"
 const app = createHttpApp({
   publicDir,
   stackarrApp,
-  logger
+  logger,
+  // The demo runs against a simulated stack with no Docker socket behind it,
+  // so there is nothing for a password to protect and it would only stand
+  // between a visitor and a look around.
+  requireAuth: !demoMode
 });
 
 if (typeof stackarrApp.initialize === "function") {
@@ -32,7 +37,7 @@ if (typeof stackarrApp.initialize === "function") {
 
 app.listen(port, () => {
   logger.info("server.listen", {
-    mode: process.env.STACKARR_DEMO === "1" ? "demo" : "live",
+    mode: demoMode ? "demo" : "live",
     port,
     url: `http://localhost:${port}`,
     logPath

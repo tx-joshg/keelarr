@@ -1,5 +1,27 @@
 import express from "express";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
+
+import {
+  MIN_PASSWORD_LENGTH,
+  SESSION_COOKIE,
+  buildLogoutCookie,
+  buildSessionCookie,
+  createSessionToken,
+  hashPassword,
+  readCookie,
+  verifyPassword,
+  verifySessionToken
+} from "./lib/auth.js";
+import { readAuth, writeAuth } from "./lib/store.js";
+
+class StackarrHttpError extends Error {
+  constructor(message, statusCode, details = null) {
+    super(message);
+    this.statusCode = statusCode;
+    this.details = details;
+  }
+}
 
 function logLevelForStatus(statusCode) {
   if (statusCode >= 500) {
@@ -19,7 +41,17 @@ function requestContext(request) {
   };
 }
 
-export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
+export function createHttpApp({
+  publicDir,
+  stackarrApp,
+  logger = null,
+  readAuthImpl = readAuth,
+  writeAuthImpl = writeAuth,
+  // Demo mode is a public sandbox against a simulated stack. There is no Docker
+  // socket behind it and nothing to protect, so a password would only be a
+  // barrier to looking around.
+  requireAuth = true
+} = {}) {
   const app = express();
   const appLogger = logger?.child ? logger.child({
     component: "http"
@@ -54,6 +86,132 @@ export function createHttpApp({ publicDir, stackarrApp, logger = null }) {
   });
 
   app.use(express.json({ limit: "1mb" }));
+
+  /**
+   * Reports liveness without a password.
+   *
+   * The container healthcheck used /api/state, which is now behind the gate —
+   * leaving it there would mark every authenticated deployment unhealthy. This
+   * says only that the process is answering, which is all a healthcheck needs
+   * and all an unauthenticated caller should learn.
+   */
+  app.get("/api/health", (_request, response) => {
+    response.json({ ok: true });
+  });
+
+  /**
+   * Answers before the gate, because the page needs it in order to know which
+   * screen to draw — first-run setup, login, or the dashboard.
+   */
+  app.get("/api/auth/status", async (request, response, next) => {
+    try {
+      const record = await readAuthImpl();
+      const configured = Boolean(record?.hash);
+
+      response.json({
+        ok: true,
+        required: requireAuth,
+        // Distinguishes "no password has ever been set" from "you are signed
+        // out": the first needs a setup screen, the second a login.
+        configured,
+        authenticated: !requireAuth
+          || (configured && verifySessionToken(readCookie(request.headers.cookie, SESSION_COOKIE), record.secret)),
+        minPasswordLength: MIN_PASSWORD_LENGTH
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/setup", async (request, response, next) => {
+    try {
+      const existing = await readAuthImpl();
+
+      if (existing?.hash) {
+        // Otherwise anyone reaching the port could replace the password of a
+        // controller that already has one.
+        throw new StackarrHttpError("A password is already set. Sign in instead.", 409);
+      }
+
+      const password = String(request.body?.password || "");
+
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        throw new StackarrHttpError(`Choose a password of at least ${MIN_PASSWORD_LENGTH} characters.`, 400);
+      }
+
+      const record = await hashPassword(password);
+      const secret = randomBytes(32).toString("hex");
+      await writeAuthImpl({ ...record, secret, createdAt: new Date().toISOString() });
+
+      response.setHeader("Set-Cookie", buildSessionCookie(createSessionToken(secret)));
+      response.json({ ok: true, configured: true, authenticated: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/login", async (request, response, next) => {
+    try {
+      const record = await readAuthImpl();
+
+      if (!record?.hash) {
+        throw new StackarrHttpError("No password has been set yet.", 409);
+      }
+
+      if (!(await verifyPassword(String(request.body?.password || ""), record))) {
+        // Slow enough to make guessing tedious, short enough not to look broken.
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        throw new StackarrHttpError("That password is not correct.", 401);
+      }
+
+      response.setHeader("Set-Cookie", buildSessionCookie(createSessionToken(record.secret)));
+      response.json({ ok: true, authenticated: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/logout", (_request, response) => {
+    response.setHeader("Set-Cookie", buildLogoutCookie());
+    response.json({ ok: true, authenticated: false });
+  });
+
+  /**
+   * Everything else under /api is gated.
+   *
+   * Stackarr drives the Docker socket, so an unauthenticated caller here could
+   * start, stop, and delete containers on the host. The static files are left
+   * open because the page itself has to load in order to show a login form.
+   */
+  app.use("/api", async (request, response, next) => {
+    if (!requireAuth) {
+      request.stackarrAuthenticated = true;
+      next();
+      return;
+    }
+
+    try {
+      const record = await readAuthImpl();
+
+      if (!record?.hash) {
+        throw new StackarrHttpError("Stackarr has no password set yet. Open the web interface to choose one.", 401, {
+          configured: false
+        });
+      }
+
+      const token = readCookie(request.headers.cookie, SESSION_COOKIE);
+
+      if (!verifySessionToken(token, record.secret)) {
+        throw new StackarrHttpError("Sign in to continue.", 401, { configured: true });
+      }
+
+      request.stackarrAuthenticated = true;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.use(express.static(publicDir));
 
   app.get("/api/state", async (request, response, next) => {

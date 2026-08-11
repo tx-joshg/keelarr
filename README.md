@@ -239,7 +239,7 @@ A seventh state sits alongside these: **needs you**. Stackarr configures everyth
 
 That distinction matters because the two fail independently. A stack whose every connection is correct and whose Prowlarr has no indexers is perfectly wired and cannot find a single release, so the verdict says so rather than reporting `ready`.
 
-These are not read, only counted or checked for presence. Arr apps mask fields marked `privacy: apiKey`, so an indexer key already configured in Radarr comes back as `***` and could not be copied into Prowlarr even if that were wanted. Detection and a link are genuinely the most that can be done, and handing credentials to a controller that has no authentication yet would be a worse place for them than the app that needs them.
+These are not read, only counted or checked for presence. Arr apps mask fields marked `privacy: apiKey`, so an indexer key already configured in Radarr comes back as `***` and could not be copied into Prowlarr even if that were wanted. Detection and a link are genuinely the most that can be done, and a credential is better held by the app that needs it than copied into a second place that then has to protect it too.
 
 `pending` is deliberately distinct from `absent`. A freshly installed app writes `config.xml` a few seconds after first start, and reporting that as missing turns a normal startup into a false alarm.
 
@@ -280,7 +280,7 @@ that improves one has more than once broken another. See
 
 ## What Is Still Deliberately Missing
 
-- Authentication and multi-user access control
+- Multi-user access control (there is one password, not accounts and roles)
 - Repairing app-to-app configuration that already exists (Stackarr adds missing connections, but a link that points somewhere unexpected is reported for you to change inside the app)
 - Indexer, Usenet account, and Plex credentials — detected and linked to, never held
 - Remote path mapping writes (disagreeing paths are detected and described, but not yet corrected)
@@ -375,6 +375,37 @@ After the container starts:
 If host validation fails, Stackarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
 
 For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](docs/qnap-first-test.md).
+
+## Signing In
+
+The first time you open Stackarr it asks you to choose a password, and it will
+not do anything else until you do. Everything under `/api` is behind that
+password afterwards, because the controller holds the Docker socket: whoever
+reaches the port can start, stop, and delete containers on the host.
+
+- The password is stored in `data/auth.json` as a salted scrypt hash, mode
+  `0600`, alongside a random secret used to sign sessions. The password itself
+  is never written anywhere.
+- Signing in sets an `HttpOnly` session cookie that lasts 30 days. It is signed
+  rather than stored server-side, so upgrading the controller does not sign you
+  out — recreating the container is a routine event here, and being logged out
+  by every upgrade would buy nothing.
+- `GET /api/health` stays open, and it answers only `{"ok": true}`. The
+  container healthcheck uses it; nothing else does.
+- There is no password reset. Delete `data/auth.json` and the first-run screen
+  comes back — which is also why that file needs to be somewhere only you can
+  read.
+- The cookie is `SameSite=Lax`, so another site cannot make your browser POST
+  to Stackarr using your session.
+- A wrong password costs about a second, which makes guessing tedious rather
+  than impossible. There is no lockout, on the view that locking the operator
+  out of their own containers is the worse failure on a home network.
+- The demo (`npm run demo`) runs with no password. It drives a simulated stack
+  with no Docker socket behind it, so there is nothing there to protect.
+
+Stackarr still listens on all interfaces, so the password is the only thing
+between the port and your containers. Serve it over HTTPS if it is reachable
+from anywhere you do not control.
 
 ## Logging
 
