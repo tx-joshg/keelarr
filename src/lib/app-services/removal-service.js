@@ -220,10 +220,10 @@ export class RemovalService {
       }
 
       // Read the mount while the container still exists; removing it first
-      // would leave nothing to inspect.
-      const configMount = input.removeConfig
-        ? await this.resolveConfigTarget(settings, service, logger)
-        : null;
+      // would leave nothing to inspect. Resolved even when the configuration is
+      // being kept, because the summary has to name what it kept — a named
+      // volume looks like nothing at all once the container is gone.
+      const configMount = await this.resolveConfigTarget(settings, service, logger);
 
       plan = { settings, service, configMount };
       return {
@@ -303,17 +303,19 @@ export class RemovalService {
         removed.push("config");
         return { detail: "Deleted the configuration volume." };
       });
+    } else if (configMount) {
+      kept.push("config");
+      // Resolved during preflight, while the container still existed. Asking
+      // again here would inspect a container that has just been removed and,
+      // for a named volume, find nothing at the conventional path either —
+      // reporting a database that is very much still there as absent.
+      ctx.skip("config", configMount.type === "volume"
+        ? `Configuration and database kept in the ${configMount.source} volume.`
+        : `Configuration and database kept at ${configMount.source}.`);
     } else {
-      const hasConfig = await this.resolveConfigTarget(settings, service, stepLogger);
-
-      if (hasConfig) {
-        kept.push("config");
-        ctx.skip("config", "Configuration and database kept.");
-      } else {
-        // Claiming to have kept something that was never there is a lie the
-        // summary should not tell.
-        ctx.skip("config", "No configuration exists on disk.");
-      }
+      // Claiming to have kept something that was never there is a lie the
+      // summary should not tell.
+      ctx.skip("config", "No configuration exists on disk.");
     }
 
     if (input.removeImage) {

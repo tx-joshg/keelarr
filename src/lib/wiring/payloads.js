@@ -35,6 +35,13 @@ function patchFields(schema, values) {
   );
 }
 
+/** The field each app uses to name its download category. */
+const CATEGORY_FIELD = {
+  radarr: "movieCategory",
+  sonarr: "tvCategory",
+  lidarr: "musicCategory"
+};
+
 export function buildDownloadClientPayload(schemas, { name, host, port, apiKey, useSsl = false }) {
   const schema = findSchema(schemas, "Sabnzbd");
 
@@ -44,6 +51,29 @@ export function buildDownloadClientPayload(schemas, { name, host, port, apiKey, 
     enable: true,
     fields: patchFields(schema, { host, port, useSsl, apiKey })
   };
+}
+
+/**
+ * Names a category the app wants that the download client does not have.
+ *
+ * Blanking it is not a workaround: Lidarr answers an empty category with HTTP
+ * 400 and "A category is recommended" — labelled a warning, but it refuses the
+ * write all the same. The category has to exist, so the honest move is to say
+ * which one is missing rather than produce a client that cannot be saved.
+ */
+export function missingCategoryFor(schemas, serviceId, availableCategories) {
+  const field = CATEGORY_FIELD[serviceId];
+
+  if (!field || !Array.isArray(availableCategories)) {
+    return null;
+  }
+
+  const schema = (schemas || []).find(
+    (entry) => String(entry?.implementation || "").toLowerCase() === "sabnzbd"
+  );
+  const wanted = schema?.fields?.find((entry) => entry.name === field)?.value;
+
+  return wanted && !availableCategories.includes(wanted) ? wanted : null;
 }
 
 export function buildApplicationPayload(schemas, { implementation, name, prowlarrUrl, baseUrl, apiKey }) {
@@ -72,6 +102,12 @@ export function describeValidation(payload) {
     return null;
   }
 
+  // Only errors block. Arr apps also return advice through this channel —
+  // Lidarr answers a blank download category with "A category is recommended"
+  // — and refusing to write over a recommendation means a working connection
+  // never gets made.
+  // `isWarning` is the field to trust. `severity` is not: Lidarr marks its
+  // category advice `isWarning: true` and `severity: "error"` at the same time.
   const messages = payload
     .filter((entry) => entry?.isWarning !== true)
     .map((entry) => entry?.detailedDescription || entry?.errorMessage)

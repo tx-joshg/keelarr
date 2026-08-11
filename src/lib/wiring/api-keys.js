@@ -30,6 +30,38 @@ export function parseArrApiKey(text) {
   return String(text || "").match(/<ApiKey>\s*([0-9a-fA-F]{32})\s*<\/ApiKey>/)?.[1] || null;
 }
 
+/**
+ * Category names SABnzbd actually has.
+ *
+ * The Arr apps default to a category named after their media type, and SABnzbd
+ * rejects a download client naming one it does not have. Reading the real list
+ * is what lets Stackarr pick a category that works instead of one that fails.
+ */
+function parseSabnzbdCategories(lines) {
+  const start = lines.findIndex((line) => /^\s*\[categories\]\s*$/.test(line));
+
+  if (start === -1) {
+    return [];
+  }
+
+  const names = [];
+
+  for (const line of lines.slice(start + 1)) {
+    // A single-bracket heading means the categories section has ended.
+    if (/^\s*\[[^[]/.test(line)) {
+      break;
+    }
+
+    const match = line.match(/^\s*name\s*=\s*(.+?)\s*$/);
+
+    if (match && match[1] !== "*") {
+      names.push(match[1]);
+    }
+  }
+
+  return names;
+}
+
 export function parseSabnzbdConfig(text) {
   const lines = String(text || "").split("\n");
   const read = (key) => {
@@ -42,6 +74,7 @@ export function parseSabnzbdConfig(text) {
     apiKey: read("api_key"),
     completeDir: read("complete_dir"),
     downloadDir: read("download_dir"),
+    categories: parseSabnzbdCategories(lines),
     hostWhitelist: whitelist ? whitelist.split(",").map((entry) => entry.trim()).filter(Boolean) : []
   };
 }
@@ -129,6 +162,7 @@ export async function readApiKey(settings, service, options = {}) {
       ? {
           completeDir: parsed.completeDir,
           downloadDir: parsed.downloadDir,
+          categories: parsed.categories,
           hostWhitelist: parsed.hostWhitelist
         }
       : null

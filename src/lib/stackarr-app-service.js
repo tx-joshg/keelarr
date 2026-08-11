@@ -108,12 +108,17 @@ export class StackarrAppService {
     const deployResults = deploy
       ? await this.managedStackService.deploySelected(settings, settings.selectedServiceIds, context)
       : [];
+    // First-run setup ends connected too, not just individual installs.
+    const wiringJob = deploy && deployResults.some((result) => result?.ok)
+      ? await this.startPostDeployWiring(context)
+      : null;
     const state = await this.dashboardService.buildState();
 
     return {
       ...state,
       generated,
       deployResults,
+      wiringJob,
       hostDetection: detection,
       validation,
       effectiveSettings
@@ -178,8 +183,39 @@ export class StackarrAppService {
     return this.managedStackService.generateServiceFiles(serviceId, context);
   }
 
+  /**
+   * Installs a service and then connects it, so a one-click install finishes
+   * with a working app rather than a to-do. The wiring runs as its own job the
+   * caller can watch, because it waits for the new app to finish starting and
+   * that is not something an install request should block on.
+   */
   async installManagedService(serviceId, context = {}) {
-    return this.managedStackService.installManagedService(serviceId, context);
+    const result = await this.managedStackService.installManagedService(serviceId, context);
+
+    return {
+      ...result,
+      wiringJob: result.ok ? await this.startPostDeployWiring(context) : null
+    };
+  }
+
+  /**
+   * Connects whatever is now deployed. Returns null rather than throwing when
+   * there is nothing to do: a service installed into an already-wired stack is
+   * a success, not a failure, and the 409 that says so is not worth surfacing.
+   */
+  async startPostDeployWiring(context = {}) {
+    try {
+      // Reach first. A service deployed onto a network the controller is not on
+      // yet cannot be configured, however correct the plan is.
+      await this.wiringService.attachToServiceNetworks(context);
+      return buildJobSnapshot(this.wiringService.startWiring({}, context));
+    } catch (error) {
+      if (error.statusCode === 409) {
+        return null;
+      }
+
+      throw error;
+    }
   }
 
   async restartManagedService(serviceId, context = {}) {

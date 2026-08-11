@@ -158,7 +158,11 @@ export function normalizeSettings(input = {}) {
   merged.selectedServiceIds = sanitizeSelectedServiceIds(merged.selectedServiceIds);
   merged.serviceOverrides = sanitizeServiceOverrides(merged.serviceOverrides);
 
-  if (merged.selectedServiceIds.length === 0) {
+  // Only a stack that has never been set up gets the default selection. Once
+  // the operator has been through setup, an empty list is a decision — usually
+  // "I just removed the last service" — and refilling it puts eight apps they
+  // did not ask for back on the dashboard.
+  if (!merged.initialized && merged.selectedServiceIds.length === 0) {
     merged.selectedServiceIds = defaultSettings.selectedServiceIds;
   }
 

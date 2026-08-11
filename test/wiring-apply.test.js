@@ -7,7 +7,7 @@ import { WiringService } from "../src/lib/app-services/wiring-service.js";
 import { JOB_STATUS, JobRegistry, STEP_STATUS } from "../src/lib/jobs.js";
 import { createLogger } from "../src/lib/logger.js";
 import { normalizeSettings } from "../src/lib/store.js";
-import { MASKED_VALUE, buildApplicationPayload, buildDownloadClientPayload } from "../src/lib/wiring/payloads.js";
+import { MASKED_VALUE, buildApplicationPayload, buildDownloadClientPayload, missingCategoryFor } from "../src/lib/wiring/payloads.js";
 
 const noop = () => {};
 const silentLogger = createLogger({
@@ -64,6 +64,8 @@ function inspectFor(name, port, { networkMode = "stackarr", address = "172.30.0.
 
 const DRIVERS = new Map([["stackarr", "bridge"]]);
 
+const PORTS = { radarr: 7878, sonarr: 8989, lidarr: 8686, sabnzbd: 8080, prowlarr: 9696 };
+
 function createHarness(overrides = {}) {
   const calls = [];
   const activity = [];
@@ -77,21 +79,38 @@ function createHarness(overrides = {}) {
   const service = new WiringService({
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
+    sleepImpl: overrides.sleepImpl || (async () => {}),
+    pathExistsImpl: async () => overrides.pathExists !== false,
     appendActivityImpl: async (entry) => activity.push(entry),
     loadSettingsImpl: async () => settings,
+    // Built from the selection so a test can scope the stack it exercises.
     inspectContainersImpl: async () => [
-      inspectFor("radarr", 7878),
-      inspectFor("sabnzbd", 8080, { address: "172.30.0.6" }),
-      inspectFor("prowlarr", 9696, { address: "172.30.0.7" }),
+      ...(overrides.selected || ["radarr", "sabnzbd", "prowlarr"]).map((id, index) =>
+        inspectFor(id, PORTS[id], { address: `172.30.0.${10 + index}` })
+      ),
       inspectFor("stackarr", 4687, { address: "172.30.0.2" })
     ],
     inspectNetworkDriversImpl: async () => DRIVERS,
-    readApiKeyImpl: async (_settings, target) => ({
-      key: { sabnzbd: SAB_KEY, radarr: RADARR_KEY, prowlarr: PROWLARR_KEY }[target.id] || null,
+    readApiKeyImpl: async (_settings, target) => {
+      // `keysByAttempt` returning true stands in for an app that has started
+      // but not yet written its key.
+      const stillStarting = overrides.keysByAttempt ? overrides.keysByAttempt() : false;
+
+      return stillStarting
+        ? { key: null, descriptor: { found: false, state: "pending", reason: "not written yet" }, downloadSettings: null }
+        : {
+      key: { sabnzbd: SAB_KEY, radarr: RADARR_KEY, lidarr: RADARR_KEY, prowlarr: PROWLARR_KEY }[target.id] || null,
       descriptor: { found: true, state: "found", source: "/config/config.xml", fingerprint: "aabbccdd" },
       downloadSettings:
-        target.id === "sabnzbd" ? { completeDir: "/Media/Downloads/complete", hostWhitelist: [] } : null
-    }),
+        target.id === "sabnzbd"
+          ? {
+              completeDir: "/Media/Downloads/complete",
+              categories: overrides.categories || ["movies", "tv", "music"],
+              hostWhitelist: []
+            }
+          : null
+    };
+    },
     arrApiImpl: {
       systemStatus: async () => ({ ok: true, data: { version: "1.0" }, error: null }),
       listDownloadClients: async () => ({ ok: true, data: overrides.downloadClients ?? [], error: null }),
@@ -99,7 +118,13 @@ function createHarness(overrides = {}) {
       listApplications: async () => ({ ok: true, data: overrides.applications ?? [], error: null }),
       testAllDownloadClients: async () => ({ ok: true, data: [{ id: 1, isValid: true }], error: null }),
       testAllApplications: async () => ({ ok: true, data: [{ id: 1, isValid: true }], error: null }),
-      downloadClientSchema: async () => ({ ok: true, data: DOWNLOAD_SCHEMA, error: null }),
+      downloadClientSchema: async () => ({
+        ok: true,
+        data: overrides.downloadSchemaFields
+          ? [{ ...DOWNLOAD_SCHEMA[0], fields: overrides.downloadSchemaFields }]
+          : DOWNLOAD_SCHEMA,
+        error: null
+      }),
       applicationSchema: async () => ({ ok: true, data: APPLICATION_SCHEMA, error: null }),
       testDownloadClient: async (serviceId, _base, _key, body) => {
         calls.push({ call: "test-client", serviceId, body });
@@ -210,9 +235,12 @@ test("a payload the app refuses is never written", async () => {
   });
   const job = await settle(service.startWiring());
 
-  assert.equal(job.status, JOB_STATUS.FAILED);
-  assert.match(job.error.message, /Unable to connect to SABnzbd/);
+  // Nothing written is the invariant. The job still succeeds, because one app
+  // refusing a connection says nothing about the others, and the refusal is
+  // reported with the app's own words rather than swallowed.
   assert.equal(calls.filter((entry) => entry.call === "create-client").length, 0);
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.match(job.result.failed[0].reason, /Unable to connect to SABnzbd/);
 });
 
 test("a test that answers 200 with validation errors is still a refusal", async () => {
@@ -226,9 +254,11 @@ test("a test that answers 200 with validation errors is still a refusal", async 
   });
   const job = await settle(service.startWiring());
 
-  assert.equal(job.status, JOB_STATUS.FAILED);
-  assert.match(job.error.message, /Unable to connect to Radarr/);
   assert.equal(calls.filter((entry) => entry.call === "create-application").length, 0);
+  assert.match(job.result.failed[0].reason, /Unable to connect to Radarr/);
+  // The download client still got configured; one refusal is not a stack-wide
+  // failure, which is what aborting the job would have implied.
+  assert.ok(calls.some((entry) => entry.call === "create-client"));
 });
 
 test("drift is never written by the apply job, only reported by the check", async () => {
@@ -281,7 +311,8 @@ test("a fully wired stack refuses the job rather than writing duplicates", async
 });
 
 test("a missing library folder is added at the path derived from the container mount", async () => {
-  const { service, calls } = createHarness({ rootFolders: [] });
+  // The harness has no real filesystem, so the existence check is stubbed true.
+  const { service, calls } = createHarness({ rootFolders: [], pathExists: true });
   await settle(service.startWiring());
 
   const folder = calls.find((entry) => entry.call === "create-rootfolder");
@@ -297,4 +328,111 @@ test("the job result and activity entry name what was created, and leak no keys"
   assert.deepEqual(job.result.created, ["Radarr → SABnzbd", "Prowlarr → Radarr"]);
   assert.equal(activity.length, 1);
   assert.equal(payload.match(/\b[0-9a-f]{32}\b/), null);
+});
+
+test("planning waits for an app that has only just started", async () => {
+  // Installing and wiring in one go races the app's first boot: it has not
+  // written its API key yet, so its links read as pending and a plan built
+  // right away would find nothing to do and quietly configure nothing.
+  let attempt = 0;
+  const waits = [];
+  const { service, calls } = createHarness({
+    keysByAttempt: () => (attempt += 1) <= 2,
+    sleepImpl: async (ms) => waits.push(ms)
+  });
+
+  const job = await settle(service.startWiring());
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.ok(waits.length >= 1, "it should have waited rather than given up immediately");
+  assert.ok(calls.some((entry) => entry.call === "create-client"), "it should still wire once the app settled");
+});
+
+test("planning gives up waiting rather than hanging on an app that never settles", async () => {
+  const waits = [];
+  const { service } = createHarness({
+    keysByAttempt: () => true,
+    sleepImpl: async (ms) => waits.push(ms)
+  });
+
+  const job = await settle(service.startWiring());
+
+  // Bounded: it stops asking and reports, instead of blocking the job forever.
+  assert.ok(waits.length <= 6);
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.match(job.error.message, /Nothing to wire/);
+});
+
+test("a category the download client lacks is named, because blanking it does not work", () => {
+  // Verified against a live Lidarr: an empty category is answered with HTTP 400
+  // and "A category is recommended", marked isWarning true and severity error
+  // at the same time, and the write is refused regardless. So the category has
+  // to exist, and the useful output is which one is missing.
+  const schema = [
+    {
+      implementation: "Sabnzbd",
+      fields: [
+        { name: "host", value: "localhost" },
+        { name: "musicCategory", value: "music" }
+      ]
+    }
+  ];
+
+  assert.equal(missingCategoryFor(schema, "lidarr", ["movies", "tv"]), "music");
+});
+
+test("a category the download client has is not flagged", () => {
+  const schema = [
+    { implementation: "Sabnzbd", fields: [{ name: "movieCategory", value: "movies" }] }
+  ];
+
+  assert.equal(missingCategoryFor(schema, "radarr", ["movies", "tv"]), null);
+});
+
+test("a link needing a missing category is reported without being attempted", async () => {
+  const { service, calls } = createHarness({
+    selected: ["lidarr", "sabnzbd"],
+    downloadSchemaFields: [
+      { name: "host", value: "localhost" },
+      { name: "port", value: 8080 },
+      { name: "apiKey", privacy: "apiKey" },
+      { name: "musicCategory", value: "music" }
+    ],
+    categories: ["movies", "tv"]
+  });
+  const job = await settle(service.startWiring());
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.equal(calls.filter((entry) => entry.call === "create-client").length, 0);
+  assert.equal(calls.filter((entry) => entry.call === "test-client").length, 0, "no point testing a payload the app will refuse");
+  assert.match(job.result.failed[0].reason, /no "music" category/);
+  assert.match(job.result.failed[0].reason, /Config → Categories/);
+});
+
+test("a library folder whose directory does not exist is reported, not attempted", async () => {
+  // Lidarr answers a missing path with four chained validation errors about
+  // fields that only look wrong because the path was never valid. Saying the
+  // one true thing is more use than relaying all four.
+  const { service, calls } = createHarness({ rootFolders: [], pathExists: false });
+  const job = await settle(service.startWiring());
+
+  assert.equal(calls.filter((entry) => entry.call === "create-rootfolder").length, 0);
+  assert.match(job.result.failed.find((f) => /library folder/.test(f.label)).reason, /does not exist\. Create it/);
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+});
+
+test("a recommendation is not treated as a refusal", async () => {
+  // Lidarr answers a blank download category with "A category is recommended".
+  // Treating advice as a blocker means a working connection never gets made.
+  const { service, calls } = createHarness({
+    clientTest: {
+      ok: true,
+      data: [{ isWarning: true, severity: "warning", propertyName: "MusicCategory", errorMessage: "A category is recommended" }],
+      error: null
+    }
+  });
+  const job = await settle(service.startWiring());
+
+  assert.ok(calls.some((entry) => entry.call === "create-client"), "advice should not stop the write");
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
 });

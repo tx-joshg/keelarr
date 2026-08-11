@@ -210,6 +210,26 @@ test("finalize deselects the service and keeps a record of how to bring it back"
   assert.ok(override.restoreFrom, "the archived stack location must be recorded");
 });
 
+test("a kept named volume is named in the summary, not reported as absent", async () => {
+  // The mount is resolved during preflight and reused. Looking it up again
+  // after the container is removed finds nothing — for a named volume there is
+  // no conventional path to fall back to — and a 112MB database that is very
+  // much still there gets reported as "no configuration exists on disk".
+  const { service } = createService({ configMount: { type: "volume", source: "radarr_config" } });
+  const job = await settle(service.startRemoval("radarr", { confirmContainerName: "radarr" }));
+
+  const step = job.steps.find((s) => s.name === "config");
+  assert.match(step.detail, /radarr_config volume/);
+  assert.deepEqual(job.result.kept, ["config", "image", "backups"]);
+});
+
+test("a kept bind-mounted config names its path", async () => {
+  const { service } = createService();
+  const job = await settle(service.startRemoval("radarr", { confirmContainerName: "radarr" }));
+
+  assert.match(job.steps.find((s) => s.name === "config").detail, /\/share\/Container\/radarr\/config/);
+});
+
 test("finalize clears stored state entirely when the config is deleted too", async () => {
   const { service, saved } = createService();
   await settle(service.startRemoval("radarr", { confirmContainerName: "radarr", removeConfig: true }));

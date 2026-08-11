@@ -2415,6 +2415,22 @@ function renderRemovalModal() {
             `${escapeHtml(t.backups.path)}. Includes config snapshots taken before upgrades, which are what make a rollback possible.`,
             dialog.removeBackups)}
 
+        ${dialog.removeConfig
+          ? `<div class="result-list result-list-warning">
+               <strong>Reinstalling would start ${escapeHtml(p.serviceName)} from scratch</strong>
+               <ul><li>Its settings, library, and any indexer or account details inside it are deleted with the
+               configuration. A later install would be a brand new app.</li></ul>
+             </div>`
+          : `<div class="removal-preserved">
+               <i class="fa-solid fa-rotate-left"></i>
+               <span>
+                 <strong>Reinstalling brings ${escapeHtml(p.serviceName)} back as it is now.</strong>
+                 Stackarr keeps a record of what this app was and where its stack files are archived, so a later
+                 install restores this exact service rather than a fresh one — settings, library, and anything
+                 configured inside it included.
+               </span>
+             </div>`}
+
         <div class="removal-preserved">
           <i class="fa-solid fa-shield-halved"></i>
           <span>
@@ -2920,7 +2936,10 @@ async function deployAllSelected() {
       });
       results.push({
         serviceId: service.id,
-        ok: result.ok
+        ok: result.ok,
+        // The install connects the app afterwards as its own job. Following it
+        // is what turns "deployed" into "deployed and working".
+        wiringJob: result.wiringJob || null
       });
     } catch (error) {
       results.push({
@@ -2939,6 +2958,17 @@ async function deployAllSelected() {
     results
   });
   await loadState();
+
+  // Installing starts a wiring job that connects what was just deployed. Only
+  // the last one matters: each re-plans the whole stack, so following the
+  // newest covers everything installed in this run.
+  const wiringJob = results.filter((item) => item.wiringJob).at(-1)?.wiringJob;
+
+  if (wiringJob) {
+    ui.job = wiringJob;
+    render();
+    await pollJob(wiringJob.id);
+  }
 }
 
 async function checkAllUpdates() {

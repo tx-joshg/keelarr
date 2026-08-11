@@ -1,8 +1,10 @@
+import { access } from "node:fs/promises";
+
 import { createLogger } from "../logger.js";
 import { StackarrError } from "../errors.js";
 import { JobRegistry } from "../jobs.js";
 import { appendActivity, loadSettings } from "../store.js";
-import { buildApplicationPayload, buildDownloadClientPayload, describeValidation } from "../wiring/payloads.js";
+import { buildApplicationPayload, buildDownloadClientPayload, describeValidation, missingCategoryFor } from "../wiring/payloads.js";
 import { attachController, planControllerAttachments } from "../wiring/attach.js";
 import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
 import { arrApi, speaksArrApi } from "../wiring/app-clients.js";
@@ -140,7 +142,16 @@ export class WiringService {
     loadSettingsImpl = loadSettings,
     logger = defaultLogger,
     nowImpl = () => Date.now(),
-    readApiKeyImpl = readApiKey
+    pathExistsImpl = async (target) => {
+      try {
+        await access(target);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    readApiKeyImpl = readApiKey,
+    sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   } = {}) {
     this.now = nowImpl;
     this.appendActivity = appendActivityImpl;
@@ -153,7 +164,9 @@ export class WiringService {
     this.inspectNetworkDrivers = inspectNetworkDriversImpl;
     this.loadSettingsImpl = loadSettingsImpl;
     this.logger = logger.child({ component: "wiring-service" });
+    this.pathExists = pathExistsImpl;
     this.readApiKey = readApiKeyImpl;
+    this.sleep = sleepImpl;
   }
 
   async loadSettings() {
@@ -292,6 +305,8 @@ export class WiringService {
       hostAddress,
       services,
       controller,
+      // SABnzbd's real category list, so a payload never names one it lacks.
+      downloadCategories: downloadDirs?.categories || null,
       endpoints,
       mounts,
       keys,
@@ -370,11 +385,42 @@ export class WiringService {
     return this.jobs.start(job, (ctx) => this.runWiring(ctx, input, context));
   }
 
+  /**
+   * Re-reads the stack until nothing is still starting up.
+   *
+   * Bounded, and it gives up rather than failing: an app that never settles
+   * still gets a plan built from what could be read, and its links are reported
+   * as pending rather than silently treated as needing nothing.
+   */
+  async gatherOnceSettled(context, ctx, { attempts = 6, intervalMs = 5000 } = {}) {
+    let gathered = await this.gather(context);
+
+    for (let attempt = 1; attempt < attempts; attempt += 1) {
+      if (gathered.report.readiness !== READINESS.PENDING) {
+        return gathered;
+      }
+
+      ctx?.note("plan", `Waiting for ${gathered.report.participants
+        .filter((participant) => participant.apiKey?.state === "pending")
+        .map((participant) => participant.name)
+        .join(", ") || "an app"} to finish starting.`);
+
+      await this.sleep(intervalMs);
+      gathered = await this.gather(context);
+    }
+
+    return gathered;
+  }
+
   async runWiring(ctx, input, context) {
     let plan = null;
 
     await ctx.step("plan", async () => {
-      const gathered = await this.gather(context);
+      // An app deployed moments ago has not written its API key yet, and one
+      // whose configuration cannot be read looks like it needs nothing. Waiting
+      // for that is the difference between an install that finishes connected
+      // and one that quietly does nothing.
+      const gathered = await this.gatherOnceSettled(context, ctx);
       // Only what is genuinely missing. Drift, ambiguity, and blocked links are
       // reported by the check and deliberately never written by this job.
       const actionable = {
@@ -393,13 +439,18 @@ export class WiringService {
         throw new StackarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
       }
 
-      plan = { ...gathered, actionable };
+      plan = { ...gathered, actionable, downloadCategories: gathered.downloadCategories };
       return { detail: `${total} connection${total === 1 ? "" : "s"} to configure.` };
     });
 
     const { keys, current, logger } = plan;
     const created = [];
     const skipped = [];
+    // Populated by writeChecked. One app refusing a connection says nothing
+    // about the others, so a failure here is collected rather than thrown.
+    const failed = [];
+    const notes = [];
+    this.outcome = { created, failed, notes };
 
     await this.applyDownloadClients(ctx, plan, created, logger);
     await this.applyRootFolders(ctx, plan, created, logger);
@@ -434,7 +485,7 @@ export class WiringService {
 
     await this.appendActivity({
       kind: "wiring-apply",
-      level: verification.results.some((entry) => !entry.ok) ? "warn" : "info",
+      level: failed.length || verification.results.some((entry) => !entry.ok) ? "warn" : "info",
       message: `Configured ${created.length} connection${created.length === 1 ? "" : "s"} across the stack.`,
       details: { created: created.map((entry) => entry.label) }
     });
@@ -443,9 +494,13 @@ export class WiringService {
 
     return {
       created: created.map((entry) => entry.label),
+      failed,
+      notes,
       skipped,
       verification: verification.results,
-      summary: `Configured ${created.length} connection${created.length === 1 ? "" : "s"}.`
+      summary: failed.length
+        ? `Configured ${created.length} connection${created.length === 1 ? "" : "s"}; ${failed.length} could not be configured.`
+        : `Configured ${created.length} connection${created.length === 1 ? "" : "s"}.`
     };
   }
 
@@ -457,7 +512,7 @@ export class WiringService {
    * client created from a masked value stores the mask and gets 403 forever.
    */
   async applyDownloadClients(ctx, plan, created, logger) {
-    const { actionable, current, keys } = plan;
+    const { actionable, current, keys, downloadCategories } = plan;
 
     if (actionable.downloadClients.length === 0) {
       ctx.skip("downloadclients", "Every app already has its download client configured.");
@@ -465,6 +520,7 @@ export class WiringService {
     }
 
     await ctx.step("downloadclients", async () => {
+      const failedBefore = this.outcome.failed.length;
       const downloadKey = keys.get("sabnzbd");
 
       if (!downloadKey) {
@@ -484,6 +540,18 @@ export class WiringService {
           });
         }
 
+        // Checked before attempting, because the app refuses the write outright
+        // and its own error names a field rather than the actual problem.
+        const missingCategory = missingCategoryFor(schema.data, link.source, downloadCategories);
+
+        if (missingCategory) {
+          this.outcome.failed.push({
+            label: `${link.sourceName} → SABnzbd`,
+            reason: `SABnzbd has no "${missingCategory}" category, and ${link.sourceName} will not save a download client without one. Add it in SABnzbd under Config → Categories, then run the check again.`
+          });
+          continue;
+        }
+
         const payload = buildDownloadClientPayload(schema.data, {
           name: "SABnzbd",
           host: link.address.host,
@@ -501,7 +569,7 @@ export class WiringService {
         });
       }
 
-      return { detail: `Configured ${actionable.downloadClients.length}.` };
+      return { detail: this.describeOutcome(actionable.downloadClients.length, failedBefore) };
     });
   }
 
@@ -514,7 +582,20 @@ export class WiringService {
     }
 
     await ctx.step("rootfolders", async () => {
+      const failedBefore = this.outcome.failed.length;
       for (const folder of actionable.rootFolders) {
+        // An app will not accept a library folder that is not there, and
+        // creating directories inside someone's media share is not Stackarr's
+        // call to make. Saying so beats a wall of validation errors about
+        // fields that only look wrong because the path was never valid.
+        if (!(await this.pathExists(folder.expectedPath))) {
+          this.outcome.failed.push({
+            label: `${folder.name} library folder`,
+            reason: `${folder.expectedPath} does not exist. Create it, then run the check again.`
+          });
+          continue;
+        }
+
         const result = await this.arrApi.createRootFolder(
           folder.serviceId,
           current.get(folder.serviceId)?.baseUrl,
@@ -523,16 +604,18 @@ export class WiringService {
         );
 
         if (!result.ok) {
-          throw new StackarrError(`${folder.name} rejected the library folder ${folder.expectedPath}: ${result.error}`, {
-            statusCode: 502
+          this.outcome.failed.push({
+            label: `${folder.name} library folder`,
+            reason: result.error
           });
+          continue;
         }
 
         created.push({ serviceId: folder.serviceId, label: `${folder.name} library folder ${folder.expectedPath}` });
         logger.info("wiring.rootfolder.created", { serviceId: folder.serviceId, path: folder.expectedPath });
       }
 
-      return { detail: `Added ${actionable.rootFolders.length}.` };
+      return { detail: this.describeOutcome(actionable.rootFolders.length, failedBefore) };
     });
   }
 
@@ -545,6 +628,7 @@ export class WiringService {
     }
 
     await ctx.step("applications", async () => {
+      const failedBefore = this.outcome.failed.length;
       const base = current.get("prowlarr")?.baseUrl;
       const key = keys.get("prowlarr");
       const schema = await this.arrApi.applicationSchema(base, key);
@@ -581,7 +665,7 @@ export class WiringService {
         });
       }
 
-      return { detail: `Registered ${created.filter((entry) => entry.serviceId === "prowlarr").length}.` };
+      return { detail: this.describeOutcome(actionable.applications.length, failedBefore) };
     });
   }
 
@@ -595,27 +679,50 @@ export class WiringService {
    * refusing a config it cannot reach is correct, and overriding that is how
    * you end up with settings that look right and never work.
    */
-  async writeChecked({ label, test, create, serviceId, created, logger }) {
+  async writeChecked({ label, test, create, serviceId, created, logger, note = null }) {
     const tested = await test();
-
-    if (!tested.ok) {
-      throw new StackarrError(`${label} was not configured: ${tested.error}`, { statusCode: 422 });
-    }
-
-    const rejection = describeValidation(tested.data);
+    const rejection = tested.ok ? describeValidation(tested.data) : tested.error;
 
     if (rejection) {
-      throw new StackarrError(`${label} was not configured: ${rejection}`, { statusCode: 422 });
+      // Recorded, not thrown. Lidarr being refused should not stop Radarr and
+      // Sonarr from being configured in the same run.
+      this.outcome.failed.push({ label, reason: rejection });
+      logger.warn("wiring.refused", { label, reason: rejection });
+      return;
     }
 
     const result = await create();
 
     if (!result.ok) {
-      throw new StackarrError(`${label} could not be saved: ${result.error}`, { statusCode: 502 });
+      this.outcome.failed.push({ label, reason: result.error });
+      logger.warn("wiring.write_failed", { label, reason: result.error });
+      return;
     }
 
     created.push({ serviceId, label });
+
+    if (note) {
+      this.outcome.notes.push(note);
+    }
+
     logger.info("wiring.created", { label });
+  }
+
+  /**
+   * Reads as a sentence whether everything in this step worked, some of it did,
+   * or none. Scoped to the step by taking the failure count from before it ran,
+   * so a later step does not report an earlier one's problems as its own.
+   */
+  describeOutcome(attempted, failedBefore = 0) {
+    const mine = this.outcome.failed.slice(failedBefore);
+
+    if (mine.length === 0) {
+      return `Configured ${attempted}.`;
+    }
+
+    return `Configured ${attempted - mine.length} of ${attempted}. ${mine
+      .map((entry) => `${entry.label}: ${entry.reason}`)
+      .join("; ")}`;
   }
 
   /** One authenticated read per app, reused by every check below. */

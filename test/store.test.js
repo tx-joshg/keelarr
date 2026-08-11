@@ -89,3 +89,18 @@ test("a stored selection naming a retired service is dropped, not carried forwar
   assert.equal(settings.services.readarr, undefined);
   assert.ok(settings.services.radarr);
 });
+
+test("removing the last service leaves an empty stack rather than reselecting defaults", () => {
+  // The default selection exists for a first run. Applying it after setup turns
+  // "I just removed my last app" into eight apps reappearing unasked.
+  const settings = normalizeSettings({ initialized: true, selectedServiceIds: [] });
+
+  assert.deepEqual(settings.selectedServiceIds, []);
+  assert.deepEqual(settings.services, {});
+});
+
+test("a stack that has never been set up still gets the default selection", () => {
+  const settings = normalizeSettings({ selectedServiceIds: [] });
+
+  assert.ok(settings.selectedServiceIds.length > 0);
+});
