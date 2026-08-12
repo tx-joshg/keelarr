@@ -11,6 +11,16 @@ services:
       STACKARR_PORT: "4687"
       STACKARR_DATA_DIR: /app/data
       STACKARR_LOG_LEVEL: ${STACKARR_LOG_LEVEL:-info}
+      # The same values as the mounts below, so the controller knows which host
+      # roots it was given rather than guessing at a filesystem it cannot see.
+      # Without these, host detection suggests generic defaults like /opt and
+      # /srv — paths this file does not mount, and which Docker Desktop refuses
+      # outright, so the first save reported four roots as unreachable.
+      HOST_STACK_ROOT: ${HOST_STACK_ROOT:-${HOME:-/srv}/stackarr/stacks}
+      HOST_CONFIG_ROOT: ${HOST_CONFIG_ROOT:-${HOME:-/srv}/stackarr/config}
+      HOST_MEDIA_ROOT: ${HOST_MEDIA_ROOT:-${HOME:-/srv}/stackarr/media}
+      HOST_DOWNLOADS_ROOT: ${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/stackarr/media/downloads}
+      HOST_PLEX_LOGS_ROOT: ${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/stackarr/plex-logs}
     volumes:
       - ${STACKARR_DATA_DIR:-../data}:/app/data
       - /var/run/docker.sock:/var/run/docker.sock

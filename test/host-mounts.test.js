@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { findUnmountedRoots, renderControllerEnv, resolveControllerEnvPath } from "../src/lib/host-mounts.js";
+import { findUnmountedRoots, mountedRootsFromEnv, renderControllerEnv, resolveControllerEnvPath } from "../src/lib/host-mounts.js";
 
 const SETTINGS = {
   stackRoot: "/share/Container/docker",
@@ -160,4 +160,57 @@ test("without that mount it still falls back to deducing the path", async () => 
   );
 
   assert.equal(found, "/opt/stackarr/deploy/.env");
+});
+
+test("a fresh clone with no .env yet still resolves to the mounted deploy directory", async () => {
+  // The case that matters most and used to fail: on a first install there is no
+  // .env at all — writing the first one is the whole point — so requiring the
+  // file to exist meant it was never created. The compose file identifies the
+  // directory instead.
+  const found = await resolveControllerEnvPath(
+    { workingDir: "/private/tmp/checkout/deploy", composeFile: "/private/tmp/checkout/deploy/compose.example.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/app/deploy-host/compose.example.yml" }
+  );
+
+  assert.equal(found, "/app/deploy-host/.env");
+});
+
+test("an empty deploy mount is not mistaken for the deploy directory", async () => {
+  // Neither marker present, so nothing there identifies it and the fallback
+  // deduction has to be what answers.
+  const found = await resolveControllerEnvPath(
+    { workingDir: "/opt/stackarr/deploy", composeFile: "/opt/stackarr/deploy/compose.example.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/opt/stackarr/deploy/compose.example.yml" }
+  );
+
+  assert.equal(found, "/opt/stackarr/deploy/.env");
+});
+
+test("a renamed compose file still identifies the mounted deploy directory", async () => {
+  const found = await resolveControllerEnvPath(
+    { workingDir: "/somewhere/else", composeFile: "/somewhere/else/docker-compose.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/app/deploy-host/docker-compose.yml" }
+  );
+
+  assert.equal(found, "/app/deploy-host/.env");
+});
+
+test("the roots Compose mounted are read back from the environment", () => {
+  const roots = mountedRootsFromEnv({
+    HOST_STACK_ROOT: "/Users/someone/stackarr/stacks",
+    HOST_MEDIA_ROOT: "/Users/someone/stackarr/media",
+    HOST_PLEX_LOGS_ROOT: "   ",
+    UNRELATED: "/nope"
+  });
+
+  assert.deepEqual(roots, {
+    stackRoot: "/Users/someone/stackarr/stacks",
+    mediaRoot: "/Users/someone/stackarr/media"
+  });
+});
+
+test("a controller deployed before those variables existed reports none", () => {
+  // The NAS is exactly this case, so absent must mean "fall back", not "empty
+  // string" — an empty root would read as a deliberate blank.
+  assert.deepEqual(mountedRootsFromEnv({}), {});
 });

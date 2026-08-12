@@ -1316,14 +1316,21 @@ export class WiringService {
       };
     }
 
-    if (summary.correct === summary.total && summary.total > 0) {
+    // Zero counts as nothing wrong, not as nothing done. A stack of one app has
+    // no links to make, and requiring total > 0 here reported it as
+    // "0 of 0 connections are configured: ." — a fault that does not exist.
+    if (summary.correct === summary.total) {
+      const wiring = summary.total > 0
+        ? `All ${summary.total} connections are configured correctly`
+        : "There is nothing to connect yet — one app on its own has nothing to link to";
+
       // Connections first, then whether the stack can actually acquire
       // anything. Both are reported, because they fail independently.
       if (prerequisites.length > 0) {
         return {
           summary,
           readiness: READINESS.NEEDS_YOU,
-          readinessMessage: `All ${summary.total} connections are configured correctly, but ${prerequisites
+          readinessMessage: `${wiring}, but ${prerequisites
             .map((entry) => entry.name)
             .join(" and ")} still ${prerequisites.length === 1 ? "needs" : "need"} something only you can provide.`
         };
@@ -1332,7 +1339,9 @@ export class WiringService {
       return {
         summary,
         readiness: READINESS.READY,
-        readinessMessage: `Stack ready. All ${summary.total} connections are configured correctly.`
+        readinessMessage: summary.total > 0
+          ? `Stack ready. All ${summary.total} connections are configured correctly.`
+          : "Stack ready. Nothing needs connecting yet — add another app and Stackarr will wire them together."
       };
     }
 

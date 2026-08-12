@@ -88,3 +88,56 @@ test("host validation fails when the saved Docker binary is invalid", async () =
   assert.equal(result.ok, false);
   assert.match(result.errors.join(" "), /Docker binary could not be executed/i);
 });
+
+test("detection suggests the roots this controller was actually mounted with", async () => {
+  // Otherwise a fresh desktop install is told to use /opt and /srv — paths the
+  // Compose file does not mount and Docker Desktop will not mount, so the very
+  // first save reports four roots as unreachable.
+  const paths = resolveGenericDockerSuggestedPaths({}, {
+    preferredAdapterId: "generic-docker",
+    mountedRoots: {
+      stackRoot: "/Users/someone/stackarr/stacks",
+      configRoot: "/Users/someone/stackarr/config",
+      mediaRoot: "/Users/someone/stackarr/media",
+      downloadsRoot: "/Users/someone/stackarr/media/downloads"
+    }
+  });
+
+  assert.equal(paths.stackRoot, "/Users/someone/stackarr/stacks");
+  assert.equal(paths.configRoot, "/Users/someone/stackarr/config");
+  assert.equal(paths.mediaRoot, "/Users/someone/stackarr/media");
+  assert.equal(paths.downloadsRoot, "/Users/someone/stackarr/media/downloads");
+});
+
+test("without mounted roots the generic defaults still apply", async () => {
+  const paths = resolveGenericDockerSuggestedPaths({}, {
+    preferredAdapterId: "generic-docker",
+    mountedRoots: {}
+  });
+
+  assert.equal(paths.stackRoot, "/opt/stackarr/stacks");
+  assert.equal(paths.mediaRoot, "/srv/media");
+});
+
+test("what the operator already chose outranks the mounted root", async () => {
+  // Changing a root and re-detecting must not silently revert it to the mount.
+  const paths = resolveGenericDockerSuggestedPaths(
+    { initialized: true, mediaRoot: "/tank/media" },
+    { mountedRoots: { mediaRoot: "/Users/someone/stackarr/media" } }
+  );
+
+  assert.equal(paths.mediaRoot, "/tank/media");
+});
+
+test("before the first save, placeholder settings lose to a real mount", async () => {
+  // A fresh settings.json already carries generic defaults. Nobody picked them,
+  // so preferring them over an actual mount is what produced a first-run
+  // suggestion the controller could not see.
+  const paths = resolveGenericDockerSuggestedPaths(
+    { initialized: false, mediaRoot: "/srv/media", stackRoot: "/opt/stackarr/stacks" },
+    { mountedRoots: { mediaRoot: "/Users/someone/stackarr/media", stackRoot: "/Users/someone/stackarr/stacks" } }
+  );
+
+  assert.equal(paths.mediaRoot, "/Users/someone/stackarr/media");
+  assert.equal(paths.stackRoot, "/Users/someone/stackarr/stacks");
+});

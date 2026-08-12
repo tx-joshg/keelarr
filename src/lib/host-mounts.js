@@ -17,6 +17,32 @@ const REQUIRED_ROOTS = [
   { field: "plexLogsRoot", variable: "HOST_PLEX_LOGS_ROOT", label: "Plex logs path" }
 ];
 
+/**
+ * The roots this controller was actually mounted with, as Compose passed them.
+ *
+ * Host detection would otherwise suggest generic defaults like /opt and /srv,
+ * which are not what the Compose file mounts and, on Docker Desktop, cannot be
+ * mounted at all. The result was a first save that immediately reported four
+ * roots as unreachable. Compose knows the answer; this is it telling us,
+ * rather than the container guessing about a filesystem it cannot see.
+ *
+ * Empty for controllers deployed before these variables existed, which is why
+ * every caller keeps its own fallback.
+ */
+export function mountedRootsFromEnv(env = process.env) {
+  const roots = {};
+
+  for (const root of REQUIRED_ROOTS) {
+    const value = String(env[root.variable] || "").trim();
+
+    if (value) {
+      roots[root.field] = value;
+    }
+  }
+
+  return roots;
+}
+
 function isCovered(mounts, hostPath) {
   return mounts.some((mount) => {
     // Mounted at the same absolute path on both sides by design, so a root is
@@ -67,17 +93,24 @@ export async function resolveControllerEnvPath({ workingDir, composeFile, mounts
     }
   });
 
+  const composeName = composeFile ? composeFile.split("/").pop() : "compose.example.yml";
+
   // The mounted directory first: no guessing, and it works regardless of how
   // the host spells the path outside.
-  if (await exists(path.join(DEPLOY_MOUNT, ".env"))) {
-    return path.join(DEPLOY_MOUNT, ".env");
+  //
+  // Either file identifies it. Looking only for .env would fail on exactly the
+  // installation that needs this most — a fresh clone, where the whole point is
+  // that no .env exists yet and Stackarr is meant to write the first one.
+  for (const marker of [".env", composeName, "compose.example.yml"]) {
+    if (await exists(path.join(DEPLOY_MOUNT, marker))) {
+      return path.join(DEPLOY_MOUNT, ".env");
+    }
   }
 
   if (!workingDir) {
     return null;
   }
 
-  const composeName = composeFile ? composeFile.split("/").pop() : "compose.example.yml";
   const segments = workingDir.split("/").filter(Boolean);
   const candidates = [workingDir];
 

@@ -1,3 +1,4 @@
+import { mountedRootsFromEnv } from "../host-mounts.js";
 import {
   confidenceFromScore,
   field,
@@ -9,14 +10,37 @@ import {
 
 export function resolveGenericDockerSuggestedPaths(settings = {}, options = {}) {
   const resetToGenericDefaults = options.preferredAdapterId === "generic-docker" && settings.adapterType !== "generic-docker";
-  const mediaRoot = resetToGenericDefaults ? "/srv/media" : settings.mediaRoot || "/srv/media";
+  // What this controller was actually mounted with beats a generic guess: a
+  // suggestion the container cannot see is one the operator has to correct
+  // before anything works.
+  const mounted = options.mountedRoots || mountedRootsFromEnv();
+  // Before the first save, the values in settings are placeholders nobody
+  // picked, so a real mount outranks them. Afterwards they are the operator's
+  // decision and re-detecting must not quietly overwrite it.
+  const settingsAreChosen = settings.initialized === true;
+  const pick = (field, fallback) => {
+    // Switching away from another host profile discards its paths outright —
+    // that is what makes it a reset — so settings are not consulted at all.
+    if (resetToGenericDefaults) {
+      return mounted[field] || fallback;
+    }
+
+    if (!settingsAreChosen) {
+      return mounted[field] || settings[field] || fallback;
+    }
+
+    return settings[field] || mounted[field] || fallback;
+  };
+  const mediaRoot = pick("mediaRoot", "/srv/media");
 
   return {
-    stackRoot: resetToGenericDefaults ? "/opt/stackarr/stacks" : settings.stackRoot || "/opt/stackarr/stacks",
-    configRoot: resetToGenericDefaults ? "/srv/stackarr/config" : settings.configRoot || "/srv/stackarr/config",
+    stackRoot: pick("stackRoot", "/opt/stackarr/stacks"),
+    configRoot: pick("configRoot", "/srv/stackarr/config"),
     mediaRoot,
-    downloadsRoot: resetToGenericDefaults ? `${mediaRoot}/downloads` : settings.downloadsRoot || `${mediaRoot}/downloads`,
-    plexLogsRoot: resetToGenericDefaults ? "" : settings.plexLogsRoot || ""
+    downloadsRoot: pick("downloadsRoot", `${mediaRoot}/downloads`),
+    // Only Tautulli uses this, so an unset value is a normal end state rather
+    // than something to invent a path for.
+    plexLogsRoot: pick("plexLogsRoot", "")
   };
 }
 
@@ -30,6 +54,17 @@ export async function detectGenericDockerHost(settings = {}, options = {}) {
     downloadsRoot,
     plexLogsRoot
   } = resolveGenericDockerSuggestedPaths(settings, options);
+
+  const mounted = options.mountedRoots || mountedRootsFromEnv();
+  // Naming the origin matters here: "mounted-root" tells the operator this is
+  // the path the controller can genuinely reach, not a guess to be corrected.
+  const sourceFor = (fieldName, value, exists) => {
+    if (mounted[fieldName] === value) {
+      return "mounted-root";
+    }
+
+    return exists ? "existing-path" : "generic-default";
+  };
 
   const [stackExists, stackWritable, mediaExists] = await Promise.all([
     pathExists(stackRoot),
@@ -81,9 +116,9 @@ export async function detectGenericDockerHost(settings = {}, options = {}) {
     },
     fieldSuggestions: {
       dockerBin: field(dockerProbe.selected?.binaryPath || "docker", dockerProbe.selected?.composeOk ? "high" : "medium", "validated-command"),
-      stackRoot: field(stackRoot, stackWritable ? "high" : "medium", stackExists ? "existing-path" : "generic-default"),
-      configRoot: field(configRoot, "medium", "generic-default"),
-      mediaRoot: field(mediaRoot, mediaExists ? "medium" : "low", mediaExists ? "existing-path" : "generic-default"),
+      stackRoot: field(stackRoot, stackWritable ? "high" : "medium", sourceFor("stackRoot", stackRoot, stackExists)),
+      configRoot: field(configRoot, mounted.configRoot ? "high" : "medium", sourceFor("configRoot", configRoot, false)),
+      mediaRoot: field(mediaRoot, mediaExists || mounted.mediaRoot ? "medium" : "low", sourceFor("mediaRoot", mediaRoot, mediaExists)),
       downloadsRoot: field(downloadsRoot, "medium", "derived-default"),
       plexLogsRoot: field(plexLogsRoot, plexLogsRoot ? "manual" : "low", plexLogsRoot ? "user-provided" : "unset")
     },

@@ -315,3 +315,31 @@ test("Prowlarr links are reported as not applicable when it is not installed", a
   // Not-applicable rows never drag the verdict away from ready.
   assert.equal(result.readiness, "ready");
 });
+
+test("a stack of one app is ready, not incomplete", async () => {
+  // Nothing to link a single app to. Requiring at least one connection before
+  // the stack could read as correct reported the smallest possible install as
+  // "0 of 0 connections are configured: ." — a fault that does not exist.
+  const { service } = createService({
+    settings: buildSettings(["prowlarr"]),
+    inspects: [hostNetInspect("prowlarr", 9696), controllerInspect()]
+  });
+  const result = await service.describeWiring();
+
+  assert.equal(result.summary.total, 0);
+  assert.equal(result.readiness, "ready");
+  assert.doesNotMatch(result.readinessMessage, /0 of 0/);
+});
+
+test("one app that still needs a credential says so instead of reporting a fault", async () => {
+  const { service } = createService({
+    settings: buildSettings(["prowlarr"]),
+    inspects: [hostNetInspect("prowlarr", 9696), controllerInspect()],
+    indexerCount: 0
+  });
+  const result = await service.describeWiring();
+
+  // Either verdict is honest here as long as it is not "incomplete", which
+  // would be claiming Stackarr left connections unmade.
+  assert.notEqual(result.readiness, "incomplete");
+});
