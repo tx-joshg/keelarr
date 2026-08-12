@@ -1,0 +1,80 @@
+name: Publish
+
+# A NAS is as likely to be arm64 as amd64 — a Raspberry Pi, an ARM Synology, an
+# Apple Silicon desktop — so the image is built for both. Nobody should have to
+# clone this repository and build it themselves to run it.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+
+      - run: npm test
+
+  publish:
+    # Publishing an image whose tests failed is worse than publishing nothing:
+    # it is the version everyone pulls by default.
+    needs: test
+    runs-on: ubuntu-latest
+    # A pull request from a fork cannot be trusted with package write access,
+    # and there is nothing to publish until the change is on main anyway.
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds the arm64 image under emulation. Slow in general, but this image
+      # installs two dependencies and copies a few directories, so it is cheap
+      # enough not to warrant a second runner.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Without this the arm64 layers are rebuilt from scratch every run,
+          # which is the expensive half of the build.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

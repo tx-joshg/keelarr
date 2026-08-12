@@ -140,7 +140,14 @@ export async function resolveControllerEnvPath({ workingDir, composeFile, mounts
  * exists, and a process inside that container cannot tell it.
  */
 export function renderControllerEnv(settings, existing = "") {
+  // Pins the controller's own image. Stackarr has no opinion about it, but it
+  // lives in the file Stackarr rewrites — so it has to be carried across, or
+  // saving a host path would quietly un-pin the version and move someone onto
+  // `latest` without asking.
+  const pinnedVersion = readExisting(existing, "STACKARR_VERSION");
+
   const managed = {
+    ...(pinnedVersion ? { STACKARR_VERSION: pinnedVersion } : {}),
     STACKARR_PORT: readExisting(existing, "STACKARR_PORT") || "4687",
     STACKARR_LOG_LEVEL: readExisting(existing, "STACKARR_LOG_LEVEL") || "info",
     // Not derivable from settings: it is where settings themselves live.

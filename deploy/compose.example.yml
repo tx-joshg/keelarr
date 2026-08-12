@@ -1,8 +1,12 @@
 services:
   stackarr:
-    build:
-      context: ..
-    image: stackarr:local
+    # A published multi-arch image, so running Stackarr needs neither a
+    # checkout nor a toolchain — `docker compose up -d` from this file alone is
+    # the whole install, on amd64 or arm64.
+    #
+    # To run your own code instead, add the build override alongside it:
+    #   docker compose -f compose.example.yml -f compose.build.yml up -d --build
+    image: ghcr.io/tx-joshg/stackarr:${STACKARR_VERSION:-latest}
     container_name: stackarr
     restart: unless-stopped
     ports:

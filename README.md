@@ -322,13 +322,19 @@ Requirements:
 - mount the host paths Stackarr needs to inspect at the same absolute paths inside the container
 - keep Stackarr's own `data/` directory on persistent storage
 
-Quick start:
+Quick start — no checkout, no toolchain, one file:
 
 ```bash
-cd stackarr/deploy
-cp .env.example .env
-docker compose -f compose.example.yml up -d --build
+curl -fsSLO https://raw.githubusercontent.com/tx-joshg/stackarr/main/deploy/compose.example.yml
 ```
+
+```bash
+docker compose -f compose.example.yml up -d
+```
+
+That pulls a published image built for both `linux/amd64` and `linux/arm64`, so
+the same command works on an Intel NAS, an ARM one, a Raspberry Pi, or an Apple
+Silicon desktop. Then open `http://<host>:4687` and choose a password.
 
 Nothing needs editing first. Every path has a working default, so the controller
 starts, and its setup wizard then detects the right ones for this machine — a
@@ -340,6 +346,19 @@ That ordering is deliberate. The paths are questions the wizard already asks, so
 asking them again in a file you have to get right before anything will start is
 work for no reason — and a wrong value there used to fail with
 `invalid spec: ::ro: empty section between colons`.
+
+To pin a version rather than track `latest`, set `STACKARR_VERSION` in `.env`.
+
+### Working On Stackarr Itself
+
+Building from a checkout is the developer path, not the install path:
+
+```bash
+docker compose -f compose.example.yml -f compose.build.yml up -d --build
+```
+
+The override names the local image `stackarr:local`, so a build of your own
+working tree can never be confused with the published one.
 
 Important:
 

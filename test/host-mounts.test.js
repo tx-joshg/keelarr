@@ -214,3 +214,20 @@ test("a controller deployed before those variables existed reports none", () => 
   // string" — an empty root would read as a deliberate blank.
   assert.deepEqual(mountedRootsFromEnv({}), {});
 });
+
+test("a pinned controller version survives a settings save", () => {
+  // Stackarr rewrites this file whenever a host path changes. Dropping a value
+  // it does not manage would move the operator onto latest without asking.
+  const text = renderControllerEnv(
+    { stackRoot: "/srv/stackarr/stacks" },
+    "STACKARR_VERSION=v0.2.0\nSTACKARR_PORT=4687\n"
+  );
+
+  assert.match(text, /^STACKARR_VERSION=v0\.2\.0$/m);
+});
+
+test("no pin means no line, rather than an empty one", () => {
+  const text = renderControllerEnv({ stackRoot: "/srv/stackarr/stacks" }, "STACKARR_PORT=4687\n");
+
+  assert.doesNotMatch(text, /STACKARR_VERSION/);
+});
