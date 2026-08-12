@@ -419,6 +419,13 @@ When Stackarr runs in Docker, the same log entries are also emitted to container
 
 The operation log intentionally avoids logging request bodies and redacts obvious secret-like keys such as passwords, tokens, secrets, cookies, and API keys. If you need more detail while testing, raise `STACKARR_LOG_LEVEL` to `debug`.
 
+`data/stackarr.log` rolls over at 5MB and two older copies are kept, so the log
+occupies about 15MB at most however long the controller runs. That matters
+because the data directory often lives on a NAS system volume, and at `debug` a
+busy controller writes several megabytes a day — `command.start` and
+`command.finish` fire for every Docker invocation. Set `STACKARR_LOG_MAX_BYTES`
+to change the threshold, or to `0` to let the log grow without limit.
+
 ## Run The Interactive Demo
 
 Use the demo when you want to review the full dashboard without touching a real Docker host:

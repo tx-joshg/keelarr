@@ -1,7 +1,18 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { logPath } from "./data-paths.js";
+
+/**
+ * Where the log gets rolled over, and how many old ones are kept.
+ *
+ * The log is unbounded otherwise, and it lives in the data directory — which on
+ * a NAS is often the small system volume. At `debug` a busy controller writes
+ * several megabytes a day, so this caps the whole thing at roughly 15MB rather
+ * than letting it grow until something else on the host runs out of room.
+ */
+const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_KEEP = 2;
 
 const LEVEL_RANK = {
   debug: 10,
@@ -124,13 +135,59 @@ class LoggerCore {
     name = "stackarr",
     level = process.env.STACKARR_LOG_LEVEL || "info",
     filePath = logPath,
-    consoleImpl = console
+    consoleImpl = console,
+    maxBytes = Number(process.env.STACKARR_LOG_MAX_BYTES) || DEFAULT_MAX_BYTES,
+    keep = DEFAULT_KEEP
   } = {}) {
     this.name = name;
     this.level = normalizeLogLevel(level);
     this.filePath = filePath;
     this.consoleImpl = consoleImpl;
+    this.maxBytes = maxBytes;
+    this.keep = keep;
     this.writeQueue = Promise.resolve();
+    // Counted rather than stat-ed per line: every write goes through the queue
+    // below, so this process is the only one appending. Null means "ask the
+    // filesystem once", which covers restarting onto an existing log.
+    this.currentBytes = null;
+  }
+
+  /**
+   * Rolls the log over when it outgrows the cap.
+   *
+   * Renaming rather than copying, so a reader holding the old file keeps
+   * reading it instead of watching lines vanish mid-write. Called only from
+   * inside the write queue, which is what makes the counter above safe.
+   */
+  async rotateIfNeeded(incomingBytes) {
+    if (this.maxBytes <= 0) {
+      return;
+    }
+
+    if (this.currentBytes === null) {
+      this.currentBytes = await stat(this.filePath).then((info) => info.size).catch(() => 0);
+    }
+
+    if (this.currentBytes + incomingBytes <= this.maxBytes) {
+      return;
+    }
+
+    // Oldest first, so nothing is overwritten before it has been shifted along.
+    for (let index = this.keep; index >= 1; index -= 1) {
+      const from = index === 1 ? this.filePath : `${this.filePath}.${index - 1}`;
+      const to = `${this.filePath}.${index}`;
+
+      if (index === this.keep) {
+        await rm(to, { force: true });
+      }
+
+      await rename(from, to).catch(() => {});
+    }
+
+    // Re-read rather than assume zero: if a rename failed — a permission
+    // problem, a file held open — the old log is still there, and assuming an
+    // empty one would let it grow past the cap unnoticed.
+    this.currentBytes = await stat(this.filePath).then((info) => info.size).catch(() => 0);
   }
 
   shouldLog(level) {
@@ -146,12 +203,19 @@ class LoggerCore {
     const print = toConsoleMethod(this.consoleImpl, level);
     print(line.trimEnd());
 
+    const bytes = Buffer.byteLength(line);
+
     this.writeQueue = this.writeQueue
       .then(async () => {
         await mkdir(path.dirname(this.filePath), { recursive: true });
+        await this.rotateIfNeeded(bytes);
         await appendFile(this.filePath, line, "utf8");
+        this.currentBytes += bytes;
       })
       .catch((error) => {
+        // The count is no longer trustworthy after a failed write; make the
+        // next one measure the file instead of guessing.
+        this.currentBytes = null;
         const fallback = {
           ts: new Date().toISOString(),
           level: "error",
