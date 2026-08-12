@@ -441,7 +441,9 @@ test("Upgrade All clears pins and refreshes status for every service, like the s
     await setComposeImage(stack.settings.services[id], `img/${id}@sha256:pinned`);
   }
 
-  const updateState = {};
+  // Known to need an update: since checking became a deliberate act, that is
+  // the precondition for Upgrade All touching anything.
+  const updateState = { radarr: { status: "ready" }, sonarr: { status: "ready" } };
   const pulled = [];
   const service = new ManagedStackService({
     logger: silentLogger,
@@ -487,7 +489,11 @@ test("Upgrade All keeps going when one service fails and reports the split", asy
         : { ok: true, stdout: "", stderr: "" };
     },
     verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
-    readUpdateStateImpl: async () => ({}),
+    readUpdateStateImpl: async () => ({
+      radarr: { status: "ready" },
+      sonarr: { status: "ready" },
+      ombi: { status: "ready" }
+    }),
     writeUpdateStateImpl: async () => ({}),
     appendActivityImpl: async () => {}
   });
@@ -510,7 +516,7 @@ test("Upgrade All reports a service that upgrades but does not come back healthy
     loadSettingsImpl: async () => stack.settings,
     upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
     verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." }),
-    readUpdateStateImpl: async () => ({}),
+    readUpdateStateImpl: async () => ({ radarr: { status: "ready" } }),
     writeUpdateStateImpl: async () => ({}),
     appendActivityImpl: async () => {}
   });
@@ -543,7 +549,7 @@ test("Upgrade All skips services that were never installed", async (t) => {
       return { ok: true, stdout: "", stderr: "" };
     },
     verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
-    readUpdateStateImpl: async () => ({}),
+    readUpdateStateImpl: async () => ({ radarr: { status: "ready" }, bazarr: { status: "ready" } }),
     writeUpdateStateImpl: async () => ({}),
     appendActivityImpl: async () => {}
   });
@@ -583,7 +589,10 @@ test("Upgrade All only touches services that actually have an update", async (t)
   assert.deepEqual(attempted, ["radarr"]);
   assert.equal(job.result.upgraded, 1);
   assert.equal(job.result.skipped, 2);
-  assert.match(job.steps.find((s) => s.name === "sonarr").detail, /Already current/);
+  // Not a step reporting "succeeded" — not a step at all. Five services
+  // silently reporting success is what made a three-service upgrade look like
+  // a whole-stack one.
+  assert.deepEqual(job.steps.map((step) => step.name), ["radarr"]);
 });
 
 test("Upgrade All with force re-pulls everything regardless of status", async (t) => {
@@ -621,9 +630,13 @@ test("Upgrade All says so plainly when there is nothing to do", async (t) => {
     appendActivityImpl: async () => {}
   });
 
-  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+  const outcome = await service.startUpgradeAll().create();
 
-  assert.match(job.result.summary, /Nothing to upgrade/);
+  // A progress panel that exists only to say nothing happened is noise, so
+  // there is no job — just the answer.
+  assert.equal(outcome.job, null);
+  assert.equal(outcome.upgraded, 0);
+  assert.match(outcome.message, /already up to date/i);
 });
 
 /* --- a freshly deployed service must not report "Unknown" --- */

@@ -203,8 +203,34 @@ export class JobRegistry {
       .then(() => handler(controller))
       .then((result) => {
         job.result = result ?? null;
-        job.status = JOB_STATUS.SUCCEEDED;
         job.finishedAt = this.now();
+
+        // A handler that catches its own step failures — so that one bad
+        // service does not strand the rest — still returns normally, and the
+        // job was recording that as success. The steps are the record of what
+        // actually happened, so they decide. The result is kept either way:
+        // knowing which parts did work is the point of a partial failure.
+        const failedSteps = job.steps.filter((step) => step.status === STEP_STATUS.FAILED);
+
+        if (failedSteps.length > 0) {
+          job.status = JOB_STATUS.FAILED;
+          job.error = {
+            message: `${failedSteps.length} of ${job.steps.length} steps failed: ${failedSteps
+              .map((step) => step.label || step.name)
+              .join(", ")}.`,
+            details: { failedSteps: failedSteps.map((step) => step.name) }
+          };
+          this.schedulePersist();
+          this.logger.error("job.failed", {
+            jobId: job.id,
+            kind: job.kind,
+            subject: job.subject,
+            message: job.error.message
+          });
+          return;
+        }
+
+        job.status = JOB_STATUS.SUCCEEDED;
         this.schedulePersist();
         this.logger.info("job.succeeded", { jobId: job.id, kind: job.kind, subject: job.subject });
       })

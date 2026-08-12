@@ -272,3 +272,55 @@ test("a registry without persistence never touches the store", async () => {
 
   assert.equal(store.writes, 0);
 });
+
+test("a job whose step failed does not report success", async () => {
+  // Upgrade-all catches per-service failures so one bad service cannot strand
+  // the rest, then returns normally — and the job was recording that as
+  // success while the same run logged failed:1 at error level.
+  const registry = createRegistry();
+  const job = registry.create({
+    kind: "upgrade-all",
+    subject: { serviceId: "*" },
+    steps: [{ name: "sonarr", label: "Upgrade Sonarr" }, { name: "trailarr", label: "Upgrade Trailarr" }]
+  });
+
+  registry.start(job, async (ctx) => {
+    await ctx.step("sonarr", async () => ({ detail: "Upgraded." }));
+
+    try {
+      await ctx.step("trailarr", async () => {
+        throw new Error("Image pull stalled.");
+      });
+    } catch {
+      // Swallowed on purpose: this is what the real handler does.
+    }
+
+    return { upgraded: 1, failed: 1 };
+  });
+  await settle(job);
+
+  const finished = registry.get(job.id);
+
+  assert.equal(finished.status, "failed");
+  assert.match(finished.error.message, /Upgrade Trailarr/);
+  // The result survives, because which parts did work is the useful half of a
+  // partial failure.
+  assert.deepEqual(finished.result, { upgraded: 1, failed: 1 });
+});
+
+test("a job with every step skipped still succeeds", async () => {
+  const registry = createRegistry();
+  const job = registry.create({
+    kind: "upgrade-all",
+    subject: { serviceId: "*" },
+    steps: [{ name: "radarr", label: "Upgrade Radarr" }]
+  });
+
+  registry.start(job, async (ctx) => {
+    ctx.skip("radarr", "Already current.");
+    return { upgraded: 0 };
+  });
+  await settle(job);
+
+  assert.equal(registry.get(job.id).status, "succeeded");
+});

@@ -376,6 +376,27 @@ If host validation fails, Stackarr now blocks setup and returns a specific Docke
 
 For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](docs/qnap-first-test.md).
 
+## Keeping Apps Up To Date
+
+Checking for updates is a `docker compose pull` of every image in the stack, so
+it is expensive and never happens implicitly. It runs:
+
+- once a day,
+- shortly after the controller starts, if the last check is older than that,
+- right after installing a service, which has just pulled anyway,
+- whenever you ask for it.
+
+**Upgrade All acts on what the last check recorded.** Only services known to
+have an update are touched, and they are the only rows in the progress panel —
+a stack where three of nine need updating shows three. Services whose version
+could not be read are reported rather than upgraded on the assumption that
+unknown means stale.
+
+Downloads are judged on progress, not on a stopwatch. A pull that keeps
+reporting layers runs as long as it needs; one that goes silent for two minutes
+is reported as stalled. A fixed deadline used to kill perfectly healthy pulls of
+large images on slow connections.
+
 ## Signing In
 
 The first time you open Stackarr it asks you to choose a password, and it will

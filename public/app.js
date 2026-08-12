@@ -3187,8 +3187,17 @@ async function upgradeAll() {
     method: "POST"
   });
   setLatestResult("Upgrade All", data);
-  // Job-backed: show the per-service checklist and poll rather than leaving
-  // the page frozen for the length of the whole stack upgrade.
+
+  // Nothing needed upgrading, so there is no job to follow. Say so rather than
+  // opening an empty progress panel.
+  if (!data.job) {
+    showToast(data.message || "Everything is already up to date.", "info");
+    render();
+    return;
+  }
+
+  // Job-backed: show progress per service and poll rather than leaving the page
+  // frozen for the length of the whole stack upgrade.
   ui.job = data.job;
   render();
   await pollJob(data.job.id);

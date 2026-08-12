@@ -59,6 +59,14 @@ export class StackarrAppService {
     // live on the container rather than in a Compose file and are lost whenever
     // it is recreated.
     await this.wiringService.attachToServiceNetworks();
+    // Daily, and shortly after start if the last one is older than that. This
+    // is the only thing that checks on its own: an upgrade uses what the last
+    // check recorded rather than pulling every image again to find out.
+    this.stopUpdateSchedule = this.managedStackService.startUpdateSchedule();
+  }
+
+  async shutdown() {
+    this.stopUpdateSchedule?.();
   }
 
   async loadSettings() {
@@ -268,11 +276,17 @@ export class StackarrAppService {
   }
 
   async upgradeAll(input = {}, context = {}) {
-    const job = await this.managedStackService.startUpgradeAll(input, context).create();
+    const started = await this.managedStackService.startUpgradeAll(input, context).create();
+
+    // Nothing to upgrade means no job was created, so there is no progress to
+    // follow — just the answer.
+    if (started && started.job === null) {
+      return started;
+    }
 
     return {
       ok: true,
-      job: buildJobSnapshot(job)
+      job: buildJobSnapshot(started)
     };
   }
 }

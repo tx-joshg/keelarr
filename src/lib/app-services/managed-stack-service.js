@@ -31,6 +31,14 @@ import {
 import { StackarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
+/**
+ * How often the stack asks the registry whether anything has moved.
+ *
+ * Daily, because these images publish at most a few times a week and every
+ * check is a pull against every image in the stack.
+ */
+export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 export const ROLLBACK_STEPS = [
   { name: "preflight", label: "Find the previous image" },
   { name: "backup", label: "Back up the current state" },
@@ -171,6 +179,82 @@ export class ManagedStackService {
     if (result.created) {
       logger.info("network.created", { network: SHARED_NETWORK });
     }
+  }
+
+  /**
+   * When the stack was last asked the registry anything.
+   *
+   * Newest wins: services are checked in sequence and a single failure should
+   * not make the whole stack look overdue.
+   */
+  lastUpdateCheckAt(updateState) {
+    const stamps = Object.values(updateState || {})
+      .map((entry) => entry?.checkedAt)
+      .filter(Boolean)
+      .sort();
+
+    return stamps.length ? stamps[stamps.length - 1] : null;
+  }
+
+  isUpdateCheckDue(updateState, { now = Date.now(), intervalMs = UPDATE_CHECK_INTERVAL_MS } = {}) {
+    const last = this.lastUpdateCheckAt(updateState);
+
+    if (!last) {
+      return true;
+    }
+
+    const parsed = Date.parse(last);
+    // An unparseable stamp is not evidence of a recent check.
+    return !Number.isFinite(parsed) || now - parsed >= intervalMs;
+  }
+
+  /**
+   * Checks for updates on a timer, and never anywhere else.
+   *
+   * A check is a `compose pull` of every image in the stack, so it is far too
+   * expensive to do implicitly — doing it inside Upgrade All meant asking the
+   * registry about nine services to act on three. It happens here, right after
+   * an install, or when the operator asks. Nothing else triggers one.
+   */
+  startUpdateSchedule({
+    intervalMs = UPDATE_CHECK_INTERVAL_MS,
+    startupDelayMs = 60_000,
+    nowImpl = Date.now,
+    setIntervalImpl = setInterval,
+    setTimeoutImpl = setTimeout
+  } = {}) {
+    const runCheck = async (trigger) => {
+      try {
+        // A check competing with an upgrade would have two pulls of the same
+        // image in flight, and the upgrade is the one that matters.
+        if (this.jobs?.list().some((job) => job.status === "running")) {
+          return;
+        }
+
+        await this.checkAllUpdates({ trigger });
+      } catch (error) {
+        // A failed check must never take the controller down with it; the
+        // stored state simply stays as it was until the next one.
+        this.logger.warn("update.scheduled_check_failed", { trigger, message: error.message });
+      }
+    };
+
+    const startupTimer = setTimeoutImpl(async () => {
+      if (this.isUpdateCheckDue(await this.readUpdateState(), { now: nowImpl(), intervalMs })) {
+        await runCheck("startup");
+      }
+    }, startupDelayMs);
+
+    const timer = setIntervalImpl(() => runCheck("scheduled"), intervalMs);
+
+    // Neither timer is a reason for the process to stay alive.
+    startupTimer.unref?.();
+    timer.unref?.();
+
+    return () => {
+      clearTimeout(startupTimer);
+      clearInterval(timer);
+    };
   }
 
   /**
@@ -632,17 +716,23 @@ export class ManagedStackService {
    * through this, so they cannot drift apart again — the previous Upgrade All
    * had its own loop that never gained pin clearing or status refresh.
    */
-  async upgradeOne(settings, service, logger, { verify = true } = {}) {
+  async upgradeOne(settings, service, logger, { verify = true, onPhase = null } = {}) {
     const serviceLogger = logger.child({
       serviceId: service.id,
       containerName: service.containerName
     });
+    // A row that reads "running" for two minutes says nothing about whether
+    // anything is happening. Naming the phase costs one call per stage and is
+    // the difference between waiting and wondering.
+    const phase = (label) => onPhase?.(label);
 
     if (!(await this.serviceIsDeployed(service))) {
       return { serviceId: service.id, ok: true, skipped: true, reason: "not-deployed" };
     }
 
+    phase(`Backing up ${service.name}`);
     await this.clearRollbackPin(service, serviceLogger);
+    phase(`Downloading the new ${service.name} image`);
     const result = await this.upgradeService(settings, service, { logger: serviceLogger });
 
     logger[result.ok ? "info" : "error"]("service.upgrade", {
@@ -675,6 +765,7 @@ export class ManagedStackService {
 
     // Pulling and recreating is not proof the app came back. Verify the same
     // way cutover and rollback do.
+    phase(`Waiting for ${service.name} to come back`);
     const health = verify
       ? await this.verifyServiceHealth(settings, service, { ...this.verifyOptions, logger: serviceLogger })
       : null;
@@ -766,46 +857,90 @@ export class ManagedStackService {
     };
   }
 
+  /**
+   * Decides what an Upgrade All would actually do, from what is already known.
+   *
+   * Checking is a `compose pull`, so re-checking during an upgrade would
+   * download every image in the stack to learn what the last check already
+   * recorded. The stored state decides instead, and a service is only touched
+   * when it is known to need it — which also means the job's steps are the
+   * work, not a roll-call of the whole stack.
+   */
+  planUpgradeAll(services, updateState, { force = false } = {}) {
+    const upgradable = [];
+    const current = [];
+    const unchecked = [];
+
+    for (const service of services) {
+      const status = updateState[service.id]?.status;
+
+      if (force || status === "ready") {
+        upgradable.push(service);
+        continue;
+      }
+
+      if (status === "current" || status === "not-deployed") {
+        current.push(service);
+        continue;
+      }
+
+      // Never checked, or checked and unreadable. Upgrading anyway is how
+      // Trailarr ended up in a run nobody asked for; the honest move is to say
+      // its state is unknown and let the operator decide.
+      unchecked.push(service);
+    }
+
+    return { upgradable, current, unchecked };
+  }
+
   startUpgradeAll(input = {}, context = {}) {
     return {
       create: async () => {
         const settings = await this.loadSettings();
         const services = settings.selectedServiceIds.map((serviceId) => this.requireService(settings, serviceId));
+        const updateState = await this.readUpdateState();
+        const plan = this.planUpgradeAll(services, updateState, { force: input?.force === true });
+
+        if (plan.upgradable.length === 0) {
+          // No job at all rather than a job of nothing: a progress panel that
+          // exists only to report that nothing happened is noise.
+          return {
+            ok: true,
+            job: null,
+            upgraded: 0,
+            skipped: plan.current.length,
+            unchecked: plan.unchecked.map((service) => service.id),
+            message: plan.unchecked.length
+              ? `Everything with a known update is already current. ${plan.unchecked
+                .map((service) => service.name)
+                .join(", ")} could not be checked, so ${plan.unchecked.length === 1 ? "its" : "their"} state is unknown.`
+              : "Everything is already up to date."
+          };
+        }
+
         const job = this.requireJobs().create({
           kind: "upgrade-all",
           subject: { serviceId: "*" },
-          steps: services.map((service) => ({ name: service.id, label: `Upgrade ${service.name}` }))
+          steps: plan.upgradable.map((service) => ({ name: service.id, label: `Upgrade ${service.name}` }))
         });
 
-        return this.jobs.start(job, (ctx) => this.runUpgradeAll(ctx, settings, services, context, input));
+        return this.jobs.start(job, (ctx) => this.runUpgradeAll(ctx, settings, plan, context, input));
       }
     };
   }
 
-  async runUpgradeAll(ctx, settings, services, context, input = {}) {
+  async runUpgradeAll(ctx, settings, plan, context, input = {}) {
     const logger = this.scopedLogger(context);
     const results = [];
-    // Only touch what actually has an update. Pulling and recreating a service
-    // that is already current is pointless churn on a live stack, and every
-    // recreate is a chance for something to not come back.
-    const updateState = await this.readUpdateState();
 
-    for (const service of services) {
+    // Only what the plan selected. Services already known to be current are not
+    // steps at all, so the panel shows the work rather than the whole stack.
+    for (const service of plan.upgradable) {
       try {
         const result = await ctx.step(service.id, async () => {
-          const stored = updateState[service.id]?.status;
-
-          if (!input?.force && stored && stored !== "ready" && stored !== "unknown") {
-            return {
-              serviceId: service.id,
-              ok: true,
-              skipped: true,
-              reason: stored === "not-deployed" ? "not-deployed" : "up-to-date",
-              detail: stored === "not-deployed" ? "Not installed, skipped." : "Already current, skipped."
-            };
-          }
-
-          const outcome = await this.upgradeOne(settings, service, logger);
+          const outcome = await this.upgradeOne(settings, service, logger, {
+            onPhase: (label) => ctx.note(service.id, label)
+          });
 
           if (!outcome.ok) {
             throw new StackarrError(outcome.error || `Upgrade failed for ${service.name}.`, { statusCode: 500 });
@@ -830,6 +965,7 @@ export class ManagedStackService {
     const failed = results.filter((result) => !result.ok);
     const upgraded = results.filter((result) => result.ok && !result.skipped);
     const skipped = results.filter((result) => result.skipped);
+    const services = plan.upgradable;
 
     await this.appendActivity({
       kind: "upgrade-all",
@@ -846,17 +982,27 @@ export class ManagedStackService {
       failed: failed.length
     });
 
+    // Counted from the plan rather than from the steps, because services that
+    // were already current never became steps — reporting only what ran would
+    // lose the fact that the rest were considered and deliberately left alone.
+    const untouched = plan.current.length;
+
     return {
       upgraded: upgraded.length,
-      skipped: skipped.length,
+      skipped: skipped.length + untouched,
       failed: failed.length,
       total: services.length,
+      unchecked: plan.unchecked.map((service) => service.id),
       results,
-      summary: failed.length
-        ? `${upgraded.length} upgraded, ${failed.length} failed${skipped.length ? `, ${skipped.length} skipped` : ""}.`
-        : upgraded.length === 0
-          ? `Nothing to upgrade — all ${skipped.length} services are already current.`
-          : `${upgraded.length} upgraded${skipped.length ? `, ${skipped.length} already current` : ""}.`
+      summary: [
+        failed.length
+          ? `${upgraded.length} upgraded, ${failed.length} failed`
+          : `${upgraded.length} upgraded`,
+        untouched ? `${untouched} already current` : null,
+        plan.unchecked.length
+          ? `${plan.unchecked.length} could not be checked`
+          : null
+      ].filter(Boolean).join(", ") + "."
     };
   }
 }

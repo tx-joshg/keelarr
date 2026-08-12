@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { runCommand } from "./command-runner.js";
+import { DEFAULT_IDLE_TIMEOUT_MS, runCommand } from "./command-runner.js";
 
 function composeArgs(service, ...tail) {
   return [
@@ -652,8 +652,11 @@ export function explainDeployFailure(output = "") {
 }
 
 export async function generateAndDeploy(settings, service, options = {}) {
+  // `up -d` pulls when the image is not local yet, so a first install is a
+  // download too and gets judged on progress rather than a fixed deadline.
   return runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
-    logger: options.logger
+    logger: options.logger,
+    idleTimeoutMs: options.pullIdleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
   });
 }
 
@@ -666,14 +669,16 @@ export async function upgradeService(settings, service, options = {}) {
   await backupService(settings, service, options);
 
   const pullResult = await runCommand(settings.dockerBin, composeArgs(service, "pull"), {
-    logger: options.logger
+    logger: options.logger,
+    idleTimeoutMs: options.pullIdleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
   });
   if (!pullResult.ok) {
     return pullResult;
   }
 
   const upResult = await runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
-    logger: options.logger
+    logger: options.logger,
+    idleTimeoutMs: options.pullIdleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
   });
   return {
     ok: upResult.ok,
@@ -684,8 +689,11 @@ export async function upgradeService(settings, service, options = {}) {
 }
 
 export async function checkForUpdates(settings, service, options = {}) {
+  // Checking is itself a pull, so it inherits the same reasoning: a slow
+  // download is not a failed one.
   const result = await runCommand(settings.dockerBin, composeArgs(service, "pull"), {
-    logger: options.logger
+    logger: options.logger,
+    idleTimeoutMs: options.pullIdleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
   });
   const combinedOutput = `${result.stdout}\n${result.stderr}`.trim();
   let runningImageId = null;
