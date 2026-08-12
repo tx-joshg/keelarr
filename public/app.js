@@ -1,3 +1,17 @@
+/**
+ * Where the heart icon and the footer link point.
+ *
+ * A single constant because this ships in software other people run on their
+ * own hardware: anyone forking Stackarr should be able to point it at their own
+ * page, or empty it, in one edit. Empty means no heart and no footer link at
+ * all — a fork with nobody to pay should not be asking for money.
+ *
+ * A link and nothing else. Stackarr holds the Docker socket; it has no business
+ * anywhere near a payment, and the service on the other end is the one equipped
+ * to handle cards, receipts and tax.
+ */
+const SUPPORT_URL = "https://ko-fi.com/stackarr";
+
 const appOrder = [
   "prowlarr",
   "radarr",
@@ -1998,7 +2012,11 @@ function renderFooter() {
 
   return `
     <span>${escapeHtml(String(services.length))} apps &middot; ${escapeHtml(String(running))} running &middot; ${escapeHtml(warnings)} &middot; PUID ${escapeHtml(state.settings?.puid || "1000")} / PGID ${escapeHtml(state.settings?.pgid || "1000")}</span>
-    <span>${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())} &middot; compose-native ARR control plane</span>
+    <span>
+      ${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())} &middot; compose-native ARR control plane${SUPPORT_URL
+        ? ` &middot; <a class="footer-support" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer">Support Stackarr</a>`
+        : ""}
+    </span>
   `;
 }
 
@@ -2104,7 +2122,9 @@ function render() {
           </div>
           <div class="header-icons">
             <span class="header-icon header-icon-warning" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
-            <span class="header-icon header-icon-donate" aria-hidden="true"><i class="fa-solid fa-heart"></i></span>
+            ${SUPPORT_URL
+              ? `<a class="header-icon header-icon-donate" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer" title="Support Stackarr"><i class="fa-solid fa-heart"></i></a>`
+              : ""}
             ${state.auth?.required
               ? '<button class="header-icon header-icon-account" type="button" data-auth-signout title="Sign out"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>'
               : '<span class="header-icon header-icon-account" aria-hidden="true"><i class="fa-solid fa-user"></i></span>'}

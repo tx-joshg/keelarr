@@ -1931,3 +1931,22 @@ button.header-icon {
   background: none;
   cursor: pointer;
 }
+
+/* The support link in the footer. Deliberately the same muted weight as the
+   text beside it: present for anyone looking, never competing with the stack
+   status people actually came to read. */
+.footer-support {
+  color: var(--help-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.footer-support:hover {
+  color: var(--theme-blue);
+}
+
+/* The heart is an anchor now rather than decoration, so it needs the same
+   reset the sign-out button got. */
+a.header-icon {
+  text-decoration: none;
+}
