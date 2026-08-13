@@ -37,11 +37,14 @@ const baseLsio = (id, name, description, image, defaultPort, family) => ({
 
 export const SERVICE_ORDER = [
   "prowlarr",
+  "flaresolverr",
   "sabnzbd",
+  "qbittorrent",
   "radarr",
   "sonarr",
   "lidarr",
   "bazarr",
+  "jellyfin",
   "trailarr",
   "ombi",
   "tautulli"
@@ -159,6 +162,58 @@ export const SERVICE_CATALOG = {
       8080,
       "download"
     )
+  },
+  qbittorrent: {
+    ...baseLsio(
+      "qbittorrent",
+      "qBittorrent",
+      "Torrent downloader companion for the stack.",
+      "lscr.io/linuxserver/qbittorrent:latest",
+      // Not qBittorrent's own default of 8080, which SABnzbd already occupies —
+      // a stack with both would refuse to start on the second one.
+      8090,
+      "download"
+    ),
+    buildEnvironment(service) {
+      return {
+        PUID: "${PUID}",
+        PGID: "${PGID}",
+        TZ: "${TZ}",
+        // The image binds its web interface to this, so it has to agree with
+        // the published port or the container answers on neither.
+        WEBUI_PORT: String(service.port)
+      };
+    }
+  },
+  flaresolverr: {
+    id: "flaresolverr",
+    name: "FlareSolverr",
+    family: "companion",
+    description: "Solves the browser challenges that make some indexers return nothing.",
+    defaultPort: 8191,
+    defaultImage: "ghcr.io/flaresolverr/flaresolverr:latest",
+    // Holds no state at all: it answers a challenge and forgets. Giving it a
+    // config directory would create an empty one on every host for no reason.
+    volumes: [],
+    healthStatuses: [200, 404, 405],
+    buildEnvironment() {
+      return {
+        // Not a LinuxServer image, so no PUID/PGID — it runs as its own user
+        // and owns nothing on disk.
+        TZ: "${TZ}",
+        LOG_LEVEL: "info"
+      };
+    }
+  },
+  jellyfin: {
+    ...baseLsio(
+      "jellyfin",
+      "Jellyfin",
+      "Media server for watching what the stack collects.",
+      "lscr.io/linuxserver/jellyfin:latest",
+      8096,
+      "media"
+    )
   }
 };
 
@@ -254,9 +309,16 @@ export function buildComposeSpec(settings, service) {
     restart: service.restartPolicy || "unless-stopped",
     ports: [`${"${PORT}"}:${service.port}`],
     environment: definition.buildEnvironment(service),
-    volumes: [`${"${CONFIG_DIR}"}:/config`],
+    volumes: [],
     networks: [SHARED_NETWORK]
   };
+
+  // Declared rather than assumed: FlareSolverr answers a challenge and forgets,
+  // so mounting a config directory for it would create an empty one on every
+  // host and imply there was something in there worth backing up.
+  if (service.volumes.includes("config")) {
+    composeService.volumes.push(`${"${CONFIG_DIR}"}:/config`);
+  }
 
   if (service.volumes.includes("media")) {
     composeService.volumes.push(`${"${MEDIA_DIR}"}:/Media`);

@@ -13,6 +13,7 @@ import {
   planPathMapping,
   planRootFolder
 } from "../src/lib/wiring/path-plan.js";
+import { buildDownloadClientPayload, missingCategoryFor } from "../src/lib/wiring/payloads.js";
 
 const DESIRED_SAB = { host: "198.51.100.10", port: 8080 };
 
@@ -194,4 +195,74 @@ test("a missing mount is blocked rather than papered over with a mapping", () =>
 
   assert.equal(result.blocked, true);
   assert.match(result.reason, /cannot fix a missing mount/);
+});
+
+// --- download clients other than SABnzbd ---
+
+test("a torrent client is registered with its own implementation and credentials", () => {
+  // Same idea as SABnzbd, different authentication: qBittorrent wants a
+  // username and password where SABnzbd wants an API key.
+  const schemas = [
+    { implementation: "Sabnzbd", fields: [{ name: "host" }, { name: "port" }, { name: "apiKey" }, { name: "useSsl" }] },
+    {
+      implementation: "QBittorrent",
+      fields: [{ name: "host" }, { name: "port" }, { name: "username" }, { name: "password" }, { name: "useSsl" }]
+    }
+  ];
+
+  const payload = buildDownloadClientPayload(schemas, {
+    serviceId: "qbittorrent",
+    name: "qBittorrent",
+    host: "qbittorrent",
+    port: 8090,
+    username: "admin",
+    password: "chosen-by-the-operator"
+  });
+
+  assert.equal(payload.implementation, "QBittorrent");
+  assert.equal(payload.enable, true);
+  const byName = Object.fromEntries(payload.fields.map((f) => [f.name, f.value]));
+  assert.equal(byName.host, "qbittorrent");
+  assert.equal(byName.port, 8090);
+  assert.equal(byName.username, "admin");
+  assert.equal(byName.password, "chosen-by-the-operator");
+});
+
+test("credentials meant for one client are not written into another", () => {
+  const schemas = [
+    { implementation: "Sabnzbd", fields: [{ name: "host" }, { name: "apiKey" }, { name: "useSsl" }] }
+  ];
+
+  // An apiKey passed alongside a torrent client would be a field SABnzbd has
+  // and qBittorrent does not; the reverse would silently drop the password.
+  const payload = buildDownloadClientPayload(schemas, {
+    serviceId: "sabnzbd",
+    name: "SABnzbd",
+    host: "sabnzbd",
+    apiKey: "sab-key",
+    password: "not-sabnzbd's-business"
+  });
+
+  const names = payload.fields.map((f) => f.name);
+  assert.equal(names.includes("password"), false);
+  assert.equal(payload.fields.find((f) => f.name === "apiKey").value, "sab-key");
+});
+
+test("an unknown download client is refused rather than guessed at", () => {
+  assert.throws(
+    () => buildDownloadClientPayload([], { serviceId: "deluge", name: "Deluge", host: "deluge", port: 8112 }),
+    /not a download client Keelarr knows/
+  );
+});
+
+test("a missing category is looked up against the right client's schema", () => {
+  const schemas = [
+    { implementation: "Sabnzbd", fields: [{ name: "movieCategory", value: "movies" }] },
+    { implementation: "QBittorrent", fields: [{ name: "movieCategory", value: "radarr" }] }
+  ];
+
+  // Both clients want a category for Radarr, and they are different strings.
+  assert.equal(missingCategoryFor(schemas, "radarr", [], "sabnzbd"), "movies");
+  assert.equal(missingCategoryFor(schemas, "radarr", [], "qbittorrent"), "radarr");
+  assert.equal(missingCategoryFor(schemas, "radarr", ["radarr"], "qbittorrent"), null);
 });

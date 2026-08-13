@@ -42,14 +42,53 @@ const CATEGORY_FIELD = {
   lidarr: "musicCategory"
 };
 
-export function buildDownloadClientPayload(schemas, { name, host, port, apiKey, useSsl = false }) {
-  const schema = findSchema(schemas, "Sabnzbd");
+/**
+ * How each download client identifies itself to an Arr, and what it needs.
+ *
+ * Usenet and torrent clients are the same idea with different credentials: one
+ * authenticates with an API key it writes into its own config, the other with a
+ * username and password only the operator knows. The difference is why
+ * qBittorrent needs something from you and SABnzbd does not.
+ */
+export const DOWNLOAD_CLIENTS = Object.freeze({
+  sabnzbd: {
+    implementation: "Sabnzbd",
+    protocol: "usenet",
+    credentialFields: ["apiKey"]
+  },
+  qbittorrent: {
+    implementation: "QBittorrent",
+    protocol: "torrent",
+    credentialFields: ["username", "password"]
+  }
+});
+
+export function downloadClientKind(serviceId) {
+  return DOWNLOAD_CLIENTS[serviceId] || null;
+}
+
+export function buildDownloadClientPayload(schemas, { serviceId = "sabnzbd", name, host, port, useSsl = false, ...credentials }) {
+  const kind = downloadClientKind(serviceId);
+
+  if (!kind) {
+    throw new KeelarrError(`${serviceId} is not a download client Keelarr knows how to register.`, { statusCode: 422 });
+  }
+
+  const schema = findSchema(schemas, kind.implementation);
+  // Only the credentials this client actually uses. Passing an apiKey to
+  // qBittorrent, or a password to SABnzbd, would set a field the app does not
+  // have and quietly drop it.
+  const supplied = Object.fromEntries(
+    kind.credentialFields
+      .filter((field) => credentials[field] !== undefined && credentials[field] !== null)
+      .map((field) => [field, credentials[field]])
+  );
 
   return {
     ...schema,
     name,
     enable: true,
-    fields: patchFields(schema, { host, port, useSsl, apiKey })
+    fields: patchFields(schema, { host, port, useSsl, ...supplied })
   };
 }
 
@@ -61,15 +100,16 @@ export function buildDownloadClientPayload(schemas, { name, host, port, apiKey, 
  * write all the same. The category has to exist, so the honest move is to say
  * which one is missing rather than produce a client that cannot be saved.
  */
-export function missingCategoryFor(schemas, serviceId, availableCategories) {
+export function missingCategoryFor(schemas, serviceId, availableCategories, clientId = "sabnzbd") {
   const field = CATEGORY_FIELD[serviceId];
+  const kind = downloadClientKind(clientId);
 
-  if (!field || !Array.isArray(availableCategories)) {
+  if (!field || !kind || !Array.isArray(availableCategories)) {
     return null;
   }
 
   const schema = (schemas || []).find(
-    (entry) => String(entry?.implementation || "").toLowerCase() === "sabnzbd"
+    (entry) => String(entry?.implementation || "").toLowerCase() === kind.implementation.toLowerCase()
   );
   const wanted = schema?.fields?.find((entry) => entry.name === field)?.value;
 
