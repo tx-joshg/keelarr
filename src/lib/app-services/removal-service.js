@@ -41,6 +41,30 @@ const DEPENDENTS = {
   }
 };
 
+/**
+ * What keeps pointing at a service after it is gone.
+ *
+ * The inverse of DEPENDENTS: that says what stops working, this says what is
+ * left holding an address that no longer resolves. Removal cannot reach into
+ * another app and delete what that app was told, so Prowlarr keeps a proxy
+ * aimed at a FlareSolverr that no longer exists and fails every indexer tagged
+ * to use it — silently, unless somebody says so here.
+ *
+ * Derived from the catalog rather than from a live query: the relationships are
+ * fixed, and a confirmation dialog should not wait on the network. The wiring
+ * check reports what is actually there.
+ */
+const REFERENCED_BY = {
+  flaresolverr: { by: ["prowlarr"], what: "an indexer proxy pointing at it" },
+  sabnzbd: { by: ["radarr", "sonarr", "lidarr"], what: "a download client pointing at it" },
+  qbittorrent: { by: ["radarr", "sonarr", "lidarr"], what: "a download client pointing at it" },
+  radarr: { by: ["prowlarr", "bazarr"], what: "a connection to it" },
+  sonarr: { by: ["prowlarr", "bazarr"], what: "a connection to it" },
+  lidarr: { by: ["prowlarr"], what: "a connection to it" },
+  // Nothing points at Prowlarr, but what it pushed out stays behind.
+  prowlarr: { by: ["radarr", "sonarr", "lidarr"], what: "the indexers Prowlarr synced into it" }
+};
+
 export class RemovalService {
   constructor({
     appendActivityImpl = appendActivity,
@@ -160,6 +184,13 @@ export class RemovalService {
       ? dependents.affects.filter((id) => settings.selectedServiceIds.includes(id))
       : [];
 
+    const references = REFERENCED_BY[serviceId];
+    const stillReferencedBy = references
+      ? references.by
+        .filter((id) => id !== serviceId && settings.selectedServiceIds.includes(id))
+        .map((id) => ({ serviceId: id, name: settings.services[id]?.name || id }))
+      : [];
+
     return {
       ok: true,
       serviceId,
@@ -183,6 +214,14 @@ export class RemovalService {
         image: { label: service.image },
         backups: { label: "Keelarr backups and config snapshots", path: this.backupRoot(settings, serviceId) }
       },
+      // Removal cannot clean these up, so the dialog says so before the choice
+      // rather than leaving it to be discovered as a broken connection later.
+      stillReferencedBy: stillReferencedBy.length
+        ? {
+            apps: stillReferencedBy,
+            note: `${stillReferencedBy.map((entry) => entry.name).join(" and ")} will still have ${references.what}. Keelarr will report it in the next wiring check, but only you can remove it there.`
+          }
+        : null,
       // Never offered. Named here so the UI can say why rather than staying silent.
       preserved: [
         { label: "Media library", path: settings.mediaRoot, reason: "Shared by every app in the stack." },

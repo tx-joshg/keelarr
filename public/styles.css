@@ -1950,3 +1950,10 @@ button.header-icon {
 a.header-icon {
   text-decoration: none;
 }
+
+/* Leftover references in the removal dialog. Warning-toned rather than danger:
+   nothing is broken yet, and it is the operator's to decide. */
+.removal-referenced {
+  border-color: var(--warning-color);
+  color: var(--nav-text);
+}

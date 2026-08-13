@@ -133,6 +133,7 @@ function createService(overrides = {}) {
       },
       listRootFolders: async () => ({ ok: true, data: overrides.rootFolders ?? [{ path: "/Media/Movies" }], error: null }),
       listApplications: async () => ({ ok: true, data: overrides.applications ?? [], error: null }),
+      listIndexerProxies: async () => ({ ok: true, data: overrides.indexerProxies ?? [], error: null }),
       testAllDownloadClients: async () => ({ ok: true, data: [{ id: 1, isValid: true, validationFailures: [] }], error: null }),
       testAllApplications: async () => ({ ok: true, data: [], error: null })
     }
@@ -383,4 +384,56 @@ test("a service that started long ago and cannot be reached is blocked, not pend
 
   assert.notEqual(link.state, "pending");
   assert.doesNotMatch(String(link.reason || ""), /only just started/);
+});
+
+// --- configuration left behind by a removed app ---
+
+test("a proxy pointing at a removed FlareSolverr is reported, not hidden", async () => {
+  // Removing FlareSolverr leaves Prowlarr holding a proxy addressed to a host
+  // that no longer resolves, and every indexer tagged to use it fails. The
+  // check skipped this entirely, because the link kind is only considered when
+  // FlareSolverr is part of the stack.
+  const { service } = createService({
+    settings: buildSettings(["prowlarr", "radarr"]),
+    inspects: [hostNetInspect("radarr", 7878), hostNetInspect("prowlarr", 9696), controllerInspect()],
+    indexerProxies: [
+      { id: 1, name: "FlareSolverr", implementation: "FlareSolverr", fields: [{ name: "host", value: "http://flaresolverr:8191" }] }
+    ]
+  });
+
+  const report = await service.describeWiring();
+
+  const proxy = report.orphans.find((entry) => entry.kind === "indexer-proxy");
+  assert.equal(proxy.serviceId, "prowlarr");
+  assert.match(proxy.summary, /FlareSolverr is not part of this stack/);
+  assert.match(proxy.consequence, /tagged to use it will fail/);
+
+  // The same rule catches a download client left behind: this stack has Radarr
+  // still pointing at a SABnzbd that is not part of it.
+  const client = report.orphans.find((entry) => entry.kind === "download-client");
+  assert.equal(client.serviceId, "radarr");
+  assert.match(client.summary, /not part of this stack/);
+});
+
+test("a stack with nothing left over reports none", async () => {
+  const { service } = createService();
+  const report = await service.describeWiring();
+
+  assert.deepEqual(report.orphans, []);
+});
+
+test("the verdict admits leftovers rather than reading as simply ready", async () => {
+  // Reporting "Stack ready" while an app holds a broken connection is the same
+  // dishonesty as a job succeeding with nothing done.
+  const { service } = createService({
+    settings: buildSettings(["prowlarr", "radarr"]),
+    inspects: [hostNetInspect("radarr", 7878), hostNetInspect("prowlarr", 9696), controllerInspect()],
+    indexerProxies: [
+      { id: 1, name: "FlareSolverr", implementation: "FlareSolverr", fields: [{ name: "host", value: "http://flaresolverr:8191" }] }
+    ]
+  });
+
+  const report = await service.describeWiring();
+
+  assert.match(report.readinessMessage, /leftover/i);
 });

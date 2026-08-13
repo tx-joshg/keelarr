@@ -2606,6 +2606,13 @@ function renderRemovalModal() {
                </span>
              </div>`}
 
+        ${p.stillReferencedBy
+          ? `<div class="removal-preserved removal-referenced">
+               <i class="fa-solid fa-link-slash"></i>
+               <span><strong>Will still point at this:</strong> ${escapeHtml(p.stillReferencedBy.note)}</span>
+             </div>`
+          : ""}
+
         <div class="removal-preserved">
           <i class="fa-solid fa-shield-halved"></i>
           <span>
@@ -2795,6 +2802,7 @@ function renderWiringModal() {
         </div>
 
         ${renderWiringPrerequisites(report)}
+        ${renderWiringOrphans(report)}
 
         <div class="wiring-section-title">Connections</div>
         <ul class="wiring-list">${linkRows}</ul>
@@ -2875,6 +2883,46 @@ function renderWiringPrerequisites(report) {
     <div class="wiring-row-reason wiring-needs-you-note">
       Keelarr configures everything that is not a secret. These carry your own credentials, so it reports them
       rather than holding them.
+    </div>
+  `;
+}
+
+/**
+ * Configuration in an app that points at a service this stack no longer has.
+ *
+ * Reported and never removed, exactly like drift: reaching into another app to
+ * delete something Keelarr did not put there is not its call. Saying nothing,
+ * though, leaves a connection that fails for a reason nobody can see.
+ */
+function renderWiringOrphans(report) {
+  const items = report.orphans || [];
+
+  if (items.length === 0) {
+    return "";
+  }
+
+  const rows = items
+    .map((item) => `
+      <li class="wiring-row wiring-row-warn">
+        <span class="wiring-row-icon"><i class="fa-solid fa-link-slash"></i></span>
+        <span class="wiring-row-body">
+          <span class="wiring-row-title">
+            ${escapeHtml(item.serviceName)}
+            <span class="wiring-row-state">leftover</span>
+          </span>
+          <span class="wiring-row-reason">${escapeHtml(item.summary)}</span>
+          <span class="wiring-row-reason wiring-row-detail">${escapeHtml(item.consequence)}</span>
+        </span>
+      </li>
+    `)
+    .join("");
+
+  return `
+    <div class="wiring-section-title">Left over from a removed app</div>
+    <ul class="wiring-list">${rows}</ul>
+    <div class="wiring-row-reason wiring-needs-you-note">
+      Removing an app cannot delete what another app was told about it. Keelarr reports these rather than editing
+      configuration it did not create — remove them in the app itself.
     </div>
   `;
 }

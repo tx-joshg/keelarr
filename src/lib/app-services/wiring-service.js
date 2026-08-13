@@ -15,6 +15,7 @@ import {
 import { attachController, planControllerAttachments } from "../wiring/attach.js";
 import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
 import { arrApi, bazarrApi, probeJellyfin, probeQbittorrent, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
+import { DOWNLOAD_CLIENTS } from "../wiring/payloads.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
 import { readContainerFile } from "../runtime.js";
 import { LAN_CLIENT, buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
@@ -360,6 +361,7 @@ export class WiringService {
       })
     );
     const prerequisites = findMissingPrerequisites({ apps: current, services, appUrls });
+    const orphans = this.checkOrphanedLinks(services, current);
     const links = [
       ...this.checkDownloadClients(services, endpoints, current, hostAddress, mounts),
       ...this.checkProwlarrApplications(services, endpoints, current, hostAddress),
@@ -389,7 +391,8 @@ export class WiringService {
         rootFolders,
         pathMappings,
         prerequisites,
-        ...this.summarize(links, rootFolders, participants, prerequisites)
+        orphans,
+        ...this.summarize(links, rootFolders, participants, prerequisites, orphans)
       }
     };
   }
@@ -1307,6 +1310,82 @@ export class WiringService {
   }
 
   /**
+   * Configuration pointing at a service this stack no longer has.
+   *
+   * Removing a service deletes its container, its files and its backups, but it
+   * cannot reach into another app and delete what that app was told about it —
+   * so Prowlarr keeps a FlareSolverr proxy addressed to a host that no longer
+   * resolves, and quietly fails every indexer tagged to use it.
+   *
+   * Reported rather than removed, which is the same rule drift follows: Keelarr
+   * describes what it finds in someone else's configuration and leaves the
+   * decision to the operator. Staying silent is the part that would be wrong.
+   */
+  checkOrphanedLinks(services, current) {
+    const has = (id) => services.some((service) => service.id === id);
+    const orphans = [];
+    const prowlarr = current.get("prowlarr");
+
+    if (has("prowlarr") && prowlarr?.reachable) {
+      if (!has("flaresolverr")) {
+        for (const proxy of prowlarr.indexerProxies || []) {
+          orphans.push({
+            serviceId: "prowlarr",
+            serviceName: "Prowlarr",
+            kind: "indexer-proxy",
+            name: proxy.name || "FlareSolverr",
+            summary: `Prowlarr still has the ${proxy.name || "FlareSolverr"} proxy, but FlareSolverr is not part of this stack.`,
+            consequence: "Any indexer tagged to use it will fail until the proxy is removed in Prowlarr."
+          });
+        }
+      }
+
+      for (const application of prowlarr.applications || []) {
+        const targetId = Object.entries(PROWLARR_IMPLEMENTATION)
+          .find(([, implementation]) => implementation === application.implementation)?.[0];
+
+        if (targetId && !has(targetId)) {
+          orphans.push({
+            serviceId: "prowlarr",
+            serviceName: "Prowlarr",
+            kind: "indexer-app",
+            name: application.name || application.implementation,
+            summary: `Prowlarr still syncs indexers to ${application.name || application.implementation}, which is not part of this stack.`,
+            consequence: "Prowlarr will keep trying to reach it and report the failure as its own health problem."
+          });
+        }
+      }
+    }
+
+    for (const service of services.filter((entry) => ACQUIRERS.includes(entry.id))) {
+      const app = current.get(service.id);
+
+      if (!app?.reachable) {
+        continue;
+      }
+
+      for (const client of app.downloadClients || []) {
+        const implementation = String(client.implementation || "").toLowerCase();
+        const clientId = Object.entries(DOWNLOAD_CLIENTS)
+          .find(([, kind]) => kind.implementation.toLowerCase() === implementation)?.[0];
+
+        if (clientId && !has(clientId)) {
+          orphans.push({
+            serviceId: service.id,
+            serviceName: service.name,
+            kind: "download-client",
+            name: client.name || client.implementation,
+            summary: `${service.name} still has the ${client.name || client.implementation} download client, which is not part of this stack.`,
+            consequence: `${service.name} will send downloads to something that is no longer running.`
+          });
+        }
+      }
+    }
+
+    return orphans;
+  }
+
+  /**
    * FlareSolverr is only useful to Prowlarr, and only once Prowlarr knows where
    * it is. Deploying it and stopping there looks like success and changes
    * nothing, which is the failure this link exists to make visible.
@@ -1474,7 +1553,29 @@ export class WiringService {
       });
   }
 
-  summarize(links, rootFolders, participants, prerequisites = []) {
+  /**
+   * Every verdict has to admit leftovers, not just the happy one.
+   *
+   * Adding this to the "ready" branch alone meant an incomplete stack stayed
+   * quiet about a connection pointing at an app that no longer exists — the
+   * same omission in a less obvious place.
+   */
+  summarize(links, rootFolders, participants, prerequisites = [], orphans = []) {
+    const verdict = this.summarizeVerdict(links, rootFolders, participants, prerequisites);
+
+    if (orphans.length === 0) {
+      return verdict;
+    }
+
+    return {
+      ...verdict,
+      readinessMessage: `${verdict.readinessMessage} ${orphans.length} leftover ${
+        orphans.length === 1 ? "reference points" : "references point"
+      } at an app no longer in this stack.`
+    };
+  }
+
+  summarizeVerdict(links, rootFolders, participants, prerequisites = []) {
     const states = [...links, ...rootFolders]
       .map((entry) => entry.state)
       .filter((state) => state !== "not-applicable");

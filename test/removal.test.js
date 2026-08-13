@@ -357,3 +357,31 @@ test("it does not claim to have kept configuration that never existed", async ()
   assert.ok(!job.result.kept.includes("config"));
   assert.match(job.steps.find((s) => s.name === "config").detail, /No configuration exists/);
 });
+
+test("removing a service warns about what will still point at it", async () => {
+  // Removal deletes the container, its files and its backups, but it cannot
+  // reach into Prowlarr and delete the proxy Prowlarr was told about. Saying so
+  // before the choice is the difference between a decision and a surprise.
+  const { service } = createService({ settings: buildSettings(["prowlarr", "flaresolverr"]) });
+  const preview = await service.describeRemoval("flaresolverr");
+
+  assert.deepEqual(preview.stillReferencedBy.apps.map((entry) => entry.serviceId), ["prowlarr"]);
+  assert.match(preview.stillReferencedBy.note, /indexer proxy/);
+  assert.match(preview.stillReferencedBy.note, /only you can remove it/);
+});
+
+test("an app nothing else references says nothing about leftovers", async () => {
+  const { service } = createService({ settings: buildSettings(["tautulli"]) });
+  const preview = await service.describeRemoval("tautulli");
+
+  assert.equal(preview.stillReferencedBy, null);
+});
+
+test("only apps actually in the stack are named as holding a reference", async () => {
+  // Bazarr references Radarr, but if Bazarr is not installed it must not be
+  // listed — a warning about an app you do not run is noise.
+  const { service } = createService({ settings: buildSettings(["prowlarr", "radarr"]) });
+  const preview = await service.describeRemoval("radarr");
+
+  assert.deepEqual(preview.stillReferencedBy.apps.map((entry) => entry.serviceId), ["prowlarr"]);
+});
