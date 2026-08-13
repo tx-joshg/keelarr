@@ -212,6 +212,27 @@ export class WiringService {
     return this.loadSettingsImpl();
   }
 
+  /**
+   * Why a link could not be resolved: not yet, or not at all.
+   *
+   * A container created seconds ago has no usable address, and calling that
+   * "blocked" is both wrong and consequential — blocked is a fault to report,
+   * while pending is a reason to wait. Post-deploy wiring ran ten seconds after
+   * creating FlareSolverr, found it blocked rather than pending, waited for
+   * nothing, and concluded every connection was already configured.
+   *
+   * Only apps with an API key were ever given this benefit, because pending was
+   * derived from whether that key had appeared. A service that has no API key
+   * at all could never be pending, however new it was.
+   */
+  linkNotReady(endpoint, reason, name) {
+    if (isStillStarting(endpoint, this.now())) {
+      return { state: "pending", reason: `${name} has only just started and is not answering yet.` };
+    }
+
+    return { state: "blocked", reason };
+  }
+
   scopedLogger(context) {
     return context?.requestId ? this.logger.child({ requestId: context.requestId }) : this.logger;
   }
@@ -441,7 +462,16 @@ export class WiringService {
    * still gets a plan built from what could be read, and its links are reported
    * as pending rather than silently treated as needing nothing.
    */
-  async gatherOnceSettled(context, ctx, { attempts = 6, intervalMs = 5000 } = {}) {
+  /**
+   * Budget chosen from what a cold start actually costs, not from what feels
+   * patient: FlareSolverr on the NAS took 61 seconds just to launch its browser
+   * and about 80 before it served anything. The old 25 seconds expired while
+   * every newly deployed app was still booting.
+   *
+   * It costs nothing when nothing is pending, because the loop returns on the
+   * first gather that finds none.
+   */
+  async gatherOnceSettled(context, ctx, { attempts = 24, intervalMs = 5000 } = {}) {
     let gathered = await this.gather(context);
 
     for (let attempt = 1; attempt < attempts; attempt += 1) {
@@ -449,10 +479,19 @@ export class WiringService {
         return gathered;
       }
 
-      ctx?.note("plan", `Waiting for ${gathered.report.participants
-        .filter((participant) => participant.apiKey?.state === "pending")
-        .map((participant) => participant.name)
-        .join(", ") || "an app"} to finish starting.`);
+      const stillStarting = [
+        ...gathered.report.participants
+          .filter((participant) => participant.apiKey?.state === "pending")
+          .map((participant) => participant.name),
+        // Services with no API key are pending through their links instead, and
+        // naming them is the difference between a progress line that explains
+        // the wait and one that says "an app".
+        ...gathered.report.links
+          .filter((link) => link.state === "pending")
+          .map((link) => link.targetName || link.targetId)
+      ];
+
+      ctx?.note("plan", `Waiting for ${[...new Set(stillStarting)].join(", ") || "an app"} to finish starting.`);
 
       await this.sleep(intervalMs);
       gathered = await this.gather(context);
@@ -1182,7 +1221,13 @@ export class WiringService {
         const link = resolveLink(endpoints.get(service.id), endpoints.get("sabnzbd"), { hostAddress });
 
         if (!link.ok) {
-          return { ...base, state: "blocked", reason: link.reason, address: null };
+          return {
+            ...base,
+            // The download client is the far end here, so it is the one whose
+            // startup decides between "not yet" and "not at all".
+            ...this.linkNotReady(endpoints.get("sabnzbd"), link.reason, "SABnzbd"),
+            address: null
+          };
         }
 
         const result = reconcileDownloadClient(app.downloadClients, { host: link.host, port: link.port });
@@ -1295,7 +1340,11 @@ export class WiringService {
     const link = resolveLink(endpoints.get("prowlarr"), endpoints.get("flaresolverr"), { hostAddress });
 
     if (!link.ok) {
-      return [{ ...base, state: "blocked", reason: link.reason, address: null }];
+      return [{
+        ...base,
+        ...this.linkNotReady(endpoints.get("flaresolverr"), link.reason, "FlareSolverr"),
+        address: null
+      }];
     }
 
     const result = reconcileIndexerProxy(app.indexerProxies, {

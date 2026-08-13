@@ -343,3 +343,44 @@ test("one app that still needs a credential says so instead of reporting a fault
   // would be claiming Keelarr left connections unmade.
   assert.notEqual(result.readiness, "incomplete");
 });
+
+// --- a container that started seconds ago is not a fault ---
+
+test("a service that has only just started is pending, not blocked", async () => {
+  // Post-deploy wiring runs immediately after creating the containers. A link
+  // to one that cannot answer yet must read as "not yet" so the job waits;
+  // reading it as "blocked" made the job conclude there was nothing to do.
+  const justNow = new Date(NOW - 3000).toISOString();
+  const { service } = createService({
+    inspects: [
+      hostNetInspect("radarr", 7878),
+      { ...macvlanInspect("sabnzbd", 8080, "198.51.100.10"), State: { Running: true, StartedAt: justNow } },
+      controllerInspect()
+    ],
+    // No route between them, so the link cannot resolve either way.
+    drivers: new Map([["host", "host"], ["deploy_default", "bridge"]])
+  });
+
+  const result = await service.describeWiring();
+  const link = result.links.find((entry) => entry.kind === "download-client");
+
+  assert.equal(link.state, "pending");
+  assert.match(link.reason, /only just started/);
+  // Pending is what makes the apply job wait rather than declare victory.
+  assert.equal(result.readiness, "pending");
+});
+
+test("a service that started long ago and cannot be reached is blocked, not pending", async () => {
+  // The distinction has to hold in both directions, or the job waits forever
+  // on something that will never answer.
+  const { service } = createService({
+    inspects: [hostNetInspect("radarr", 7878), macvlanInspect("sabnzbd", 8080, "198.51.100.10"), controllerInspect()],
+    drivers: new Map([["host", "host"], ["deploy_default", "bridge"]])
+  });
+
+  const result = await service.describeWiring();
+  const link = result.links.find((entry) => entry.kind === "download-client");
+
+  assert.notEqual(link.state, "pending");
+  assert.doesNotMatch(String(link.reason || ""), /only just started/);
+});

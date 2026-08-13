@@ -405,7 +405,10 @@ test("planning gives up waiting rather than hanging on an app that never settles
   const job = await settle(service.startWiring());
 
   // Bounded: it stops asking and reports, instead of blocking the job forever.
-  assert.ok(waits.length <= 6);
+  // The budget is generous on purpose — FlareSolverr took over a minute to
+  // serve anything on the NAS — so what matters is that it terminates at all.
+  assert.ok(waits.length <= 24, `waited ${waits.length} times`);
+  assert.ok(waits.every((ms) => ms > 0), "each wait should actually pause");
   assert.equal(job.status, JOB_STATUS.FAILED);
   assert.match(job.error.message, /Nothing to wire/);
 });
