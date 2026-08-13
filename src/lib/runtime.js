@@ -186,7 +186,13 @@ export async function readContainerFile(settings, containerName, filePath, optio
   const result = await runCommand(
     settings.dockerBin,
     ["exec", containerName, "cat", filePath],
-    { logger: options.logger, timeoutMs: options.timeoutMs }
+    {
+      logger: options.logger,
+      timeoutMs: options.timeoutMs,
+      // This is how every app's secrets are read. Its output must never reach
+      // the log, at any level.
+      sensitive: true
+    }
   );
 
   return result.ok ? String(result.stdout || "") : null;

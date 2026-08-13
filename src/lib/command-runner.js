@@ -16,6 +16,17 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 120_000;
 
 export function runCommand(command, args, options = {}) {
   return new Promise((resolve) => {
+    /**
+     * Whether this command's output may be written to the log.
+     *
+     * Reading an app's configuration file returns its secrets — an Arr's API
+     * key, SABnzbd's Usenet username and password in cleartext, Tautulli's Plex
+     * token. The log redacts sensitive *keys* in structured context, but a
+     * command's output is one opaque string and passes straight through, so at
+     * debug level every one of those ended up in data/keelarr.log and in
+     * `docker logs`. The caller knows what it is reading; it says so here.
+     */
+    const sensitive = options.sensitive === true;
     // A total deadline and a silence deadline answer different questions, so a
     // command uses one or the other rather than both: bounded work gets
     // `timeoutMs`, open-ended transfers get `idleTimeoutMs`.
@@ -27,7 +38,8 @@ export function runCommand(command, args, options = {}) {
       args,
       cwd: options.cwd || null,
       timeoutMs,
-      idleTimeoutMs
+      idleTimeoutMs,
+      sensitive
     });
 
     const child = spawn(command, args, {
@@ -92,8 +104,10 @@ export function runCommand(command, args, options = {}) {
         timedOut,
         stalled,
         error: result.error,
-        stdout: result.stdout,
-        stderr: result.stderr
+        // Length rather than content, so a truncated read is still diagnosable
+        // without the file's secrets being written anywhere.
+        stdout: sensitive ? `[${(result.stdout || "").length} bytes withheld]` : result.stdout,
+        stderr: sensitive ? `[${(result.stderr || "").length} bytes withheld]` : result.stderr
       });
       resolve(result);
     }

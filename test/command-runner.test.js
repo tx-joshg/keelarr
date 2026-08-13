@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { runCommand } from "../src/lib/command-runner.js";
 
 test("runCommand returns a failed result when the binary is missing", async () => {
@@ -76,4 +80,63 @@ test("an idle window replaces the total deadline rather than stacking with it", 
 
   assert.equal(result.ok, true);
   assert.equal(result.timedOut, false);
+});
+
+test("a sensitive command's output never reaches the log", async () => {
+  // Reading an app's config returns its secrets. At debug level the whole file
+  // was being written to data/keelarr.log and to `docker logs` — including
+  // SABnzbd's Usenet password in cleartext and Tautulli's Plex token.
+  //
+  // Shaped like the real call: the secret lives in the file being read, never
+  // in the arguments. That is the only safe shape anyway, since argv is visible
+  // to any process via `ps`.
+  const dir = await mkdtemp(path.join(tmpdir(), "keelarr-sensitive-"));
+  const file = path.join(dir, "config.xml");
+  await writeFile(file, "password = hunter2\n<ApiKey>deadbeef</ApiKey>\n", "utf8");
+
+  const lines = [];
+  const logger = {
+    debug: (event, ctx) => lines.push(JSON.stringify({ event, ...ctx })),
+    warn: (event, ctx) => lines.push(JSON.stringify({ event, ...ctx }))
+  };
+
+  const result = await runCommand("cat", [file], { logger, sensitive: true });
+
+  // The caller still receives the content — that is the point of reading it.
+  assert.match(result.stdout, /hunter2/);
+  assert.match(result.stdout, /deadbeef/);
+
+  const logged = lines.join("\n");
+  assert.equal(logged.includes("hunter2"), false, "the password reached the log");
+  assert.equal(logged.includes("deadbeef"), false, "the API key reached the log");
+  assert.match(logged, /bytes withheld/);
+});
+
+test("an ordinary command still logs its output, so failures stay diagnosable", async () => {
+  const lines = [];
+  const logger = {
+    debug: (event, ctx) => lines.push(JSON.stringify({ event, ...ctx })),
+    warn: (event, ctx) => lines.push(JSON.stringify({ event, ...ctx }))
+  };
+
+  await runCommand("sh", ["-c", "echo ordinary-output"], { logger });
+
+  assert.match(lines.join("\n"), /ordinary-output/);
+});
+
+test("a sensitive command that fails still withholds what it read", async () => {
+  const lines = [];
+  const logger = {
+    debug: (event, ctx) => lines.push(JSON.stringify({ event, ...ctx })),
+    warn: (event, ctx) => lines.push(JSON.stringify({ event, ...ctx }))
+  };
+
+  // The failure path logs at warn, and was the same leak.
+  const missing = path.join(tmpdir(), "keelarr-does-not-exist", "config.xml");
+  const result = await runCommand("cat", [missing], { logger, sensitive: true });
+
+  assert.equal(result.ok, false);
+  assert.match(lines.join("\n"), /bytes withheld/);
+  // The reason it failed is still visible in the exit code.
+  assert.match(lines.join("\n"), /"code":[1-9]/);
 });
