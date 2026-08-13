@@ -1026,6 +1026,8 @@ function renderRowMenu(service) {
 
   return `
     <div class="row-menu">
+      ${item("install", "fa-solid fa-download", "Install", !installed,
+        installed ? "Already installed." : "Deploys just this app, without touching the rest of the stack.")}
       ${item("upgrade", "fa-solid fa-circle-up", "Upgrade", installed && service.updateStatus !== "current",
         service.updateStatus === "ready"
           ? "An update is available."
@@ -3509,11 +3511,10 @@ appNode.addEventListener("click", (event) => {
       return;
     }
 
-    if (action === "upgrade" || action === "restart") {
-      runBusy(
-        action === "upgrade" ? `Upgrading ${serviceId}...` : `Restarting ${serviceId}...`,
-        () => serviceAction(serviceId, action)
-      ).catch(showError);
+    if (action === "install" || action === "upgrade" || action === "restart") {
+      const verb = { install: "Installing", upgrade: "Upgrading", restart: "Restarting" }[action];
+
+      runBusy(`${verb} ${service?.name || serviceId}...`, () => serviceAction(serviceId, action)).catch(showError);
       return;
     }
 

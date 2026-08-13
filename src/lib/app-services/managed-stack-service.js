@@ -547,13 +547,24 @@ export class ManagedStackService {
       await this.recordFreshImageState(service.id);
     }
 
+    // Compose is idempotent: a service whose file has not changed is checked
+    // and left alone, and it says so with "Running" rather than "Recreated".
+    // Reporting that as "Deployed" made a Save And Deploy read as nine
+    // deployments when it was one deployment and eight no-ops — which is how
+    // an operator comes to distrust the feed, or to fear a button that is
+    // safer than it looks.
+    const unchanged = result.ok && !/Recreated|Created|Started/.test(`${result.stdout}\n${result.stderr}`);
+
     await this.appendActivity({
       kind: "deploy",
       level: result.ok ? "info" : "error",
-      message: result.ok ? `Deployed ${service.name}.` : `Deploy failed for ${service.name}.`,
+      message: result.ok
+        ? (unchanged ? `${service.name} was already up to date.` : `Deployed ${service.name}.`)
+        : `Deploy failed for ${service.name}.`,
       details: {
         serviceId: service.id,
         ok: result.ok,
+        unchanged,
         output: `${result.stdout}\n${result.stderr}`.trim()
       }
     });

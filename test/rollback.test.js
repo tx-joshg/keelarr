@@ -768,3 +768,51 @@ test("pruning a service that has no backups yet is not an error", async (t) => {
   const result = await pruneServiceBackups({ ...stack.settings, backupRetention: 1 }, "neverbackedup");
   assert.equal(result.pruned, 0);
 });
+
+test("a deploy that changed nothing says so instead of claiming a deployment", async (t) => {
+  // Compose is idempotent: an unchanged service is checked and left alone, and
+  // reports "Running" rather than "Recreated". Save And Deploy visits every
+  // selected service, so calling each visit a deployment made one real change
+  // read as nine.
+  const stack = await createStack(t);
+  const entries = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    loadSettingsImpl: async () => stack.settings,
+    ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
+    generateAndDeployImpl: async () => ({ ok: true, stdout: "", stderr: " Container radarr Running \n" }),
+    readUpdateStateImpl: async () => ({}),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async (entry) => entries.push(entry)
+  });
+
+  await service.deployOne(stack.settings, stack.settings.services.radarr, silentLogger);
+
+  const deploy = entries.find((entry) => entry.kind === "deploy");
+  assert.match(deploy.message, /already up to date/);
+  assert.equal(deploy.details.unchanged, true);
+});
+
+test("a deploy that recreated the container still reports a deployment", async (t) => {
+  const stack = await createStack(t);
+  const entries = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    loadSettingsImpl: async () => stack.settings,
+    ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
+    generateAndDeployImpl: async () => ({
+      ok: true,
+      stdout: "",
+      stderr: " Container radarr Recreated \n Container radarr Started \n"
+    }),
+    readUpdateStateImpl: async () => ({}),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async (entry) => entries.push(entry)
+  });
+
+  await service.deployOne(stack.settings, stack.settings.services.radarr, silentLogger);
+
+  const deploy = entries.find((entry) => entry.kind === "deploy");
+  assert.match(deploy.message, /^Deployed/);
+  assert.equal(deploy.details.unchanged, false);
+});
