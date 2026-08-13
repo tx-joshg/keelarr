@@ -5,6 +5,7 @@ import {
   RECONCILE_STATE,
   reconcileApplication,
   reconcileDownloadClient,
+  reconcileIndexerProxy,
   reconcileRootFolder
 } from "../src/lib/wiring/reconcile.js";
 import {
@@ -13,7 +14,7 @@ import {
   planPathMapping,
   planRootFolder
 } from "../src/lib/wiring/path-plan.js";
-import { buildDownloadClientPayload, missingCategoryFor } from "../src/lib/wiring/payloads.js";
+import { buildDownloadClientPayload, buildIndexerProxyPayload, missingCategoryFor } from "../src/lib/wiring/payloads.js";
 
 const DESIRED_SAB = { host: "198.51.100.10", port: 8080 };
 
@@ -265,4 +266,47 @@ test("a missing category is looked up against the right client's schema", () => 
   assert.equal(missingCategoryFor(schemas, "radarr", [], "sabnzbd"), "movies");
   assert.equal(missingCategoryFor(schemas, "radarr", [], "qbittorrent"), "radarr");
   assert.equal(missingCategoryFor(schemas, "radarr", ["radarr"], "qbittorrent"), null);
+});
+
+// --- Prowlarr's challenge solver ---
+
+test("FlareSolverr is matched on the host Prowlarr points at", () => {
+  const existing = [
+    { id: 1, implementation: "FlareSolverr", fields: [{ name: "host", value: "http://flaresolverr:8191" }] }
+  ];
+
+  assert.equal(
+    reconcileIndexerProxy(existing, { implementation: "FlareSolverr", host: "http://flaresolverr:8191" }).state,
+    RECONCILE_STATE.CORRECT
+  );
+
+  const drifted = reconcileIndexerProxy(existing, { implementation: "FlareSolverr", host: "http://flaresolverr:9999" });
+  assert.equal(drifted.state, RECONCILE_STATE.DRIFT);
+  assert.deepEqual(drifted.changes, [
+    { field: "host", from: "http://flaresolverr:8191", to: "http://flaresolverr:9999" }
+  ]);
+});
+
+test("a Prowlarr with no proxy at all reports one as absent", () => {
+  assert.equal(
+    reconcileIndexerProxy([], { implementation: "FlareSolverr", host: "http://flaresolverr:8191" }).state,
+    RECONCILE_STATE.ABSENT
+  );
+});
+
+test("the proxy payload carries the host and leaves the rest of the schema alone", () => {
+  const schemas = [
+    {
+      implementation: "FlareSolverr",
+      fields: [{ name: "host", value: "" }, { name: "requestTimeout", value: 60 }, { name: "somethingElse", value: "keep me" }]
+    }
+  ];
+
+  const payload = buildIndexerProxyPayload(schemas, { host: "http://flaresolverr:8191" });
+  const byName = Object.fromEntries(payload.fields.map((f) => [f.name, f.value]));
+
+  assert.equal(byName.host, "http://flaresolverr:8191");
+  // Untouched fields keep whatever Prowlarr's own schema said they should be.
+  assert.equal(byName.somethingElse, "keep me");
+  assert.deepEqual(payload.tags, []);
 });

@@ -93,6 +93,26 @@ export function buildDownloadClientPayload(schemas, { serviceId = "sabnzbd", nam
 }
 
 /**
+ * The body Prowlarr wants for a FlareSolverr proxy.
+ *
+ * The tag is the part that actually does anything: Prowlarr routes an indexer
+ * through a proxy only when the two share a tag, so a proxy with none is
+ * configured and idle. Keelarr creates the tag and attaches it here, but which
+ * indexers wear it stays the operator's decision — turning it on for all of
+ * them would slow down every indexer that never needed it.
+ */
+export function buildIndexerProxyPayload(schemas, { name = "FlareSolverr", host, requestTimeout = 60, tagIds = [] }) {
+  const schema = findSchema(schemas, "FlareSolverr");
+
+  return {
+    ...schema,
+    name,
+    tags: tagIds,
+    fields: patchFields(schema, { host, requestTimeout })
+  };
+}
+
+/**
  * Names a category the app wants that the download client does not have.
  *
  * Blanking it is not a workaround: Lidarr answers an empty category with HTTP

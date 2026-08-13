@@ -7,13 +7,14 @@ import { appendActivity, loadSettings } from "../store.js";
 import {
   buildApplicationPayload,
   buildDownloadClientPayload,
+  buildIndexerProxyPayload,
   buildRootFolderPayload,
   describeValidation,
   missingCategoryFor
 } from "../wiring/payloads.js";
 import { attachController, planControllerAttachments } from "../wiring/attach.js";
 import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
-import { arrApi, bazarrApi, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
+import { arrApi, bazarrApi, probeJellyfin, probeQbittorrent, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
 import { readContainerFile } from "../runtime.js";
 import { LAN_CLIENT, buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
@@ -24,6 +25,7 @@ import {
   RECONCILE_STATE,
   reconcileApplication,
   reconcileDownloadClient,
+  reconcileIndexerProxy,
   reconcileRootFolder,
   reconcileSettingsLink
 } from "../wiring/reconcile.js";
@@ -42,6 +44,7 @@ export const WIRING_STEPS = [
   { name: "downloadclients", label: "Add the download client to each app" },
   { name: "rootfolders", label: "Add library folders" },
   { name: "applications", label: "Register the apps with Prowlarr" },
+  { name: "proxies", label: "Give Prowlarr its challenge solver" },
   { name: "subtitles", label: "Point Bazarr at the library apps" },
   { name: "verify", label: "Run each app's own connection tests" }
 ];
@@ -174,6 +177,8 @@ export class WiringService {
     readApiKeyImpl = readApiKey,
     readContainerFileImpl = readContainerFile,
     bazarrApiImpl = bazarrApi,
+    probeJellyfinImpl = probeJellyfin,
+    probeQbittorrentImpl = probeQbittorrent,
     sabnzbdApiImpl = sabnzbdApi,
     sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   } = {}) {
@@ -193,6 +198,8 @@ export class WiringService {
     this.readApiKey = readApiKeyImpl;
     this.readContainerFile = readContainerFileImpl;
     this.bazarrApi = bazarrApiImpl;
+    this.probeJellyfin = probeJellyfinImpl;
+    this.probeQbittorrent = probeQbittorrentImpl;
     this.sabnzbdApi = sabnzbdApiImpl;
     this.sleep = sleepImpl;
   }
@@ -335,6 +342,7 @@ export class WiringService {
     const links = [
       ...this.checkDownloadClients(services, endpoints, current, hostAddress, mounts),
       ...this.checkProwlarrApplications(services, endpoints, current, hostAddress),
+      ...this.checkIndexerProxy(services, endpoints, current, hostAddress),
       ...this.checkBazarrLinks(services, endpoints, current, hostAddress)
     ];
     const rootFolders = this.checkRootFolders(services, current, mounts, settings);
@@ -472,6 +480,9 @@ export class WiringService {
           (link) => link.kind === "indexer-app" && link.state === RECONCILE_STATE.ABSENT
         ),
         rootFolders: gathered.report.rootFolders.filter((folder) => folder.state === RECONCILE_STATE.ABSENT),
+        proxies: gathered.report.links.filter(
+          (link) => link.kind === "indexer-proxy" && link.state === RECONCILE_STATE.ABSENT
+        ),
         subtitles: gathered.report.links.filter(
           (link) => link.kind === "subtitle-source" && link.state === RECONCILE_STATE.ABSENT
         )
@@ -480,6 +491,7 @@ export class WiringService {
         actionable.downloadClients.length +
         actionable.applications.length +
         actionable.rootFolders.length +
+        actionable.proxies.length +
         actionable.subtitles.length;
 
       if (total === 0) {
@@ -502,6 +514,7 @@ export class WiringService {
     await this.applyDownloadClients(ctx, plan, created, logger);
     await this.applyRootFolders(ctx, plan, created, logger);
     await this.applyApplications(ctx, plan, created, skipped, logger);
+    await this.applyIndexerProxies(ctx, plan, created, skipped, logger);
     await this.applySubtitleLinks(ctx, plan, created, logger);
 
     const verification = await ctx.step("verify", async () => {
@@ -752,6 +765,48 @@ export class WiringService {
     });
   }
 
+  async applyIndexerProxies(ctx, plan, created, skipped, logger) {
+    const { actionable, current, keys } = plan;
+
+    if (actionable.proxies.length === 0) {
+      ctx.skip("proxies", "Prowlarr already has its challenge solver, or FlareSolverr is not part of this stack.");
+      return;
+    }
+
+    await ctx.step("proxies", async () => {
+      const failedBefore = this.outcome.failed.length;
+      const base = current.get("prowlarr")?.baseUrl;
+      const key = keys.get("prowlarr");
+      const schema = await this.arrApi.indexerProxySchema(base, key);
+
+      if (!schema.ok) {
+        throw new KeelarrError(`Prowlarr would not describe its proxy options: ${schema.error}`, { statusCode: 502 });
+      }
+
+      for (const link of actionable.proxies) {
+        const payload = buildIndexerProxyPayload(schema.data, { host: link.address.baseUrl });
+
+        await this.writeChecked({
+          label: "Prowlarr → FlareSolverr",
+          test: () => this.arrApi.testIndexerProxy(base, key, payload),
+          create: () => this.arrApi.createIndexerProxy(base, key, payload),
+          serviceId: "prowlarr",
+          created,
+          logger
+        });
+      }
+
+      // Creating the proxy is the whole of what Keelarr can honestly do here.
+      // Prowlarr only routes an indexer through it when the two share a tag,
+      // and which indexers need that is a judgement about specific trackers —
+      // tagging them all would put a headless browser in front of indexers that
+      // work fine without one.
+      skipped.push("FlareSolverr is registered, but tag the indexers that need it in Prowlarr for it to be used.");
+
+      return { detail: this.describeOutcome(actionable.proxies.length, failedBefore) };
+    });
+  }
+
   /**
    * Points Bazarr at the apps whose libraries it subtitles.
    *
@@ -910,6 +965,7 @@ export class WiringService {
         downloadClients: [],
         rootFolders: [],
         applications: [],
+        indexerProxies: [],
         tests: null
       };
 
@@ -927,6 +983,29 @@ export class WiringService {
           entry.error = link.ok ? null : link.reason;
         }
 
+        current.set(service.id, entry);
+        continue;
+      }
+
+      // Neither of these speaks the Arr API, and both answer the one question
+      // that decides whether they need something from the operator. Without
+      // this the prerequisite could never fire, which is worse than not having
+      // written it: a check that silently always passes.
+      if (service.id === "qbittorrent" && link.ok) {
+        const probe = await this.probeQbittorrent(link.baseUrl);
+        entry.reachable = probe.reachable;
+        entry.credentialsKnown = probe.credentialsKnown;
+        entry.error = probe.error;
+        current.set(service.id, entry);
+        continue;
+      }
+
+      if (service.id === "jellyfin" && link.ok) {
+        const probe = await this.probeJellyfin(link.baseUrl);
+        entry.reachable = probe.reachable;
+        entry.setupComplete = probe.setupComplete;
+        entry.version = probe.version;
+        entry.error = probe.error;
         current.set(service.id, entry);
         continue;
       }
@@ -955,11 +1034,19 @@ export class WiringService {
       entry.version = status.data?.version || null;
 
       if (service.id === "prowlarr") {
-        const [applications, indexers] = await Promise.all([
+        const [applications, indexers, proxies] = await Promise.all([
           this.arrApi.listApplications(link.baseUrl, key),
-          this.countIndexers(service.id, link.baseUrl, key)
+          this.countIndexers(service.id, link.baseUrl, key),
+          // Proxies are optional in both directions: an older Prowlarr may not
+          // offer the collection, and an injected client may not implement it.
+          // No proxies is the right answer either way, and never a reason to
+          // fail the whole check.
+          typeof this.arrApi.listIndexerProxies === "function"
+            ? this.arrApi.listIndexerProxies(link.baseUrl, key).catch(() => ({ data: [] }))
+            : Promise.resolve({ data: [] })
         ]);
         entry.applications = applications.data || [];
+        entry.indexerProxies = proxies.data || [];
         entry.indexerCount = indexers;
         entry.tests = await this.runTests(() => this.arrApi.testAllApplications(link.baseUrl, key));
       } else {
@@ -1159,6 +1246,53 @@ export class WiringService {
         test: result.state === RECONCILE_STATE.CORRECT ? app.tests : null
       };
     });
+  }
+
+  /**
+   * FlareSolverr is only useful to Prowlarr, and only once Prowlarr knows where
+   * it is. Deploying it and stopping there looks like success and changes
+   * nothing, which is the failure this link exists to make visible.
+   */
+  checkIndexerProxy(services, endpoints, current, hostAddress) {
+    const prowlarr = services.find((service) => service.id === "prowlarr");
+    const solver = services.find((service) => service.id === "flaresolverr");
+
+    if (!prowlarr || !solver) {
+      return [];
+    }
+
+    const app = current.get("prowlarr");
+    const base = {
+      kind: "indexer-proxy",
+      title: "FlareSolverr in Prowlarr",
+      subtitle: "Lets Prowlarr past the browser checks some indexers put in front of results.",
+      serviceId: "prowlarr",
+      targetId: "flaresolverr"
+    };
+
+    if (!app?.reachable) {
+      return [{ ...base, ...unreadable(app, "Prowlarr could not be read."), address: null }];
+    }
+
+    const link = resolveLink(endpoints.get("prowlarr"), endpoints.get("flaresolverr"), { hostAddress });
+
+    if (!link.ok) {
+      return [{ ...base, state: "blocked", reason: link.reason, address: null }];
+    }
+
+    const result = reconcileIndexerProxy(app.indexerProxies, {
+      implementation: "FlareSolverr",
+      host: link.baseUrl
+    });
+
+    return [{
+      ...base,
+      state: result.state,
+      address: { baseUrl: link.baseUrl, strategy: link.strategy },
+      addressReason: link.reason,
+      changes: result.changes,
+      reason: result.reason
+    }];
   }
 
   /**

@@ -108,6 +108,28 @@ export function reconcileDownloadClient(existing = [], desired) {
 }
 
 /** A Prowlarr application entry, one per Arr app it syncs indexers into. */
+/**
+ * Prowlarr's FlareSolverr proxy, matched on the host it points at.
+ *
+ * Same shape as an application link, and separated only because Prowlarr keeps
+ * proxies in their own collection with their own schema — one that names the
+ * field `host` rather than `baseUrl`.
+ */
+export function reconcileIndexerProxy(existing = [], desired) {
+  const candidates = existing.filter(
+    (proxy) => String(proxy?.implementation || "").toLowerCase() === String(desired.implementation).toLowerCase()
+  );
+
+  return reconcile({
+    candidates,
+    describe: "FlareSolverr in Prowlarr",
+    matches: (proxy) => normalizeUrl(fieldValue(proxy, "host")) === normalizeUrl(desired.host),
+    describeChanges: (proxy) => [
+      { field: "host", from: fieldValue(proxy, "host"), to: desired.host }
+    ]
+  });
+}
+
 export function reconcileApplication(existing = [], desired) {
   const candidates = existing.filter(
     (application) =>

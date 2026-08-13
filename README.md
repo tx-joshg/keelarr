@@ -395,6 +395,33 @@ If host validation fails, Keelarr now blocks setup and returns a specific Docker
 
 For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](docs/qnap-first-test.md).
 
+## What Keelarr Wires, And What It Cannot
+
+Keelarr configures what is not a secret and reports what is. The line falls in a
+specific place, so it is worth stating:
+
+| Connection | Who makes it |
+| --- | --- |
+| Download client into Radarr/Sonarr/Lidarr | Keelarr, including the category |
+| Library folders | Keelarr, creating the directory if it is missing |
+| Apps registered with Prowlarr | Keelarr, both directions |
+| Bazarr pointed at Radarr and Sonarr | Keelarr |
+| FlareSolverr registered in Prowlarr | Keelarr — but you choose which indexers use it |
+| Indexer, Usenet account, Plex token | You. They are paid credentials Keelarr never holds |
+| qBittorrent's web password | You, unless it bypasses auth for the Docker network |
+| Jellyfin's first-run wizard | You |
+
+SABnzbd's API key is readable from its own config, so Keelarr propagates it.
+qBittorrent's password is not: it generates a random one and stores only a hash.
+If qBittorrent is set to bypass authentication for a whitelisted subnet — how it
+is often run behind a Docker network — Keelarr detects that and needs nothing
+from you. Otherwise it says so rather than writing a client that cannot log in.
+
+FlareSolverr is registered as a proxy, but Prowlarr only routes an indexer
+through it when the two share a tag. Tagging every indexer would put a headless
+browser in front of ones that never needed it, so which indexers use it stays
+your decision.
+
 ## Keeping Apps Up To Date
 
 Checking for updates is a `docker compose pull` of every image in the stack, so

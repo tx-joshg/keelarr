@@ -19,7 +19,11 @@ const SETTINGS_PATH = {
   lidarr: "/settings/indexers",
   bazarr: "/settings/languages",
   sabnzbd: "/config/server/",
-  tautulli: "/settings"
+  tautulli: "/settings",
+  // qBittorrent's web interface is a single page; the Web UI options live in
+  // its own settings dialog rather than at a routable path.
+  qbittorrent: "/",
+  jellyfin: "/web/index.html#!/dashboard"
 };
 
 export function settingsLinkFor(serviceId, appUrl) {
@@ -85,6 +89,38 @@ export function findMissingPrerequisites({ apps, services, appUrls = {} }) {
       summary: "SABnzbd has no Usenet server configured.",
       consequence: "Downloads cannot start, however well the rest of the stack is wired.",
       link: settingsLinkFor("sabnzbd", appUrls.sabnzbd)
+    });
+  }
+
+  const torrents = apps.get("qbittorrent");
+
+  // Unlike SABnzbd, whose API key Keelarr reads straight out of its config,
+  // qBittorrent generates a random admin password on first run and stores only
+  // a hash of it. There is nothing to read back, so the operator has to choose
+  // one and tell the apps — which is exactly the shape of a prerequisite.
+  if (has("qbittorrent") && torrents && torrents.credentialsKnown === false) {
+    missing.push({
+      serviceId: "qbittorrent",
+      name: "qBittorrent",
+      requirement: "download-client-credentials",
+      summary: "qBittorrent's web interface password is not known to Keelarr.",
+      consequence: "Radarr, Sonarr and Lidarr can be pointed at it, but their connection tests will fail until they have the password.",
+      link: settingsLinkFor("qbittorrent", appUrls.qbittorrent)
+    });
+  }
+
+  const mediaServer = apps.get("jellyfin");
+
+  // Jellyfin's API only opens once someone has walked its first-run wizard and
+  // created an administrator, so until then there is nothing to wire it into.
+  if (has("jellyfin") && mediaServer && mediaServer.setupComplete === false) {
+    missing.push({
+      serviceId: "jellyfin",
+      name: "Jellyfin",
+      requirement: "first-run-setup",
+      summary: "Jellyfin has not been set up yet — it still needs an administrator account and its libraries.",
+      consequence: "It cannot serve anything, and nothing can be connected to it, until that is done.",
+      link: settingsLinkFor("jellyfin", appUrls.jellyfin)
     });
   }
 

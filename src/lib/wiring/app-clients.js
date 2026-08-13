@@ -138,6 +138,72 @@ export async function sabnzbdRequest(baseUrl, apiKey, params, { timeoutMs = DEFA
   }
 }
 
+/**
+ * Asks qBittorrent whether it will talk to an unauthenticated caller.
+ *
+ * There is a real answer here, not just a guess. qBittorrent can be set to
+ * bypass authentication for clients on a whitelisted subnet, which is how many
+ * people run it behind a Docker network — and in that case the Arr apps need no
+ * password at all. A 403 means the opposite: credentials exist, only the
+ * operator knows them, and Keelarr should say so rather than write a client
+ * that cannot log in.
+ */
+export async function probeQbittorrent(baseUrl, { timeoutMs = 8_000, fetchImpl = fetch } = {}) {
+  try {
+    const response = await fetchImpl(`${String(baseUrl).replace(/\/+$/, "")}/api/v2/app/version`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      return { reachable: true, credentialsKnown: false, error: null };
+    }
+
+    if (!response.ok) {
+      return { reachable: false, credentialsKnown: null, error: `qBittorrent answered ${response.status}.` };
+    }
+
+    return { reachable: true, credentialsKnown: true, error: null };
+  } catch (error) {
+    const reason = error.name === "TimeoutError" ? `No answer within ${timeoutMs / 1000}s.` : error.message;
+    // Null rather than false: unreachable is not the same as needing a
+    // password, and reporting a prerequisite for an app that is merely still
+    // starting would be noise.
+    return { reachable: false, credentialsKnown: null, error: reason };
+  }
+}
+
+/**
+ * Asks Jellyfin whether anyone has finished its first-run wizard.
+ *
+ * `System/Info/Public` is deliberately unauthenticated — it exists so a client
+ * can discover a server before logging in — and it carries the one flag that
+ * distinguishes "not set up yet" from "set up and working".
+ */
+export async function probeJellyfin(baseUrl, { timeoutMs = 8_000, fetchImpl = fetch } = {}) {
+  try {
+    const response = await fetchImpl(`${String(baseUrl).replace(/\/+$/, "")}/System/Info/Public`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    if (!response.ok) {
+      return { reachable: false, setupComplete: null, version: null, error: `Jellyfin answered ${response.status}.` };
+    }
+
+    const payload = await response.json();
+
+    return {
+      reachable: true,
+      // Absent on older builds, where the honest answer is that we cannot tell.
+      setupComplete: typeof payload?.StartupWizardCompleted === "boolean" ? payload.StartupWizardCompleted : null,
+      version: payload?.Version || null,
+      error: null
+    };
+  } catch (error) {
+    const reason = error.name === "TimeoutError" ? `No answer within ${timeoutMs / 1000}s.` : error.message;
+    return { reachable: false, setupComplete: null, version: null, error: reason };
+  }
+}
+
 export const sabnzbdApi = {
   /** Counted, never read: these are the operator's paid Usenet credentials. */
   countServers: async (base, key) => {
@@ -251,6 +317,9 @@ export const arrApi = {
   listRemotePathMappings: (serviceId, base, key) =>
     arrRequest(base, key, { path: api(serviceId, "remotepathmapping") }),
   listApplications: (base, key) => arrRequest(base, key, { path: "/api/v1/applications" }),
+  // Prowlarr's own term for a helper it routes an indexer through. FlareSolverr
+  // is the only one this stack has a use for.
+  listIndexerProxies: (base, key) => arrRequest(base, key, { path: "/api/v1/indexerproxy" }),
   // Only ever counted. Indexers carry paid credentials, so Keelarr reads
   // whether any exist and never touches them.
   listIndexers: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "indexer") }),
@@ -265,6 +334,14 @@ export const arrApi = {
   // hands out rather than from a list written here.
   downloadClientSchema: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "downloadclient/schema") }),
   applicationSchema: (base, key) => arrRequest(base, key, { path: "/api/v1/applications/schema" }),
+  indexerProxySchema: (base, key) => arrRequest(base, key, { path: "/api/v1/indexerproxy/schema" }),
+
+  testIndexerProxy: (base, key, body) =>
+    // Reaching FlareSolverr means starting a headless browser at the other end,
+    // which is not quick even when it works.
+    arrRequest(base, key, { method: "POST", path: "/api/v1/indexerproxy/test", body, timeoutMs: 45_000 }),
+  createIndexerProxy: (base, key, body) =>
+    arrRequest(base, key, { method: "POST", path: "/api/v1/indexerproxy", body, timeoutMs: 25_000 }),
 
   // Test endpoints take a full candidate body rather than an id, so a payload
   // can be checked before it is written. Note that Arr apps validate on save
