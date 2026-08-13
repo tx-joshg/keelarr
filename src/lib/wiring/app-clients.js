@@ -337,9 +337,14 @@ export const arrApi = {
   indexerProxySchema: (base, key) => arrRequest(base, key, { path: "/api/v1/indexerproxy/schema" }),
 
   testIndexerProxy: (base, key, body) =>
-    // Reaching FlareSolverr means starting a headless browser at the other end,
-    // which is not quick even when it works.
-    arrRequest(base, key, { method: "POST", path: "/api/v1/indexerproxy/test", body, timeoutMs: 45_000 }),
+    // Longer than anything else here, and deliberately longer than Prowlarr's
+    // own patience. Testing this proxy makes Prowlarr ask FlareSolverr to fetch
+    // a real URL through a headless browser, and it sends maxTimeout: 60000 —
+    // so it will wait a full minute. Measured on a QNAP: 53 seconds for the
+    // request, and 61 seconds for the browser to start at all. A client
+    // deadline below what the app itself allows does not detect a failure, it
+    // manufactures one.
+    arrRequest(base, key, { method: "POST", path: "/api/v1/indexerproxy/test", body, timeoutMs: 120_000 }),
   createIndexerProxy: (base, key, body) =>
     arrRequest(base, key, { method: "POST", path: "/api/v1/indexerproxy", body, timeoutMs: 25_000 }),
 

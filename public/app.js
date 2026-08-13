@@ -2884,7 +2884,14 @@ function renderWiringPrerequisites(report) {
  */
 function wiringActionable(report) {
   return [
-    ...report.links.filter((link) => link.state === "absent").map((link) => `${link.sourceName} → ${link.targetName}`),
+    // Falls back to the link's own title rather than interpolating undefined:
+    // a confirmation that reads "undefined → undefined" is worse than useless,
+    // because it asks for approval while hiding what is being approved.
+    ...report.links
+      .filter((link) => link.state === "absent")
+      .map((link) => (link.sourceName && link.targetName
+        ? `${link.sourceName} → ${link.targetName}`
+        : link.title || `${link.serviceId || "?"} → ${link.targetId || "?"}`)),
     ...report.rootFolders
       .filter((folder) => folder.state === "absent")
       .map((folder) => `${folder.name} library folder ${folder.expectedPath}`)

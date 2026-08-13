@@ -549,11 +549,24 @@ export class WiringService {
     await this.appendActivity({
       kind: "wiring-apply",
       level: failed.length || verification.results.some((entry) => !entry.ok) ? "warn" : "info",
-      message: `Configured ${created.length} connection${created.length === 1 ? "" : "s"} across the stack.`,
+      message: created.length
+        ? `Configured ${created.length} connection${created.length === 1 ? "" : "s"} across the stack.`
+        : `Configured nothing: ${failed.length} connection${failed.length === 1 ? "" : "s"} were refused.`,
       details: { created: created.map((entry) => entry.label) }
     });
 
-    logger.info("wiring.applied", { created: created.length, skipped: skipped.length });
+    logger.info("wiring.applied", { created: created.length, failed: failed.length, skipped: skipped.length });
+
+    // Asked to configure something, configured none of it, and every attempt
+    // was refused. Reporting that as a successful job is how an operator ends
+    // up believing a connection exists that does not — the same way an upgrade
+    // once reported success with a failed step.
+    if (created.length === 0 && failed.length > 0) {
+      throw new KeelarrError(
+        `Nothing could be configured. ${failed.map((entry) => `${entry.label}: ${entry.reason}`).join("; ")}`,
+        { statusCode: 502, details: { failed } }
+      );
+    }
 
     return {
       created: created.map((entry) => entry.label),
@@ -1265,6 +1278,11 @@ export class WiringService {
     const base = {
       kind: "indexer-proxy",
       title: "FlareSolverr in Prowlarr",
+      // The confirmation dialog names each change with these; a link kind that
+      // omits them renders "undefined → undefined" and tells the operator
+      // nothing about what they are about to approve.
+      sourceName: "Prowlarr",
+      targetName: "FlareSolverr",
       subtitle: "Lets Prowlarr past the browser checks some indexers put in front of results.",
       serviceId: "prowlarr",
       targetId: "flaresolverr"

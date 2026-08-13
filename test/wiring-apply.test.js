@@ -470,7 +470,12 @@ test("a category the download client refuses to add is reported, and nothing is 
   const job = await settle(service.startWiring());
 
   assert.equal(calls.filter((entry) => entry.call === "create-client").length, 0);
-  assert.match(job.result.failed[0].reason, /would not add one/);
+  // Nothing was configured and the only attempt was refused, so the job fails
+  // and the reason travels in its error. Reporting success here would tell the
+  // operator a download client exists that does not.
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.match(job.error.message, /would not add one/);
+  assert.match(job.error.details.failed[0].reason, /would not add one/);
 });
 
 test("a missing library folder is created, then configured", async () => {
@@ -583,8 +588,9 @@ test("a write Bazarr accepts but does not apply is reported, not counted as succ
   });
   const job = await settle(service.startWiring());
 
-  assert.deepEqual(job.result.created, []);
-  assert.match(job.result.failed[0].reason, /accepted the change but did not apply it/);
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.match(job.error.message, /accepted the change but did not apply it/);
+  assert.deepEqual(job.error.details.failed.map((entry) => entry.label).length > 0, true);
 });
 
 test("Bazarr is not pointed at an app whose key could not be read", async () => {
@@ -601,4 +607,21 @@ test("Bazarr is not pointed at an app whose key could not be read", async () => 
   assert.equal(params["settings-general-use_radarr"], "true");
   assert.equal(params["settings-general-use_sonarr"], undefined, "an app with no readable key must be left out");
   assert.match(job.result.failed.find((f) => /Sonarr/.test(f.label)).reason, /API key could not be read/);
+});
+
+test("an apply that configures nothing and is refused everywhere does not report success", async () => {
+  // The operator clicked "Configure 1", every write was refused, and the job
+  // reported succeeded — which reads as "the connection now exists".
+  // Every write refused: the shape of the FlareSolverr proxy timing out, and of
+  // any app that will not accept what Keelarr offers it.
+  const { service } = createHarness({
+    clientTest: { ok: false, data: null, error: "No answer within 45s." },
+    applicationTest: { ok: false, data: null, error: "No answer within 45s." }
+  });
+
+  const job = await settle(service.startWiring());
+
+  assert.equal(job.status, "failed", "a run that configured nothing must not read as success");
+  assert.match(job.error.message, /Nothing could be configured/);
+  assert.match(job.error.message, /No answer within 45s/);
 });
