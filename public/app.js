@@ -12,17 +12,18 @@
  */
 const SUPPORT_URL = "https://ko-fi.com/keelarr";
 
-const appOrder = [
-  "prowlarr",
-  "radarr",
-  "sonarr",
-  "bazarr",
-  "trailarr",
-  "ombi",
-  "tautulli",
-  "sabnzbd",
-  "lidarr",
-];
+/**
+ * The catalog order, taken from the controller rather than repeated here.
+ *
+ * This used to be a hardcoded list of ids, which made it a second source of
+ * truth that nobody remembered to update: three services added to the server's
+ * catalog were invisible in the UI, and — worse — saving settings filtered the
+ * selection through this list, so anything missing from it was silently dropped
+ * from the selection rather than merely hidden.
+ */
+function appOrder() {
+  return state.catalog.map((service) => service.id);
+}
 
 const state = {
   configured: false,
@@ -225,7 +226,7 @@ function selectedServices() {
 
 function selectedCatalogEntries() {
   const selected = new Set(selectedServiceIds());
-  return appOrder
+  return appOrder()
     .filter((id) => catalogMap().has(id))
     .map((id) => catalogMap().get(id))
     .filter((service) => selected.has(service.id));
@@ -1699,7 +1700,7 @@ function renderSettingsView() {
     }
   ];
 
-  const manageRows = appOrder
+  const manageRows = appOrder()
     .map((id) => catalogMap().get(id))
     .filter(Boolean)
     .map((service) => renderManageRow(service))
@@ -2206,7 +2207,7 @@ function toggleSelectedService(serviceId) {
 
   state.settings = {
     ...state.settings,
-    selectedServiceIds: appOrder.filter((id) => selected.has(id))
+    selectedServiceIds: appOrder().filter((id) => selected.has(id))
   };
   render();
 }
