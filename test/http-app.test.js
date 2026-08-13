@@ -221,3 +221,38 @@ test("http app logs request failures with request ids", async () => {
     await stopServer(server);
   }
 });
+
+test("the health endpoint answers before the controller has finished starting", async () => {
+  // Initialisation inspects every container and re-attaches the controller to
+  // each service network, which took four minutes on a busy NAS. Binding the
+  // port after that meant the healthcheck — twenty seconds and three retries —
+  // marked a healthy controller unhealthy, and a host that restarts unhealthy
+  // containers would have killed it mid-startup, forever.
+  let initializeFinished = false;
+  const app = createHttpApp({
+    publicDir,
+    keelarrApp: {
+      async initialize() {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        initializeFinished = true;
+      },
+      async buildState() {
+        return { ok: true };
+      }
+    },
+    logger: createTestLogger(),
+    requireAuth: false
+  });
+  const server = await startServer(app);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/health`);
+
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
+    // The point: it answered without waiting for the slow work.
+    assert.equal(initializeFinished, false, "health should not depend on initialisation");
+  } finally {
+    await stopServer(server);
+  }
+});

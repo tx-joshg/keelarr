@@ -31,10 +31,20 @@ const app = createHttpApp({
   requireAuth: !demoMode
 });
 
-if (typeof keelarrApp.initialize === "function") {
-  await keelarrApp.initialize();
-}
-
+/**
+ * Listen first, then do the startup work.
+ *
+ * Initialisation inspects every container and attaches the controller to each
+ * service network, which took four minutes on a busy NAS. Doing that before
+ * binding the port meant nothing answered until it finished — so the container
+ * healthcheck, which allows twenty seconds and three retries, marked a
+ * perfectly healthy controller unhealthy. On a host that restarts unhealthy
+ * containers that is not a cosmetic problem: it is a loop, killing the
+ * controller mid-startup every time.
+ *
+ * /api/health only claims the process is answering, which is true the moment
+ * the port is open, so it is honest to serve it before the rest is ready.
+ */
 app.listen(port, () => {
   logger.info("server.listen", {
     mode: demoMode ? "demo" : "live",
@@ -43,3 +53,20 @@ app.listen(port, () => {
     logPath
   });
 });
+
+if (typeof keelarrApp.initialize === "function") {
+  const startedAt = Date.now();
+
+  try {
+    await keelarrApp.initialize();
+    logger.info("server.ready", { tookMs: Date.now() - startedAt });
+  } catch (error) {
+    // A controller that cannot re-attach to a network is still worth having:
+    // the dashboard, the logs and the recovery actions all still work, and
+    // exiting here would take those away exactly when they are needed.
+    logger.error("server.initialize_failed", {
+      tookMs: Date.now() - startedAt,
+      message: error.message
+    });
+  }
+}
