@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createHttpApp } from "../src/create-http-app.js";
-import { DemoStackarrAppService } from "../src/lib/demo-service.js";
+import { DemoKeelarrAppService } from "../src/lib/demo-service.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(here, "..", "public");
@@ -84,7 +84,7 @@ test("http app serves demo state through the API facade", async () => {
   const logger = createTestLogger();
   const app = createHttpApp({
     publicDir,
-    stackarrApp: new DemoStackarrAppService(),
+    keelarrApp: new DemoKeelarrAppService(),
     logger,
     requireAuth: false
   });
@@ -110,8 +110,8 @@ test("http app serves demo state through the API facade", async () => {
 });
 
 test("cutover returns 202 with a pollable job instead of blocking the request", async () => {
-  const demo = new DemoStackarrAppService();
-  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger(), requireAuth: false });
+  const demo = new DemoKeelarrAppService();
+  const app = createHttpApp({ publicDir, keelarrApp: demo, logger: createTestLogger(), requireAuth: false });
   const server = await startServer(app);
 
   try {
@@ -149,8 +149,8 @@ test("cutover returns 202 with a pollable job instead of blocking the request", 
 });
 
 test("cutover rejects a request whose confirmation does not match", async () => {
-  const demo = new DemoStackarrAppService();
-  const app = createHttpApp({ publicDir, stackarrApp: demo, logger: createTestLogger(), requireAuth: false });
+  const demo = new DemoKeelarrAppService();
+  const app = createHttpApp({ publicDir, keelarrApp: demo, logger: createTestLogger(), requireAuth: false });
   const server = await startServer(app);
 
   try {
@@ -175,7 +175,7 @@ test("cutover rejects a request whose confirmation does not match", async () => 
 });
 
 test("an unknown job id is a 404 rather than an empty success", async () => {
-  const app = createHttpApp({ publicDir, stackarrApp: new DemoStackarrAppService(), logger: createTestLogger(), requireAuth: false });
+  const app = createHttpApp({ publicDir, keelarrApp: new DemoKeelarrAppService(), logger: createTestLogger(), requireAuth: false });
   const server = await startServer(app);
 
   try {
@@ -191,7 +191,7 @@ test("http app logs request failures with request ids", async () => {
   const logger = createTestLogger();
   const app = createHttpApp({
     publicDir,
-    stackarrApp: {
+    keelarrApp: {
       async buildState() {
         const error = new Error("boom");
         error.statusCode = 503;

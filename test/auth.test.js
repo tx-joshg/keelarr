@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createHttpApp } from "../src/create-http-app.js";
-import { DemoStackarrAppService } from "../src/lib/demo-service.js";
+import { DemoKeelarrAppService } from "../src/lib/demo-service.js";
 import {
   MIN_PASSWORD_LENGTH,
   SESSION_COOKIE,
@@ -44,7 +44,7 @@ async function withServer(options, run) {
   const store = options.store || createAuthStore(options.initial ?? null);
   const app = createHttpApp({
     publicDir,
-    stackarrApp: options.stackarrApp || new DemoStackarrAppService(),
+    keelarrApp: options.keelarrApp || new DemoKeelarrAppService(),
     logger: silentLogger,
     readAuthImpl: store.read,
     writeAuthImpl: store.write,

@@ -1,12 +1,12 @@
 # Builds the controller from this checkout instead of pulling the published
-# image. For working on Stackarr itself; running it does not need this.
+# image. For working on Keelarr itself; running it does not need this.
 #
 #   docker compose -f compose.example.yml -f compose.build.yml up -d --build
 #
 # The image name is overridden too, so a local build can never be mistaken for
 # the published one — or pushed over it by accident.
 services:
-  stackarr:
+  keelarr:
     build:
       context: ..
-    image: stackarr:local
+    image: keelarr:local

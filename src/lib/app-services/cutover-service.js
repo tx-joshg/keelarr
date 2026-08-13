@@ -14,10 +14,10 @@ import {
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
 import { appendActivity, loadSettings, saveSettings } from "../store.js";
 import { JobRegistry } from "../jobs.js";
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
-export const ROLLBACK_SUFFIX = "-stackarr-rollback";
+export const ROLLBACK_SUFFIX = "-keelarr-rollback";
 
 export const CUTOVER_STEPS = [
   { name: "preflight", label: "Verify the draft still matches the live container" },
@@ -103,7 +103,7 @@ export class CutoverService {
 
   requireOk(result, message) {
     if (!result?.ok) {
-      throw new StackarrError(message, {
+      throw new KeelarrError(message, {
         statusCode: 500,
         details: {
           stdout: result?.stdout || null,
@@ -127,13 +127,13 @@ export class CutoverService {
     try {
       onDisk = await this.readFile(service.composePath, "utf8");
     } catch {
-      throw new StackarrError(`Managed draft is missing at ${service.composePath}. Regenerate it before cutover.`, {
+      throw new KeelarrError(`Managed draft is missing at ${service.composePath}. Regenerate it before cutover.`, {
         statusCode: 409
       });
     }
 
     if (onDisk.trim() !== rebuilt.composeYaml.trim()) {
-      throw new StackarrError(
+      throw new KeelarrError(
         `The live container no longer matches the reviewed draft for ${service.name}. Regenerate the draft and review it again before cutover.`,
         {
           statusCode: 409,
@@ -153,7 +153,7 @@ export class CutoverService {
     const item = inventory.items.find((candidate) => candidate.containerId === containerId);
 
     if (!item) {
-      throw new StackarrError(`Unknown cutover candidate: ${containerId}`, { statusCode: 404 });
+      throw new KeelarrError(`Unknown cutover candidate: ${containerId}`, { statusCode: 404 });
     }
 
     return item;
@@ -189,7 +189,7 @@ export class CutoverService {
       const settings = await this.loadSettings();
 
       if (settings.initialized !== true) {
-        throw new StackarrError("Configure the host profile before running a cutover.", { statusCode: 400 });
+        throw new KeelarrError("Configure the host profile before running a cutover.", { statusCode: 400 });
       }
 
       const item = await this.findLiveContainer(settings, containerId, context);
@@ -197,7 +197,7 @@ export class CutoverService {
       // The confirmation gate. A stray POST cannot migrate a service; the
       // caller has to name the container it believes it is replacing.
       if (input.confirmContainerName !== item.containerName) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `Cutover confirmation does not match. Expected the container name ${item.containerName}.`,
           { statusCode: 400 }
         );
@@ -206,11 +206,11 @@ export class CutoverService {
       const service = settings.services[item.serviceId];
 
       if (!service) {
-        throw new StackarrError(`Service ${item.serviceId} is not selected in this stack.`, { statusCode: 404 });
+        throw new KeelarrError(`Service ${item.serviceId} is not selected in this stack.`, { statusCode: 404 });
       }
 
       if (service.managedMode !== "imported-draft") {
-        throw new StackarrError(
+        throw new KeelarrError(
           `${service.name} has no reviewed import draft to cut over. Generate the managed draft first.`,
           { statusCode: 409 }
         );
@@ -219,7 +219,7 @@ export class CutoverService {
       const preview = await this.buildImportPreview(settings, item);
 
       if (!preview.supported || !preview.adoptable) {
-        throw new StackarrError(`${service.name} still has unresolved adoption issues.`, { statusCode: 409 });
+        throw new KeelarrError(`${service.name} still has unresolved adoption issues.`, { statusCode: 409 });
       }
 
       await this.assertDraftMatchesLiveContainer(settings, service, item);
@@ -229,7 +229,7 @@ export class CutoverService {
       // A leftover rollback container from an earlier attempt would make the
       // rename fail halfway through, after the live container is already down.
       if (await this.containerExists(settings, rollbackName, { logger })) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `A previous rollback container named ${rollbackName} still exists. Revert or remove it before cutting over again.`,
           { statusCode: 409 }
         );
@@ -270,7 +270,7 @@ export class CutoverService {
         // Compose never took over, so put the original container back before
         // surfacing the failure.
         await this.revertInPlace(ctx, settings, service, rollbackName, stepLogger);
-        throw new StackarrError(`Compose failed to start ${service.name}. The original container was restored.`, {
+        throw new KeelarrError(`Compose failed to start ${service.name}. The original container was restored.`, {
           statusCode: 500,
           details: { stdout: result.stdout, stderr: result.stderr, reverted: true }
         });
@@ -289,7 +289,7 @@ export class CutoverService {
 
     if (health.outcome === HEALTH_OUTCOME.FAILED) {
       await this.revertInPlace(ctx, settings, service, rollbackName, stepLogger);
-      throw new StackarrError(`${service.name} did not come up under Compose. The original container was restored.`, {
+      throw new KeelarrError(`${service.name} did not come up under Compose. The original container was restored.`, {
         statusCode: 500,
         details: { reason: health.reason, reverted: true }
       });
@@ -333,7 +333,7 @@ export class CutoverService {
       rollback: backup.rollback,
       health,
       // Deliberately kept even on success: the operator decides when the old
-      // container is safe to delete, not Stackarr.
+      // container is safe to delete, not Keelarr.
       cleanupHint: `The original container is preserved as ${rollbackName}. Remove it once ${service.name} has been used successfully.`
     };
   }
@@ -392,11 +392,11 @@ export class CutoverService {
       const service = settings.services[serviceId];
 
       if (!service) {
-        throw new StackarrError(`Unknown or disabled service: ${serviceId}`, { statusCode: 404 });
+        throw new KeelarrError(`Unknown or disabled service: ${serviceId}`, { statusCode: 404 });
       }
 
       if (input.confirmContainerName !== service.containerName) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `Revert confirmation does not match. Expected the container name ${service.containerName}.`,
           { statusCode: 400 }
         );
@@ -406,7 +406,7 @@ export class CutoverService {
         || rollbackNameFor(service.containerName);
 
       if (!(await this.containerExists(settings, rollbackName, { logger }))) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `No rollback container named ${rollbackName} exists. This service cannot be reverted automatically.`,
           { statusCode: 409 }
         );

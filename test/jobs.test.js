@@ -10,7 +10,7 @@ import { createLogger } from "../src/lib/logger.js";
 const noop = () => {};
 export const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 

@@ -132,11 +132,11 @@ function toConsoleMethod(consoleImpl, level) {
 
 class LoggerCore {
   constructor({
-    name = "stackarr",
-    level = process.env.STACKARR_LOG_LEVEL || "info",
+    name = "keelarr",
+    level = process.env.KEELARR_LOG_LEVEL || "info",
     filePath = logPath,
     consoleImpl = console,
-    maxBytes = Number(process.env.STACKARR_LOG_MAX_BYTES) || DEFAULT_MAX_BYTES,
+    maxBytes = Number(process.env.KEELARR_LOG_MAX_BYTES) || DEFAULT_MAX_BYTES,
     keep = DEFAULT_KEEP
   } = {}) {
     this.name = name;

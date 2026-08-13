@@ -111,7 +111,7 @@ test("a config file present but without a key yet also reports pending", async (
   assert.equal(result.descriptor.state, "pending");
 });
 
-test("an app Stackarr does not read a key for says so rather than reporting a failure", async () => {
+test("an app Keelarr does not read a key for says so rather than reporting a failure", async () => {
   const result = await readApiKey(settings(), service("tautulli", "Tautulli"), {
     readContainerFileImpl: reader({})
   });

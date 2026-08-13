@@ -1,4 +1,4 @@
-# Stackarr Product Spec
+# Keelarr Product Spec
 
 This document converts the product foundation into implementable behavior.
 
@@ -12,7 +12,7 @@ It defines:
 
 ## Product Goal
 
-Stackarr should let a user:
+Keelarr should let a user:
 
 1. install one controller
 2. confirm a small number of host-level defaults
@@ -89,33 +89,33 @@ The saved shared configuration for the current Docker host.
 
 ### Service Template
 
-The Stackarr default model for one supported app.
+The Keelarr default model for one supported app.
 
 ### Managed Service
 
-A service whose Compose stack is generated and controlled by Stackarr.
+A service whose Compose stack is generated and controlled by Keelarr.
 
 ### Imported Service
 
-A service discovered from an existing Docker setup and then adopted into Stackarr management.
+A service discovered from an existing Docker setup and then adopted into Keelarr management.
 
 ### External Service
 
-A service visible in the dashboard but not managed by Stackarr.
+A service visible in the dashboard but not managed by Keelarr.
 
 ## First-Run Modes
 
 ### Mode A: New Stack
 
-Used when the user wants Stackarr to create and optionally deploy the stack from scratch.
+Used when the user wants Keelarr to create and optionally deploy the stack from scratch.
 
 ### Mode B: Import Existing Stack
 
-Used when the user already has Docker containers or Compose stacks and wants Stackarr to adopt them safely.
+Used when the user already has Docker containers or Compose stacks and wants Keelarr to adopt them safely.
 
 ## Reviewable Demo Mode
 
-Stackarr should also support a safe review mode for product evaluation.
+Keelarr should also support a safe review mode for product evaluation.
 
 Purpose:
 
@@ -142,7 +142,7 @@ The wizard should be shown on first launch and remain accessible later as `Host 
 
 Purpose:
 
-- explain what Stackarr manages
+- explain what Keelarr manages
 - choose onboarding mode
 
 Controls:
@@ -152,7 +152,7 @@ Controls:
 
 Helper copy:
 
-- “Stackarr manages Arr ecosystem apps from one place.”
+- “Keelarr manages Arr ecosystem apps from one place.”
 - “Start clean or import what you already run.”
 
 ### Screen 2: Host Detection
@@ -311,7 +311,7 @@ Conflict rules:
 
 Purpose:
 
-- show what Stackarr will create or manage before anything changes
+- show what Keelarr will create or manage before anything changes
 
 Must show:
 
@@ -389,11 +389,11 @@ Each discovered container should be categorized as:
 - `Unsupported`
 - `Ignored`
 
-Supported containers must be matched to the Stackarr service catalog.
+Supported containers must be matched to the Keelarr service catalog.
 
 ### Stage 3: Shared Defaults Inference
 
-Stackarr should infer likely shared host settings from existing containers.
+Keelarr should infer likely shared host settings from existing containers.
 
 Examples:
 
@@ -447,7 +447,7 @@ Defaults:
 
 ### Stage 7: Preview
 
-Before adoption, Stackarr must generate preview stack files and show:
+Before adoption, Keelarr must generate preview stack files and show:
 
 - what remains unchanged
 - what will be normalized
@@ -462,7 +462,7 @@ Adoption should run one app at a time:
 2. compose preview backup
 3. stop old container
 4. rename old container to fallback
-5. start Stackarr-managed replacement
+5. start Keelarr-managed replacement
 6. verify health
 
 ### Stage 9: Completion
@@ -472,8 +472,8 @@ Once adopted, the service becomes `Managed`.
 Dashboard state should then use:
 
 - generated Compose files
-- Stackarr backups
-- Stackarr update checks
+- Keelarr backups
+- Keelarr update checks
 
 ## Dashboard Spec
 
@@ -656,7 +656,7 @@ If five services succeed and one fails:
 
 ## V1 Definition Of Done
 
-Stackarr `v1` is successful when:
+Keelarr `v1` is successful when:
 
 1. a user can configure host defaults once
 2. a user can generate and deploy a new Arr stack

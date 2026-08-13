@@ -1,12 +1,12 @@
-# Stackarr Architecture
+# Keelarr Architecture
 
-This document defines the intended implementation shape for Stackarr after the current MVP.
+This document defines the intended implementation shape for Keelarr after the current MVP.
 
 It bridges product requirements into code boundaries.
 
 ## Architecture Goals
 
-Stackarr should be built so that:
+Keelarr should be built so that:
 
 - host-specific logic stays isolated
 - service-specific templates stay isolated
@@ -15,7 +15,7 @@ Stackarr should be built so that:
 
 ## High-Level System
 
-Stackarr is a single-node web controller with four major concerns:
+Keelarr is a single-node web controller with four major concerns:
 
 1. host discovery and validation
 2. service modeling and Compose generation
@@ -132,7 +132,7 @@ Notes:
 
 ## ServiceTemplate
 
-Represents Stackarr's opinionated definition for one supported app.
+Represents Keelarr's opinionated definition for one supported app.
 
 Suggested fields:
 
@@ -151,7 +151,7 @@ importMatchers
 
 ## ManagedService
 
-Represents one Stackarr-managed service.
+Represents one Keelarr-managed service.
 
 Suggested fields:
 
@@ -219,7 +219,7 @@ createdAt
 
 ## AdoptionPlan
 
-Represents the preview of converting discovered Docker services into Stackarr-managed services.
+Represents the preview of converting discovered Docker services into Keelarr-managed services.
 
 Suggested fields:
 

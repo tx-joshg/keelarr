@@ -1,9 +1,9 @@
-# Stackarr Demo Walkthrough
+# Keelarr Demo Walkthrough
 
 ## Launch
 
 ```bash
-cd stackarr
+cd keelarr
 npm install
 npm run demo
 ```

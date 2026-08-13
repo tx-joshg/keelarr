@@ -1,10 +1,10 @@
-# Stackarr Foundation
+# Keelarr Foundation
 
-This document captures the product decisions that define Stackarr's initial architecture and scope. It exists so implementation decisions stay consistent as the project grows.
+This document captures the product decisions that define Keelarr's initial architecture and scope. It exists so implementation decisions stay consistent as the project grows.
 
 ## Product Definition
 
-Stackarr is an Arr-focused control plane.
+Keelarr is an Arr-focused control plane.
 
 It is not:
 
@@ -21,9 +21,9 @@ It is:
 
 ## Core User Promise
 
-The user installs Stackarr once, confirms host-level defaults once, and then installs or manages the rest of the stack with minimal per-app input.
+The user installs Keelarr once, confirms host-level defaults once, and then installs or manages the rest of the stack with minimal per-app input.
 
-That means Stackarr should prefer:
+That means Keelarr should prefer:
 
 - opinionated defaults
 - host-level shared configuration
@@ -52,9 +52,9 @@ Future companion support can include torrent clients and Recyclarr, but they are
 
 ## Support Model
 
-Stackarr is hardware-agnostic and Docker-first.
+Keelarr is hardware-agnostic and Docker-first.
 
-The target is not "QNAP support" or "Synology support" as separate product lines. The target is any host that can satisfy the Stackarr runtime contract.
+The target is not "QNAP support" or "Synology support" as separate product lines. The target is any host that can satisfy the Keelarr runtime contract.
 
 ### Managed Host Contract
 
@@ -67,13 +67,13 @@ To be first-class managed, a host must provide:
 - access to media and download paths
 - network reachability for app health checks
 
-If a host supports that contract, Stackarr should manage it regardless of whether it is QNAP, Synology, Unraid, or generic Linux.
+If a host supports that contract, Keelarr should manage it regardless of whether it is QNAP, Synology, Unraid, or generic Linux.
 
 ## Support Tiers
 
 ### Tier 1: Managed
 
-Stackarr can:
+Keelarr can:
 
 - generate Compose stacks
 - deploy containers
@@ -85,17 +85,17 @@ Stackarr can:
 
 ### Tier 2: Import / Adopt
 
-Stackarr can:
+Keelarr can:
 
 - scan existing Docker containers or Compose projects
 - identify supported apps
 - infer ports, paths, images, mounts, networks, and restart settings
-- preview a Stackarr-managed version
+- preview a Keelarr-managed version
 - adopt apps one at a time into managed mode
 
 ### Tier 3: Observe Only
 
-Stackarr can:
+Keelarr can:
 
 - show status
 - show deep links
@@ -134,7 +134,7 @@ Allows manual configuration when detection is incomplete.
 
 For managed services, Docker Compose is the source of truth.
 
-Stackarr should manage:
+Keelarr should manage:
 
 - generated `compose.yml`
 - generated `.env`
@@ -152,7 +152,7 @@ For users starting clean.
 
 Flow:
 
-1. install Stackarr
+1. install Keelarr
 2. confirm host profile
 3. choose apps
 4. review generated stack plan
@@ -207,7 +207,7 @@ Confirm:
 - Books path
 - Downloads path
 
-Stackarr should prefer one consistent container media root, such as `/Media`, to reduce path mismatch bugs.
+Keelarr should prefer one consistent container media root, such as `/Media`, to reduce path mismatch bugs.
 
 ### Screen 4: Apps To Install
 
@@ -278,7 +278,7 @@ Import must be safe and mostly read-only until the adoption step.
 2. match supported apps
 3. infer global defaults from current reality
 4. identify configuration problems
-5. generate proposed Stackarr-managed Compose files
+5. generate proposed Keelarr-managed Compose files
 6. preview differences
 7. adopt services one at a time
 
@@ -302,7 +302,7 @@ Import must be safe and mostly read-only until the adoption step.
 
 ## Native Install Strategy
 
-Stackarr should not try to fully manage native installs in the first release.
+Keelarr should not try to fully manage native installs in the first release.
 
 ### Initial Native Strategy
 
@@ -357,7 +357,7 @@ The current MVP should evolve toward:
 
 A user should be able to:
 
-1. install Stackarr once
+1. install Keelarr once
 2. confirm a small number of host defaults
 3. click install on core Arr apps
 4. open those apps from one dashboard

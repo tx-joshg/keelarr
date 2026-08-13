@@ -33,7 +33,7 @@ test("selectInventoryItemForService prefers imported source identifiers before g
   assert.equal(selected?.containerId, "preferred123");
 });
 
-test("buildDashboardState monitors a detected live container before Stackarr owns the compose runtime", async () => {
+test("buildDashboardState monitors a detected live container before Keelarr owns the compose runtime", async () => {
   const settings = {
     initialized: true,
     selectedServiceIds: ["trailarr"],
@@ -46,8 +46,8 @@ test("buildDashboardState monitors a detected live container before Stackarr own
         sourceContainerId: null,
         sourceContainerName: null,
         containerName: "trailarr",
-        composePath: "/tmp/stackarr-missing/compose.yml",
-        envPath: "/tmp/stackarr-missing/.env",
+        composePath: "/tmp/keelarr-missing/compose.yml",
+        envPath: "/tmp/keelarr-missing/.env",
         appUrl: "http://localhost:7889",
         port: 7889,
         managedMode: "catalog",
@@ -111,7 +111,7 @@ test("buildDashboardState monitors a detected live container before Stackarr own
 });
 
 test("buildDashboardState keeps imported drafts out of managed upgrade mode until cutover completes", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "keelarr-status-"));
   const composePath = path.join(tempRoot, "compose.yml");
   const envPath = path.join(tempRoot, ".env");
   await writeFile(composePath, "name: trailarr\n", "utf8");
@@ -197,7 +197,7 @@ test("buildDashboardState keeps imported drafts out of managed upgrade mode unti
 });
 
 test("buildDashboardState reports a cut-over service as managed once Compose owns it", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "keelarr-status-"));
   const composePath = path.join(tempRoot, "compose.yml");
   const envPath = path.join(tempRoot, ".env");
   await writeFile(composePath, "name: trailarr\n", "utf8");
@@ -259,7 +259,7 @@ test("buildDashboardState reports a cut-over service as managed once Compose own
 });
 
 test("buildDashboardState does not invite a second cutover when an imported service is down", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "keelarr-status-"));
   const composePath = path.join(tempRoot, "compose.yml");
   const envPath = path.join(tempRoot, ".env");
   await writeFile(composePath, "name: trailarr\n", "utf8");
@@ -302,7 +302,7 @@ test("buildDashboardState does not invite a second cutover when an imported serv
 });
 
 test("a catalog service with files but no container is not reported as cutover-pending", async () => {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-status-"));
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "keelarr-status-"));
   const composePath = path.join(tempRoot, "compose.yml");
   const envPath = path.join(tempRoot, ".env");
   await writeFile(composePath, "name: readarr\n", "utf8");

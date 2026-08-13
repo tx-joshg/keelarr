@@ -67,7 +67,7 @@ export function selectInventoryItemForService(service, inventoryItems = []) {
 
 /**
  * A container is Compose-managed when its labels point at the stack file
- * Stackarr generated for it. Reading the labels the inventory scan already
+ * Keelarr generated for it. Reading the labels the inventory scan already
  * fetched replaces a `docker compose ps` process per service per refresh.
  */
 export function isComposeManagedBy(inventoryItem, service) {
@@ -278,7 +278,7 @@ export async function buildDashboardState(settings, dependencies = {}) {
       item: inventoryItem,
       networkDrivers: drivers
     });
-    // What Stackarr must call to check the app, and what the person must click
+    // What Keelarr must call to check the app, and what the person must click
     // to open it. Different network positions, so genuinely different answers.
     const fromController = resolveLink(controller, endpoint, { hostAddress });
     const fromBrowser = resolveLink(LAN_CLIENT, endpoint, { hostAddress });

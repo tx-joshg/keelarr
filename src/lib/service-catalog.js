@@ -1,7 +1,7 @@
 const stripTrailingSlash = (value) => value.replace(/\/+$/, "");
 
 export const MANAGED_MODE = Object.freeze({
-  /** Generated from the Stackarr catalog. Safe to regenerate at any time. */
+  /** Generated from the Keelarr catalog. Safe to regenerate at any time. */
   CATALOG: "catalog",
   /** Draft built from a live container, reviewed but not yet cut over. */
   IMPORTED_DRAFT: "imported-draft",
@@ -244,7 +244,7 @@ export function buildServicesFromSelection(baseSettings, selectedServiceIds, ser
  * which is exactly how Prowlarr, the Arr apps, and a download client expect to
  * talk to each other.
  */
-export const SHARED_NETWORK = "stackarr";
+export const SHARED_NETWORK = "keelarr";
 
 export function buildComposeSpec(settings, service) {
   const definition = getServiceDefinition(service.id);
@@ -271,7 +271,7 @@ export function buildComposeSpec(settings, service) {
     services: {
       [service.id]: composeService
     },
-    // External: Stackarr creates the network once, so no single stack owns it
+    // External: Keelarr creates the network once, so no single stack owns it
     // and tearing one stack down cannot remove it from under the others.
     networks: {
       [SHARED_NETWORK]: {

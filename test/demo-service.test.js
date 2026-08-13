@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DemoStackarrAppService } from "../src/lib/demo-service.js";
+import { DemoKeelarrAppService } from "../src/lib/demo-service.js";
 
 test("demo service exposes a simulated dashboard state", async () => {
-  const service = new DemoStackarrAppService();
+  const service = new DemoKeelarrAppService();
   const state = await service.buildState();
 
   assert.equal(state.meta.mode, "demo");
@@ -13,7 +13,7 @@ test("demo service exposes a simulated dashboard state", async () => {
 });
 
 test("demo service can generate a managed draft from an import candidate", async () => {
-  const service = new DemoStackarrAppService();
+  const service = new DemoKeelarrAppService();
   const result = await service.adoptImportAsDraft("trailarrdemo");
   const scan = await service.scanImportInventory();
 
@@ -42,7 +42,7 @@ function serviceState(state, id) {
 }
 
 test("demo dashboard reports the management lifecycle the cutover UI keys off", async () => {
-  const service = new DemoStackarrAppService();
+  const service = new DemoKeelarrAppService();
 
   // Detected: a live container exists, but no draft has been generated.
   assert.equal(serviceState(await service.buildState(), "trailarr").managementState, "detected");
@@ -60,11 +60,11 @@ test("demo dashboard reports the management lifecycle the cutover UI keys off", 
   assert.equal(managed.managementState, "managed");
   assert.equal(managed.managedMode, "imported");
   // The revert control is offered only while the rollback container exists.
-  assert.equal(managed.rollbackContainerName, "trailarr-stackarr-rollback");
+  assert.equal(managed.rollbackContainerName, "trailarr-keelarr-rollback");
 });
 
 test("demo cutover refuses a confirmation that does not match the container", async () => {
-  const service = new DemoStackarrAppService();
+  const service = new DemoKeelarrAppService();
   await service.adoptImportAsDraft("trailarrdemo");
 
   await assert.rejects(
@@ -74,7 +74,7 @@ test("demo cutover refuses a confirmation that does not match the container", as
 });
 
 test("demo cutover requires a generated draft first", async () => {
-  const service = new DemoStackarrAppService();
+  const service = new DemoKeelarrAppService();
 
   await assert.rejects(
     () => service.startCutover("trailarrdemo", { confirmContainerName: "trailarr" }),
@@ -83,7 +83,7 @@ test("demo cutover requires a generated draft first", async () => {
 });
 
 test("demo revert clears the rollback container and returns the service to draft", async () => {
-  const service = new DemoStackarrAppService();
+  const service = new DemoKeelarrAppService();
   await service.adoptImportAsDraft("trailarrdemo");
   const started = await service.startCutover("trailarrdemo", { confirmContainerName: "trailarr" });
   await settleJob(service, started.job.id);

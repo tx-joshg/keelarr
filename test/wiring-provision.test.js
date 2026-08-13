@@ -19,7 +19,7 @@ function mounts(mediaHostPath) {
 }
 
 async function media(t) {
-  const root = await mkdtemp(path.join(tmpdir(), "stackarr-provision-"));
+  const root = await mkdtemp(path.join(tmpdir(), "keelarr-provision-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await chmod(root, 0o775);
   return root;

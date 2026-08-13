@@ -251,7 +251,7 @@ export const arrApi = {
   listRemotePathMappings: (serviceId, base, key) =>
     arrRequest(base, key, { path: api(serviceId, "remotepathmapping") }),
   listApplications: (base, key) => arrRequest(base, key, { path: "/api/v1/applications" }),
-  // Only ever counted. Indexers carry paid credentials, so Stackarr reads
+  // Only ever counted. Indexers carry paid credentials, so Keelarr reads
   // whether any exist and never touches them.
   listIndexers: (serviceId, base, key) => arrRequest(base, key, { path: api(serviceId, "indexer") }),
   testAllDownloadClients: (serviceId, base, key) =>

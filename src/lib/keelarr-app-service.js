@@ -7,7 +7,7 @@ import { RemovalService } from "./app-services/removal-service.js";
 import { WiringService } from "./app-services/wiring-service.js";
 import { buildJobSnapshot } from "./jobs.js";
 
-export class StackarrAppService {
+export class KeelarrAppService {
   constructor({
     cutoverService = null,
     dashboardService = null,

@@ -12,7 +12,7 @@ import { MASKED_VALUE, buildApplicationPayload, buildDownloadClientPayload, miss
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -51,7 +51,7 @@ const APPLICATION_SCHEMA = [
   }
 ];
 
-function inspectFor(name, port, { networkMode = "stackarr", address = "172.30.0.5", ports = {} } = {}) {
+function inspectFor(name, port, { networkMode = "keelarr", address = "172.30.0.5", ports = {} } = {}) {
   return {
     Name: `/${name}`,
     State: { Running: true, StartedAt: LONG_AGO },
@@ -62,7 +62,7 @@ function inspectFor(name, port, { networkMode = "stackarr", address = "172.30.0.
   };
 }
 
-const DRIVERS = new Map([["stackarr", "bridge"]]);
+const DRIVERS = new Map([["keelarr", "bridge"]]);
 
 const PORTS = { radarr: 7878, sonarr: 8989, lidarr: 8686, sabnzbd: 8080, prowlarr: 9696, bazarr: 6767 };
 
@@ -83,7 +83,7 @@ function createHarness(overrides = {}) {
     pathExistsImpl: async () => overrides.pathExists !== false,
     ensureLibraryFolderImpl: async (_mounts, containerPath) =>
       overrides.folderCreatable === false
-        ? { ok: false, reason: `${containerPath} is not backed by a host directory Stackarr can reach.` }
+        ? { ok: false, reason: `${containerPath} is not backed by a host directory Keelarr can reach.` }
         : { ok: true, created: overrides.pathExists === false, hostPath: `/share${containerPath}` },
     bazarrApiImpl: (() => {
       const state = overrides.bazarrSettings || { general: {} };
@@ -126,7 +126,7 @@ function createHarness(overrides = {}) {
       ...(overrides.selected || ["radarr", "sabnzbd", "prowlarr"]).map((id, index) =>
         inspectFor(id, PORTS[id], { address: `172.30.0.${10 + index}` })
       ),
-      inspectFor("stackarr", 4687, { address: "172.30.0.2" })
+      inspectFor("keelarr", 4687, { address: "172.30.0.2" })
     ],
     inspectNetworkDriversImpl: async () => DRIVERS,
     readApiKeyImpl: async (_settings, target) => {

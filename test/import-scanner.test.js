@@ -34,7 +34,7 @@ test("matches a supported service by image even when the tag differs", () => {
 });
 
 test("flags missing required media mounts for adoptable services", async () => {
-  const configDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-import-"));
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-import-"));
   const serviceMatch = matchSupportedService({
     Name: "/trailarr",
     Config: {
@@ -64,7 +64,7 @@ test("flags missing required media mounts for adoptable services", async () => {
 });
 
 test("does not flag named docker volumes as missing host paths", async () => {
-  const mediaDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-media-"));
+  const mediaDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-media-"));
   const serviceMatch = matchSupportedService({
     Name: "/radarr",
     Config: {
@@ -136,9 +136,9 @@ test("parseDockerStatsLine extracts cpu and memory usage details", () => {
   });
 });
 
-test("shouldIncludeInventoryItem hides the stackarr controller and non-running containers", () => {
+test("shouldIncludeInventoryItem hides the keelarr controller and non-running containers", () => {
   assert.equal(shouldIncludeInventoryItem({
-    containerName: "stackarr",
+    containerName: "keelarr",
     status: "running"
   }), false);
   assert.equal(shouldIncludeInventoryItem({

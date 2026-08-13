@@ -10,7 +10,7 @@ import { normalizeSettings } from "../src/lib/store.js";
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -57,7 +57,7 @@ function macvlanInspect(name, port, address) {
 
 function controllerInspect() {
   return {
-    Name: "/stackarr",
+    Name: "/keelarr",
     State: { Running: true, StartedAt: LONG_AGO },
     HostConfig: { NetworkMode: "deploy_default" },
     Config: { ExposedPorts: { "4687/tcp": {} } },
@@ -340,6 +340,6 @@ test("one app that still needs a credential says so instead of reporting a fault
   const result = await service.describeWiring();
 
   // Either verdict is honest here as long as it is not "incomplete", which
-  // would be claiming Stackarr left connections unmade.
+  // would be claiming Keelarr left connections unmade.
   assert.notEqual(result.readiness, "incomplete");
 });

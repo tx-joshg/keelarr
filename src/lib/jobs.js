@@ -1,4 +1,4 @@
-import { StackarrError } from "./errors.js";
+import { KeelarrError } from "./errors.js";
 import { defaultLogger } from "./logger.js";
 import { readJobs, writeJobs } from "./store.js";
 
@@ -111,7 +111,7 @@ export class JobRegistry {
         job.status = JOB_STATUS.FAILED;
         job.finishedAt = this.now();
         job.error = {
-          message: "Stackarr restarted while this job was running. The service may be part-way through migration — check for a leftover rollback container before retrying.",
+          message: "Keelarr restarted while this job was running. The service may be part-way through migration — check for a leftover rollback container before retrying.",
           details: { interrupted: true }
         };
 
@@ -162,7 +162,7 @@ export class JobRegistry {
     const runningKey = subjectKey(kind, subject);
     for (const existing of this.jobs.values()) {
       if (!TERMINAL_JOB_STATUSES.has(existing.status) && subjectKey(existing.kind, existing.subject) === runningKey) {
-        throw new StackarrError(`A ${kind} job is already running for this service.`, {
+        throw new KeelarrError(`A ${kind} job is already running for this service.`, {
           statusCode: 409,
           details: { jobId: existing.id }
         });
@@ -267,7 +267,7 @@ export class JobRegistry {
       const step = job.steps.find((candidate) => candidate.name === name);
 
       if (!step) {
-        throw new StackarrError(`Job ${job.kind} declared no step named ${name}.`, {
+        throw new KeelarrError(`Job ${job.kind} declared no step named ${name}.`, {
           statusCode: 500
         });
       }
@@ -323,7 +323,7 @@ export class JobRegistry {
     const job = this.jobs.get(jobId);
 
     if (!job) {
-      throw new StackarrError(`Unknown job: ${jobId}`, { statusCode: 404 });
+      throw new KeelarrError(`Unknown job: ${jobId}`, { statusCode: 404 });
     }
 
     return job;

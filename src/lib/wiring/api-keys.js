@@ -36,7 +36,7 @@ export function parseArrApiKey(text) {
  *
  * The Arr apps default to a category named after their media type, and SABnzbd
  * rejects a download client naming one it does not have. Reading the real list
- * is what lets Stackarr pick a category that works instead of one that fails.
+ * is what lets Keelarr pick a category that works instead of one that fails.
  */
 function parseSabnzbdCategories(lines) {
   const start = lines.findIndex((line) => /^\s*\[categories\]\s*$/.test(line));
@@ -129,7 +129,7 @@ export function fingerprintKey(key) {
  * cannot accidentally serialize the secret by spreading the result. Only
  * `descriptor` is ever safe to put on the wire.
  *
- * Stackarr never *generates* a key. Minting one means rewriting the app's
+ * Keelarr never *generates* a key. Minting one means rewriting the app's
  * config and restarting it, which silently invalidates every other integration
  * pointed at that app — Ombi, Trailarr, Bazarr, and any script the user wrote.
  * A missing key almost always means the container has not finished its first
@@ -144,7 +144,7 @@ export async function readApiKey(settings, service, options = {}) {
       descriptor: {
         found: false,
         state: "unsupported",
-        reason: `Stackarr does not read an API key for ${service.name}.`
+        reason: `Keelarr does not read an API key for ${service.name}.`
       }
     };
   }

@@ -38,14 +38,14 @@ test("adoptImportAsDraft writes draft files before persisting imported override 
       containerName: "trailarr",
       restartPolicy: "unless-stopped",
       networkMode: "bridge",
-      stackDir: "/srv/stackarr/stacks/trailarr"
+      stackDir: "/srv/keelarr/stacks/trailarr"
     },
     draft: {
       envKeys: ["PUID", "PGID", "TZ"]
     },
     draftArtifacts: {
-      reviewSummaryPath: "/srv/stackarr/stacks/trailarr/import-summary.json",
-      reviewNotesPath: "/srv/stackarr/stacks/trailarr/IMPORT-REVIEW.md"
+      reviewSummaryPath: "/srv/keelarr/stacks/trailarr/import-summary.json",
+      reviewNotesPath: "/srv/keelarr/stacks/trailarr/IMPORT-REVIEW.md"
     },
     recommendedSteps: [],
     warnings: [],
@@ -68,12 +68,12 @@ test("adoptImportAsDraft writes draft files before persisting imported override 
       restartPolicy: "unless-stopped",
       networkMode: "bridge",
       envKeys: ["PUID", "PGID", "TZ"],
-      stackDir: "/srv/stackarr/stacks/trailarr",
-      composePath: "/srv/stackarr/stacks/trailarr/compose.yml",
-      envPath: "/srv/stackarr/stacks/trailarr/.env",
-      envExamplePath: "/srv/stackarr/stacks/trailarr/.env.example",
-      reviewSummaryPath: "/srv/stackarr/stacks/trailarr/import-summary.json",
-      reviewNotesPath: "/srv/stackarr/stacks/trailarr/IMPORT-REVIEW.md"
+      stackDir: "/srv/keelarr/stacks/trailarr",
+      composePath: "/srv/keelarr/stacks/trailarr/compose.yml",
+      envPath: "/srv/keelarr/stacks/trailarr/.env",
+      envExamplePath: "/srv/keelarr/stacks/trailarr/.env.example",
+      reviewSummaryPath: "/srv/keelarr/stacks/trailarr/import-summary.json",
+      reviewNotesPath: "/srv/keelarr/stacks/trailarr/IMPORT-REVIEW.md"
     }),
     loadSettingsImpl: async () => baseSettings,
     normalizeSettingsImpl: (input) => input,

@@ -51,7 +51,7 @@ test("renders .env with resolved values and .env.example with keys only", () => 
 });
 
 test("writeStacks keeps host values out of the generated .env.example", async () => {
-  const stackRoot = await mkdtemp(path.join(os.tmpdir(), "stackarr-env-"));
+  const stackRoot = await mkdtemp(path.join(os.tmpdir(), "keelarr-env-"));
   const settings = normalizeSettings({
     stackRoot,
     configRoot: "/share/Container",
@@ -75,7 +75,7 @@ test("writeStacks keeps host values out of the generated .env.example", async ()
 });
 
 test("writes import review artifacts beside a managed draft", async () => {
-  const stackDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-draft-"));
+  const stackDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-draft-"));
   const result = await writeDraftFiles({
     serviceId: "trailarr",
     stackDir,
@@ -101,7 +101,7 @@ test("writes import review artifacts beside a managed draft", async () => {
 });
 
 test("writeStacks preserves imported draft files instead of regenerating catalog defaults", async () => {
-  const stackDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-imported-stack-"));
+  const stackDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-imported-stack-"));
   const composePath = path.join(stackDir, "compose.yml");
   const envPath = path.join(stackDir, ".env");
   const envExamplePath = path.join(stackDir, ".env.example");
@@ -157,7 +157,7 @@ test("writeStacks preserves imported draft files instead of regenerating catalog
 });
 
 test("writeStacks preserves files for a service that has already been cut over", async () => {
-  const stackDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-cutover-stack-"));
+  const stackDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-cutover-stack-"));
   const composePath = path.join(stackDir, "compose.yml");
   const envPath = path.join(stackDir, ".env");
   const envExamplePath = path.join(stackDir, ".env.example");
@@ -211,9 +211,9 @@ test("catalog stacks join one shared network so the apps can reach each other", 
 
   for (const id of ["prowlarr", "radarr"]) {
     const spec = buildComposeSpec(settings, settings.services[id]);
-    assert.deepEqual(spec.services[id].networks, ["stackarr"]);
+    assert.deepEqual(spec.services[id].networks, ["keelarr"]);
     // External so no single stack owns it and `compose down` cannot take the
     // network away from the others.
-    assert.deepEqual(spec.networks, { stackarr: { external: true, name: "stackarr" } });
+    assert.deepEqual(spec.networks, { keelarr: { external: true, name: "keelarr" } });
   }
 });

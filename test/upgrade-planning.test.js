@@ -10,7 +10,7 @@ import { createLogger } from "../src/lib/logger.js";
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-upgrade-planning-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-upgrade-planning-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -52,7 +52,7 @@ test("only services known to need an update are planned", () => {
   assert.deepEqual(plan.upgradable.map((service) => service.id), ["sonarr"]);
   assert.deepEqual(plan.current.map((service) => service.id), ["radarr"]);
   // Unknown and never-checked are the same situation from the operator's side:
-  // Stackarr cannot say, so it does not act.
+  // Keelarr cannot say, so it does not act.
   assert.deepEqual(plan.unchecked.map((service) => service.id), ["trailarr", "lidarr"]);
 });
 

@@ -1,34 +1,34 @@
 services:
-  stackarr:
-    # A published multi-arch image, so running Stackarr needs neither a
+  keelarr:
+    # A published multi-arch image, so running Keelarr needs neither a
     # checkout nor a toolchain — `docker compose up -d` from this file alone is
     # the whole install, on amd64 or arm64.
     #
     # To run your own code instead, add the build override alongside it:
     #   docker compose -f compose.example.yml -f compose.build.yml up -d --build
-    image: ghcr.io/tx-joshg/stackarr:${STACKARR_VERSION:-latest}
-    container_name: stackarr
+    image: ghcr.io/tx-joshg/keelarr:${KEELARR_VERSION:-latest}
+    container_name: keelarr
     restart: unless-stopped
     ports:
-      - "${STACKARR_PORT:-4687}:4687"
+      - "${KEELARR_PORT:-4687}:4687"
     environment:
-      STACKARR_PORT: "4687"
-      STACKARR_DATA_DIR: /app/data
-      STACKARR_LOG_LEVEL: ${STACKARR_LOG_LEVEL:-info}
+      KEELARR_PORT: "4687"
+      KEELARR_DATA_DIR: /app/data
+      KEELARR_LOG_LEVEL: ${KEELARR_LOG_LEVEL:-info}
       # The same values as the mounts below, so the controller knows which host
       # roots it was given rather than guessing at a filesystem it cannot see.
       # Without these, host detection suggests generic defaults like /opt and
       # /srv — paths this file does not mount, and which Docker Desktop refuses
       # outright, so the first save reported four roots as unreachable.
-      HOST_STACK_ROOT: ${HOST_STACK_ROOT:-${HOME:-/srv}/stackarr/stacks}
-      HOST_CONFIG_ROOT: ${HOST_CONFIG_ROOT:-${HOME:-/srv}/stackarr/config}
-      HOST_MEDIA_ROOT: ${HOST_MEDIA_ROOT:-${HOME:-/srv}/stackarr/media}
-      HOST_DOWNLOADS_ROOT: ${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/stackarr/media/downloads}
-      HOST_PLEX_LOGS_ROOT: ${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/stackarr/plex-logs}
+      HOST_STACK_ROOT: ${HOST_STACK_ROOT:-${HOME:-/srv}/keelarr/stacks}
+      HOST_CONFIG_ROOT: ${HOST_CONFIG_ROOT:-${HOME:-/srv}/keelarr/config}
+      HOST_MEDIA_ROOT: ${HOST_MEDIA_ROOT:-${HOME:-/srv}/keelarr/media}
+      HOST_DOWNLOADS_ROOT: ${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/keelarr/media/downloads}
+      HOST_PLEX_LOGS_ROOT: ${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/keelarr/plex-logs}
     volumes:
-      - ${STACKARR_DATA_DIR:-../data}:/app/data
+      - ${KEELARR_DATA_DIR:-../data}:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
-      # This directory, so Stackarr can keep the .env below in step with the
+      # This directory, so Keelarr can keep the .env below in step with the
       # paths chosen in its own settings. Relative, so it resolves against
       # wherever this file lives rather than a path guessed from the outside.
       - ./:/app/deploy-host
@@ -43,19 +43,19 @@ services:
       # mounts from a short list of shared locations, and a home directory is
       # always on it while /srv and /opt are not. They are placeholders — the
       # wizard replaces them with this machine's real paths.
-      - ${HOST_STACK_ROOT:-${HOME:-/srv}/stackarr/stacks}:${HOST_STACK_ROOT:-${HOME:-/srv}/stackarr/stacks}
-      - ${HOST_CONFIG_ROOT:-${HOME:-/srv}/stackarr/config}:${HOST_CONFIG_ROOT:-${HOME:-/srv}/stackarr/config}
-      - ${HOST_MEDIA_ROOT:-${HOME:-/srv}/stackarr/media}:${HOST_MEDIA_ROOT:-${HOME:-/srv}/stackarr/media}
-      - ${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/stackarr/media/downloads}:${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/stackarr/media/downloads}
+      - ${HOST_STACK_ROOT:-${HOME:-/srv}/keelarr/stacks}:${HOST_STACK_ROOT:-${HOME:-/srv}/keelarr/stacks}
+      - ${HOST_CONFIG_ROOT:-${HOME:-/srv}/keelarr/config}:${HOST_CONFIG_ROOT:-${HOME:-/srv}/keelarr/config}
+      - ${HOST_MEDIA_ROOT:-${HOME:-/srv}/keelarr/media}:${HOST_MEDIA_ROOT:-${HOME:-/srv}/keelarr/media}
+      - ${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/keelarr/media/downloads}:${HOST_DOWNLOADS_ROOT:-${HOME:-/srv}/keelarr/media/downloads}
       # Only used by Tautulli. Harmless at the default; point it at your Plex
       # log directory to enable Plex log health.
-      - ${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/stackarr/plex-logs}:${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/stackarr/plex-logs}:ro
+      - ${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/keelarr/plex-logs}:${HOST_PLEX_LOGS_ROOT:-${HOME:-/srv}/keelarr/plex-logs}:ro
     # No networks are declared here on purpose. The controller creates the
-    # shared `stackarr` network and joins itself to it at startup, so a brand
+    # shared `keelarr` network and joins itself to it at startup, so a brand
     # new host needs nothing set up beforehand.
     #
     # Declaring it here instead does not work: QNAP's Container Station fails
     # to create a Compose-owned bridge network ("dnsmasq add fail"), while a
     # plain `docker network create` succeeds — which is the call the controller
     # makes. Declaring it `external` would be worse still, since the very first
-    # `compose up` on a clean host would fail before Stackarr ever runs.
+    # `compose up` on a clean host would fail before Keelarr ever runs.

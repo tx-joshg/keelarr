@@ -1,7 +1,7 @@
 /**
  * Things only the operator can supply, and what each one breaks.
  *
- * Stackarr configures everything that is not a secret — download clients, root
+ * Keelarr configures everything that is not a secret — download clients, root
  * folders, Prowlarr applications, categories, library folders. What is left is
  * credentials it cannot hold: an indexer key, a Usenet account, a Plex token.
  *

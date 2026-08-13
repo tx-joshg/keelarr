@@ -69,8 +69,8 @@ test("resolveStateSettings applies the best detected host profile on first run",
       adapterType: "generic-docker",
       hostLabel: "Docker Host",
       dockerBin: "docker",
-      stackRoot: "/opt/stackarr/stacks",
-      configRoot: "/srv/stackarr/config",
+      stackRoot: "/opt/keelarr/stacks",
+      configRoot: "/srv/keelarr/config",
       mediaRoot: "/srv/media",
       downloadsRoot: "/srv/media/downloads",
       plexLogsRoot: "",
@@ -206,8 +206,8 @@ test("prepareSetup rejects invalid Docker validation before saving settings", as
         adapterId: "generic-docker",
         suggestedSettings: {
           dockerBin: "docker",
-          stackRoot: "/srv/stackarr/stacks",
-          configRoot: "/srv/stackarr/config",
+          stackRoot: "/srv/keelarr/stacks",
+          configRoot: "/srv/keelarr/config",
           mediaRoot: "/srv/media",
           downloadsRoot: "/srv/media/downloads",
           hostLabel: "Generic Docker Host"
@@ -232,11 +232,11 @@ test("prepareSetup rejects invalid Docker validation before saving settings", as
     service.prepareSetup({
       adapterType: "generic-docker",
       hostLabel: "Broken Docker Host",
-      projectName: "Stackarr",
+      projectName: "Keelarr",
       hostUrl: "http://nas.local",
       dockerBin: "docker",
-      stackRoot: "/srv/stackarr/stacks",
-      configRoot: "/srv/stackarr/config",
+      stackRoot: "/srv/keelarr/stacks",
+      configRoot: "/srv/keelarr/config",
       mediaRoot: "/srv/media",
       downloadsRoot: "/srv/media/downloads",
       plexLogsRoot: "",
@@ -267,8 +267,8 @@ test("prepareSetup preserves existing service overrides when saving host setting
           adapterType: "generic-docker",
           hostLabel: "Generic Docker Host",
           dockerBin: "docker",
-          stackRoot: "/srv/stackarr/stacks",
-          configRoot: "/srv/stackarr/config",
+          stackRoot: "/srv/keelarr/stacks",
+          configRoot: "/srv/keelarr/config",
           mediaRoot: "/srv/media",
           downloadsRoot: "/srv/media/downloads",
           plexLogsRoot: ""
@@ -278,12 +278,12 @@ test("prepareSetup preserves existing service overrides when saving host setting
     }),
     loadSettingsImpl: async () => ({
       initialized: true,
-      projectName: "Stackarr",
+      projectName: "Keelarr",
       adapterType: "generic-docker",
       hostLabel: "Generic Docker Host",
       dockerBin: "docker",
-      stackRoot: "/srv/stackarr/stacks",
-      configRoot: "/srv/stackarr/config",
+      stackRoot: "/srv/keelarr/stacks",
+      configRoot: "/srv/keelarr/config",
       mediaRoot: "/srv/media",
       downloadsRoot: "/srv/media/downloads",
       plexLogsRoot: "",
@@ -305,8 +305,8 @@ test("prepareSetup preserves existing service overrides when saving host setting
           sourceContainerId: "trailarrdemo",
           sourceContainerName: "trailarr",
           sourceImage: "nandyalu/trailarr:custom",
-          reviewSummaryPath: "/srv/stackarr/stacks/trailarr/import-summary.json",
-          reviewNotesPath: "/srv/stackarr/stacks/trailarr/IMPORT-REVIEW.md",
+          reviewSummaryPath: "/srv/keelarr/stacks/trailarr/import-summary.json",
+          reviewNotesPath: "/srv/keelarr/stacks/trailarr/IMPORT-REVIEW.md",
           importedAt: "2026-08-04T12:00:00.000Z"
         }
       },
@@ -333,7 +333,7 @@ test("prepareSetup preserves existing service overrides when saving host setting
 
   assert.equal(savedPayload.hostUrl, "http://nas.local");
   assert.equal(savedPayload.serviceOverrides.trailarr.mode, "imported-draft");
-  assert.equal(savedPayload.serviceOverrides.trailarr.reviewSummaryPath, "/srv/stackarr/stacks/trailarr/import-summary.json");
+  assert.equal(savedPayload.serviceOverrides.trailarr.reviewSummaryPath, "/srv/keelarr/stacks/trailarr/import-summary.json");
 });
 
 test("saveProfile persists validated settings without generating stacks", async () => {
@@ -360,7 +360,7 @@ test("saveProfile persists validated settings without generating stacks", async 
     }),
     loadSettingsImpl: async () => ({
       initialized: false,
-      projectName: "Stackarr",
+      projectName: "Keelarr",
       hostUrl: "http://nas.local",
       selectedServiceIds: ["trailarr"]
     }),
@@ -414,7 +414,7 @@ test("detectHost applies preferred adapter suggestions over stale saved host pat
       initialized: true,
       adapterType: "generic-docker",
       hostLabel: "Broken Docker Host",
-      dockerBin: "/definitely-not-stackarr/docker",
+      dockerBin: "/definitely-not-keelarr/docker",
       stackRoot: "/tmp/old-stacks",
       configRoot: "/tmp/old-config",
       mediaRoot: "/tmp/old-media",
@@ -447,7 +447,7 @@ test("detectHost applies preferred adapter suggestions over stale saved host pat
     preferredAdapterId: "qnap",
     adapterType: "generic-docker",
     hostLabel: "Broken Docker Host",
-    dockerBin: "/definitely-not-stackarr/docker",
+    dockerBin: "/definitely-not-keelarr/docker",
     stackRoot: "/tmp/old-stacks",
     configRoot: "/tmp/old-config",
     mediaRoot: "/tmp/old-media",

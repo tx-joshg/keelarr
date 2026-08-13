@@ -34,8 +34,8 @@ export function resolveGenericDockerSuggestedPaths(settings = {}, options = {}) 
   const mediaRoot = pick("mediaRoot", "/srv/media");
 
   return {
-    stackRoot: pick("stackRoot", "/opt/stackarr/stacks"),
-    configRoot: pick("configRoot", "/srv/stackarr/config"),
+    stackRoot: pick("stackRoot", "/opt/keelarr/stacks"),
+    configRoot: pick("configRoot", "/srv/keelarr/config"),
     mediaRoot,
     downloadsRoot: pick("downloadsRoot", `${mediaRoot}/downloads`),
     // Only Tautulli uses this, so an unset value is a normal end state rather

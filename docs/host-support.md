@@ -1,18 +1,18 @@
-# Stackarr Host Support
+# Keelarr Host Support
 
-This document defines how Stackarr thinks about hosts.
+This document defines how Keelarr thinks about hosts.
 
 The goal is portability without pretending every environment is identical.
 
 ## Core Principle
 
-Stackarr is host-agnostic at the core and adapter-driven at the edge.
+Keelarr is host-agnostic at the core and adapter-driven at the edge.
 
 The core product should target a Docker Compose capability model, not a specific NAS vendor.
 
 ## Host Capability Contract
 
-To qualify for managed mode, a host must allow Stackarr to:
+To qualify for managed mode, a host must allow Keelarr to:
 
 - execute Docker commands
 - execute Compose commands
@@ -20,7 +20,7 @@ To qualify for managed mode, a host must allow Stackarr to:
 - read and write config directories
 - reach app URLs for health checks
 
-If a host satisfies those capabilities, Stackarr should treat it as managed.
+If a host satisfies those capabilities, Keelarr should treat it as managed.
 
 ## Support Tiers By Host Type
 
@@ -39,7 +39,7 @@ Examples:
 
 Managed capabilities:
 
-- full Stackarr flow
+- full Keelarr flow
 - new-stack install
 - import existing Docker
 - update and upgrade actions
@@ -48,7 +48,7 @@ Managed capabilities:
 
 Managed capabilities:
 
-- full Stackarr flow
+- full Keelarr flow
 - QNAP-specific path and Docker binary detection
 - import existing containers
 
@@ -61,7 +61,7 @@ Adapter expectations:
 
 Managed capabilities:
 
-- full Stackarr flow
+- full Keelarr flow
 - Synology-oriented default path detection
 - import existing containers and Compose folders
 
@@ -79,7 +79,7 @@ Examples:
 - custom appliance Linux installs
 - vendor-modified systems with Docker access but unusual path rules
 
-Stackarr behavior:
+Keelarr behavior:
 
 - allow scan and preview
 - allow staged adoption
@@ -93,9 +93,9 @@ Examples:
 
 - native Windows services
 - native Linux services without Docker
-- mixed hosts where Stackarr cannot safely own the lifecycle
+- mixed hosts where Keelarr cannot safely own the lifecycle
 
-Stackarr behavior:
+Keelarr behavior:
 
 - allow external links
 - allow health checks
@@ -175,7 +175,7 @@ Improve onboarding on Synology without creating a separate product fork.
 
 ### Special Concerns
 
-- Compose stacks may already exist outside of Stackarr conventions
+- Compose stacks may already exist outside of Keelarr conventions
 - shared folders may differ between users and devices
 
 ## Custom Host Adapter

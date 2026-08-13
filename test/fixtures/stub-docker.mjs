@@ -6,7 +6,7 @@
  * State lives in the JSON file named by STUB_DOCKER_STATE so each spawned
  * invocation sees the mutations made by the previous one, exactly as the real
  * CLI would. Every invocation is appended to `log` so tests can assert the
- * exact argv sequence Stackarr produced.
+ * exact argv sequence Keelarr produced.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 

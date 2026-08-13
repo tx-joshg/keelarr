@@ -12,12 +12,12 @@ import { SERVICE_ORDER, buildServicesFromSelection } from "./service-catalog.js"
 
 export const defaultSettings = {
   initialized: false,
-  projectName: "Stackarr",
+  projectName: "Keelarr",
   adapterType: "generic-docker",
   hostLabel: "Docker Host",
   dockerBin: "docker",
-  stackRoot: "/opt/stackarr/stacks",
-  configRoot: "/srv/stackarr/config",
+  stackRoot: "/opt/keelarr/stacks",
+  configRoot: "/srv/keelarr/config",
   mediaRoot: "/srv/media",
   downloadsRoot: "/srv/media/downloads",
   plexLogsRoot: "",

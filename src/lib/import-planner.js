@@ -368,9 +368,9 @@ export async function buildImportPreview(settings, item, options = {}) {
       },
       warnings: item.issues || [],
       recommendedSteps: [
-        "Leave this container outside Stackarr management for now.",
+        "Leave this container outside Keelarr management for now.",
         "Use the scan results to document its mounts, ports, and environment.",
-        "Add support to Stackarr later only if this app belongs in the Arr-focused scope."
+        "Add support to Keelarr later only if this app belongs in the Arr-focused scope."
       ]
     };
   }
@@ -420,7 +420,7 @@ export async function buildImportPreview(settings, item, options = {}) {
   if (composeExists || envExists) {
     warnings.push({
       level: "info",
-      message: "Stackarr draft files already exist for this service and will be overwritten by a new managed draft."
+      message: "Keelarr draft files already exist for this service and will be overwritten by a new managed draft."
     });
   }
 

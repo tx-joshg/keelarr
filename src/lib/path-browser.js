@@ -1,7 +1,7 @@
 import path from "node:path";
 import { readdir } from "node:fs/promises";
 
-import { StackarrError } from "./errors.js";
+import { KeelarrError } from "./errors.js";
 
 function normalizeDirectoryPath(inputPath = "/") {
   const trimmed = String(inputPath || "").trim();
@@ -17,7 +17,7 @@ export async function listDirectories(inputPath = "/") {
       withFileTypes: true
     });
   } catch (error) {
-    throw new StackarrError(`Unable to browse ${targetPath}.`, {
+    throw new KeelarrError(`Unable to browse ${targetPath}.`, {
       statusCode: error.code === "ENOENT" ? 404 : 400,
       details: {
         code: error.code || "BROWSE_FAILED",

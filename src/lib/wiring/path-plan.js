@@ -50,7 +50,7 @@ export function planRootFolder(mounts, serviceId, mediaRoot) {
   const subfolder = MEDIA_SUBFOLDER[serviceId];
 
   if (!subfolder) {
-    return { ok: false, reason: `Stackarr does not manage a library folder for ${serviceId}.` };
+    return { ok: false, reason: `Keelarr does not manage a library folder for ${serviceId}.` };
   }
 
   const mountPath = hostPathToContainer(mounts, mediaRoot);

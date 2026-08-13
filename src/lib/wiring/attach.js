@@ -7,9 +7,9 @@ const DEFAULT_BRIDGE_NETWORK = "bridge";
  * Works out which networks the controller should join to see its own services.
  *
  * The alternative — telling the operator to move their apps onto a shared
- * network so Stackarr can watch them — asks them to rearrange working
+ * network so Keelarr can watch them — asks them to rearrange working
  * infrastructure to suit the monitoring. The controller is the under-connected
- * one, and it is the only container Stackarr owns, so it is the one that moves.
+ * one, and it is the only container Keelarr owns, so it is the one that moves.
  *
  * Pure: returns the plan, attaches nothing.
  */
@@ -74,7 +74,7 @@ export function planControllerAttachments(controller, endpoints, sharedNetwork =
  */
 export async function attachController(settings, plan, options = {}) {
   const run = options.runCommandImpl || runCommand;
-  const containerName = options.containerName || "stackarr";
+  const containerName = options.containerName || "keelarr";
   const attached = [];
   const skipped = [];
 
@@ -101,8 +101,8 @@ export async function attachController(settings, plan, options = {}) {
       network: entry.network,
       services: entry.services,
       reason: /pool overlaps|address space/i.test(message)
-        ? `The ${entry.network} network overlaps an address range Stackarr is already using, so it cannot join. ${entry.services.join(" and ")} will be reported by container health only.`
-        : `Stackarr could not join ${entry.network}: ${message.trim() || "the daemon refused the request."}`
+        ? `The ${entry.network} network overlaps an address range Keelarr is already using, so it cannot join. ${entry.services.join(" and ")} will be reported by container health only.`
+        : `Keelarr could not join ${entry.network}: ${message.trim() || "the daemon refused the request."}`
     });
   }
 

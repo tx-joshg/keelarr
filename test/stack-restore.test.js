@@ -8,7 +8,7 @@ import { restoreArchivedStack, writeStacks } from "../src/lib/generator.js";
 import { normalizeSettings } from "../src/lib/store.js";
 
 /**
- * The real compose file Stackarr wrote when it imported Radarr from a running
+ * The real compose file Keelarr wrote when it imported Radarr from a running
  * container. Reproduced verbatim because its exact shape is the point: the
  * config lives in an external named volume, which no catalog template would
  * ever produce.
@@ -30,7 +30,7 @@ volumes:
 `;
 
 async function workspace(t) {
-  const root = await mkdtemp(path.join(tmpdir(), "stackarr-restore-"));
+  const root = await mkdtemp(path.join(tmpdir(), "keelarr-restore-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const settings = normalizeSettings({

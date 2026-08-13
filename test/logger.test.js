@@ -7,8 +7,8 @@ import path from "node:path";
 import { createLogger } from "../src/lib/logger.js";
 
 test("logger writes jsonl records and redacts sensitive fields", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-logger-"));
-  const filePath = path.join(tempDir, "stackarr.log");
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-logger-"));
+  const filePath = path.join(tempDir, "keelarr.log");
   const logger = createLogger({
     filePath,
     consoleImpl: {
@@ -49,8 +49,8 @@ function silentLogger(filePath, options = {}) {
 }
 
 test("the log rolls over instead of growing without limit", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-logrotate-"));
-  const filePath = path.join(tempDir, "stackarr.log");
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-logrotate-"));
+  const filePath = path.join(tempDir, "keelarr.log");
   const logger = silentLogger(filePath, { maxBytes: 2_000, keep: 2 });
 
   for (let index = 0; index < 200; index += 1) {
@@ -76,8 +76,8 @@ test("the log rolls over instead of growing without limit", async () => {
 });
 
 test("rotation counts a log that was already there before this process started", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-logresume-"));
-  const filePath = path.join(tempDir, "stackarr.log");
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-logresume-"));
+  const filePath = path.join(tempDir, "keelarr.log");
 
   // Stands in for a restart onto a log that is already at the cap. Counting
   // only this process's own writes would let it grow to twice the limit.
@@ -95,8 +95,8 @@ test("rotation counts a log that was already there before this process started",
 });
 
 test("a cap of zero keeps the old unbounded behaviour", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "stackarr-lognorotate-"));
-  const filePath = path.join(tempDir, "stackarr.log");
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "keelarr-lognorotate-"));
+  const filePath = path.join(tempDir, "keelarr.log");
   const logger = silentLogger(filePath, { maxBytes: 0 });
 
   for (let index = 0; index < 50; index += 1) {

@@ -15,7 +15,7 @@ import {
 } from "./lib/auth.js";
 import { readAuth, writeAuth } from "./lib/store.js";
 
-class StackarrHttpError extends Error {
+class KeelarrHttpError extends Error {
   constructor(message, statusCode, details = null) {
     super(message);
     this.statusCode = statusCode;
@@ -43,7 +43,7 @@ function requestContext(request) {
 
 export function createHttpApp({
   publicDir,
-  stackarrApp,
+  keelarrApp,
   logger = null,
   readAuthImpl = readAuth,
   writeAuthImpl = writeAuth,
@@ -130,13 +130,13 @@ export function createHttpApp({
       if (existing?.hash) {
         // Otherwise anyone reaching the port could replace the password of a
         // controller that already has one.
-        throw new StackarrHttpError("A password is already set. Sign in instead.", 409);
+        throw new KeelarrHttpError("A password is already set. Sign in instead.", 409);
       }
 
       const password = String(request.body?.password || "");
 
       if (password.length < MIN_PASSWORD_LENGTH) {
-        throw new StackarrHttpError(`Choose a password of at least ${MIN_PASSWORD_LENGTH} characters.`, 400);
+        throw new KeelarrHttpError(`Choose a password of at least ${MIN_PASSWORD_LENGTH} characters.`, 400);
       }
 
       const record = await hashPassword(password);
@@ -155,13 +155,13 @@ export function createHttpApp({
       const record = await readAuthImpl();
 
       if (!record?.hash) {
-        throw new StackarrHttpError("No password has been set yet.", 409);
+        throw new KeelarrHttpError("No password has been set yet.", 409);
       }
 
       if (!(await verifyPassword(String(request.body?.password || ""), record))) {
         // Slow enough to make guessing tedious, short enough not to look broken.
         await new Promise((resolve) => setTimeout(resolve, 750));
-        throw new StackarrHttpError("That password is not correct.", 401);
+        throw new KeelarrHttpError("That password is not correct.", 401);
       }
 
       response.setHeader("Set-Cookie", buildSessionCookie(createSessionToken(record.secret)));
@@ -179,13 +179,13 @@ export function createHttpApp({
   /**
    * Everything else under /api is gated.
    *
-   * Stackarr drives the Docker socket, so an unauthenticated caller here could
+   * Keelarr drives the Docker socket, so an unauthenticated caller here could
    * start, stop, and delete containers on the host. The static files are left
    * open because the page itself has to load in order to show a login form.
    */
   app.use("/api", async (request, response, next) => {
     if (!requireAuth) {
-      request.stackarrAuthenticated = true;
+      request.keelarrAuthenticated = true;
       next();
       return;
     }
@@ -194,7 +194,7 @@ export function createHttpApp({
       const record = await readAuthImpl();
 
       if (!record?.hash) {
-        throw new StackarrHttpError("Stackarr has no password set yet. Open the web interface to choose one.", 401, {
+        throw new KeelarrHttpError("Keelarr has no password set yet. Open the web interface to choose one.", 401, {
           configured: false
         });
       }
@@ -202,10 +202,10 @@ export function createHttpApp({
       const token = readCookie(request.headers.cookie, SESSION_COOKIE);
 
       if (!verifySessionToken(token, record.secret)) {
-        throw new StackarrHttpError("Sign in to continue.", 401, { configured: true });
+        throw new KeelarrHttpError("Sign in to continue.", 401, { configured: true });
       }
 
-      request.stackarrAuthenticated = true;
+      request.keelarrAuthenticated = true;
       next();
     } catch (error) {
       next(error);
@@ -216,7 +216,7 @@ export function createHttpApp({
 
   app.get("/api/state", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.buildState(requestContext(request)));
+      response.json(await keelarrApp.buildState(requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -226,7 +226,7 @@ export function createHttpApp({
     try {
       response.json({
         ok: true,
-        ...(await stackarrApp.detectHost(null, requestContext(request)))
+        ...(await keelarrApp.detectHost(null, requestContext(request)))
       });
     } catch (error) {
       next(error);
@@ -237,7 +237,7 @@ export function createHttpApp({
     try {
       response.json({
         ok: true,
-        ...(await stackarrApp.detectHost(request.body || {}, requestContext(request)))
+        ...(await keelarrApp.detectHost(request.body || {}, requestContext(request)))
       });
     } catch (error) {
       next(error);
@@ -246,7 +246,7 @@ export function createHttpApp({
 
   app.post("/api/settings", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.saveSettings(request.body || {}, requestContext(request)));
+      response.json(await keelarrApp.saveSettings(request.body || {}, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -254,7 +254,7 @@ export function createHttpApp({
 
   app.post("/api/setup", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.setup(request.body || {}, requestContext(request)));
+      response.json(await keelarrApp.setup(request.body || {}, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -262,7 +262,7 @@ export function createHttpApp({
 
   app.get("/api/host/browse", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.browseDirectories(request.query.path || "/", requestContext(request)));
+      response.json(await keelarrApp.browseDirectories(request.query.path || "/", requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -270,7 +270,7 @@ export function createHttpApp({
 
   app.get("/api/import/scan", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.scanImportInventory(requestContext(request)));
+      response.json(await keelarrApp.scanImportInventory(requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -278,7 +278,7 @@ export function createHttpApp({
 
   app.get("/api/import/:containerId/preview", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.previewImport(request.params.containerId, requestContext(request)));
+      response.json(await keelarrApp.previewImport(request.params.containerId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -286,7 +286,7 @@ export function createHttpApp({
 
   app.post("/api/import/:containerId/adopt-draft", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.adoptImportAsDraft(request.params.containerId, requestContext(request)));
+      response.json(await keelarrApp.adoptImportAsDraft(request.params.containerId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -296,7 +296,7 @@ export function createHttpApp({
     try {
       // 202: the job is registered, not finished. Poll /api/jobs/:jobId.
       response.status(202).json(
-        await stackarrApp.startCutover(request.params.containerId, request.body || {}, requestContext(request))
+        await keelarrApp.startCutover(request.params.containerId, request.body || {}, requestContext(request))
       );
     } catch (error) {
       next(error);
@@ -306,7 +306,7 @@ export function createHttpApp({
   app.post("/api/services/:serviceId/revert-cutover", async (request, response, next) => {
     try {
       response.status(202).json(
-        await stackarrApp.startCutoverRevert(request.params.serviceId, request.body || {}, requestContext(request))
+        await keelarrApp.startCutoverRevert(request.params.serviceId, request.body || {}, requestContext(request))
       );
     } catch (error) {
       next(error);
@@ -316,7 +316,7 @@ export function createHttpApp({
   app.post("/api/services/:serviceId/rollback", async (request, response, next) => {
     try {
       response.status(202).json(
-        await stackarrApp.startRollback(request.params.serviceId, request.body || {}, requestContext(request))
+        await keelarrApp.startRollback(request.params.serviceId, request.body || {}, requestContext(request))
       );
     } catch (error) {
       next(error);
@@ -325,7 +325,7 @@ export function createHttpApp({
 
   app.get("/api/wiring/check", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.describeWiring(requestContext(request)));
+      response.json(await keelarrApp.describeWiring(requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -333,7 +333,7 @@ export function createHttpApp({
 
   app.post("/api/wiring/apply", async (request, response, next) => {
     try {
-      response.status(202).json(await stackarrApp.startWiring(request.body || {}, requestContext(request)));
+      response.status(202).json(await keelarrApp.startWiring(request.body || {}, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -341,7 +341,7 @@ export function createHttpApp({
 
   app.get("/api/services/:serviceId/removal-preview", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.describeRemoval(request.params.serviceId, requestContext(request)));
+      response.json(await keelarrApp.describeRemoval(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -350,7 +350,7 @@ export function createHttpApp({
   app.post("/api/services/:serviceId/remove", async (request, response, next) => {
     try {
       response.status(202).json(
-        await stackarrApp.startRemoval(request.params.serviceId, request.body || {}, requestContext(request))
+        await keelarrApp.startRemoval(request.params.serviceId, request.body || {}, requestContext(request))
       );
     } catch (error) {
       next(error);
@@ -359,7 +359,7 @@ export function createHttpApp({
 
   app.get("/api/jobs", async (_request, response, next) => {
     try {
-      response.json(await stackarrApp.listJobs());
+      response.json(await keelarrApp.listJobs());
     } catch (error) {
       next(error);
     }
@@ -367,7 +367,7 @@ export function createHttpApp({
 
   app.get("/api/jobs/:jobId", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.getJob(request.params.jobId));
+      response.json(await keelarrApp.getJob(request.params.jobId));
     } catch (error) {
       next(error);
     }
@@ -375,7 +375,7 @@ export function createHttpApp({
 
   app.post("/api/demo/reset", async (_request, response, next) => {
     try {
-      if (typeof stackarrApp.resetDemo !== "function") {
+      if (typeof keelarrApp.resetDemo !== "function") {
         response.status(404).json({
           ok: false,
           error: "Demo mode is not enabled."
@@ -383,7 +383,7 @@ export function createHttpApp({
         return;
       }
 
-      response.json(await stackarrApp.resetDemo());
+      response.json(await keelarrApp.resetDemo());
     } catch (error) {
       next(error);
     }
@@ -391,7 +391,7 @@ export function createHttpApp({
 
   app.post("/api/services/:serviceId/generate", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.generateServiceFiles(request.params.serviceId, requestContext(request)));
+      response.json(await keelarrApp.generateServiceFiles(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -399,7 +399,7 @@ export function createHttpApp({
 
   app.post("/api/services/:serviceId/install", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.installManagedService(request.params.serviceId, requestContext(request)));
+      response.json(await keelarrApp.installManagedService(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -407,7 +407,7 @@ export function createHttpApp({
 
   app.post("/api/services/:serviceId/restart", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.restartManagedService(request.params.serviceId, requestContext(request)));
+      response.json(await keelarrApp.restartManagedService(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -415,7 +415,7 @@ export function createHttpApp({
 
   app.post("/api/services/:serviceId/check-update", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.checkServiceUpdate(request.params.serviceId, requestContext(request)));
+      response.json(await keelarrApp.checkServiceUpdate(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -423,7 +423,7 @@ export function createHttpApp({
 
   app.post("/api/services/:serviceId/upgrade", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.upgradeManagedService(request.params.serviceId, requestContext(request)));
+      response.json(await keelarrApp.upgradeManagedService(request.params.serviceId, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -431,7 +431,7 @@ export function createHttpApp({
 
   app.post("/api/services/check-all", async (request, response, next) => {
     try {
-      response.json(await stackarrApp.checkAllUpdates(requestContext(request)));
+      response.json(await keelarrApp.checkAllUpdates(requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -439,7 +439,7 @@ export function createHttpApp({
 
   app.post("/api/services/upgrade-all", async (request, response, next) => {
     try {
-      response.status(202).json(await stackarrApp.upgradeAll(request.body || {}, requestContext(request)));
+      response.status(202).json(await keelarrApp.upgradeAll(request.body || {}, requestContext(request)));
     } catch (error) {
       next(error);
     }
@@ -447,12 +447,12 @@ export function createHttpApp({
 
   app.get("/demo/apps/:serviceId", async (request, response, next) => {
     try {
-      if (typeof stackarrApp.renderDemoAppPage !== "function") {
+      if (typeof keelarrApp.renderDemoAppPage !== "function") {
         response.status(404).send("Demo mode is not enabled.");
         return;
       }
 
-      const page = await stackarrApp.renderDemoAppPage(request.params.serviceId);
+      const page = await keelarrApp.renderDemoAppPage(request.params.serviceId);
       if (!page) {
         response.status(404).send("Unknown demo app.");
         return;

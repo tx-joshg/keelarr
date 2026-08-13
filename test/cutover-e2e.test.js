@@ -17,7 +17,7 @@ const stubDocker = path.join(here, "fixtures", "stub-docker.mjs");
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -45,7 +45,7 @@ const liveItem = {
  * so this exercises actual argv construction and inspect-format parsing.
  */
 async function createEnvironment(t, stateOverrides = {}, verifyOptions = { intervalMs: 5, timeoutMs: 3_000 }) {
-  const workDir = await mkdtemp(path.join(tmpdir(), "stackarr-cutover-"));
+  const workDir = await mkdtemp(path.join(tmpdir(), "keelarr-cutover-"));
   t.after(() => rm(workDir, { recursive: true, force: true }));
 
   const stackDir = path.join(workDir, "trailarr");
@@ -127,15 +127,15 @@ test("end to end: a real cutover drives docker through stop, rename, and compose
   // The replacement holds the original name; the old container survives
   // under the rollback name and was never removed.
   assert.equal(state.containers.trailarr.composeManaged, true);
-  assert.equal(state.containers["trailarr-stackarr-rollback"].status, "exited");
-  assert.equal(state.containers["trailarr-stackarr-rollback"].imageId, "sha256:old-image");
+  assert.equal(state.containers["trailarr-keelarr-rollback"].status, "exited");
+  assert.equal(state.containers["trailarr-keelarr-rollback"].imageId, "sha256:old-image");
 
   const commands = state.log.map((entry) => entry.split(" ")[0]);
   assert.deepEqual(
     commands.filter((name) => ["stop", "rename", "compose"].includes(name)),
     ["stop", "rename", "compose"]
   );
-  assert.ok(state.log.some((entry) => entry === "rename trailarr trailarr-stackarr-rollback"));
+  assert.ok(state.log.some((entry) => entry === "rename trailarr trailarr-keelarr-rollback"));
   assert.ok(state.log.some((entry) => entry.startsWith("compose -f") && entry.endsWith("up -d")));
   assert.ok(!state.log.some((entry) => entry.startsWith("rm ")));
 
@@ -147,7 +147,7 @@ test("end to end: the backup captures the pre-cutover image before compose repla
 
   await settle(service.startCutover("c-trailarr", { confirmContainerName: "trailarr" }));
 
-  const backupsRoot = path.join(workDir, ".stackarr-backups", "trailarr");
+  const backupsRoot = path.join(workDir, ".keelarr-backups", "trailarr");
   const [stamp] = await readdir(backupsRoot);
   const rollback = JSON.parse(await readFile(path.join(backupsRoot, stamp, "rollback.json"), "utf8"));
 
@@ -166,7 +166,7 @@ test("end to end: a compose failure restores the original container under its or
   const state = await readState();
   assert.equal(state.containers.trailarr.status, "running");
   assert.equal(state.containers.trailarr.imageId, "sha256:old-image");
-  assert.equal(state.containers["trailarr-stackarr-rollback"], undefined);
+  assert.equal(state.containers["trailarr-keelarr-rollback"], undefined);
 });
 
 test("end to end: a container that comes up unhealthy is rolled back", async (t) => {
@@ -183,7 +183,7 @@ test("end to end: a container that comes up unhealthy is rolled back", async (t)
   const state = await readState();
   assert.equal(state.containers.trailarr.status, "running");
   assert.equal(state.containers.trailarr.imageId, "sha256:old-image");
-  assert.equal(state.containers["trailarr-stackarr-rollback"], undefined);
+  assert.equal(state.containers["trailarr-keelarr-rollback"], undefined);
 });
 
 test("end to end: revert puts the original container back after a successful cutover", async (t) => {
@@ -193,7 +193,7 @@ test("end to end: revert puts the original container back after a successful cut
 
   // Mirror what finalize persisted, so revert can find the rollback container.
   settings.serviceOverrides.trailarr.mode = "imported";
-  settings.serviceOverrides.trailarr.rollbackContainerName = "trailarr-stackarr-rollback";
+  settings.serviceOverrides.trailarr.rollbackContainerName = "trailarr-keelarr-rollback";
 
   const job = await settle(service.startRevert("trailarr", { confirmContainerName: "trailarr" }));
 
@@ -203,5 +203,5 @@ test("end to end: revert puts the original container back after a successful cut
   assert.equal(state.containers.trailarr.status, "running");
   assert.equal(state.containers.trailarr.imageId, "sha256:old-image");
   assert.equal(state.containers.trailarr.composeManaged, undefined);
-  assert.equal(state.containers["trailarr-stackarr-rollback"], undefined);
+  assert.equal(state.containers["trailarr-keelarr-rollback"], undefined);
 });

@@ -28,7 +28,7 @@ import {
   readUpdateState,
   writeUpdateState
 } from "../store.js";
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
 /**
@@ -119,7 +119,7 @@ export class ManagedStackService {
     const service = settings.services[serviceId];
 
     if (!service) {
-      throw new StackarrError(`Unknown or disabled service: ${serviceId}`, {
+      throw new KeelarrError(`Unknown or disabled service: ${serviceId}`, {
         statusCode: 404
       });
     }
@@ -171,7 +171,7 @@ export class ManagedStackService {
     const result = await this.ensureSharedNetwork(settings, SHARED_NETWORK, { logger });
 
     if (!result.ok) {
-      throw new StackarrError(`Unable to create the shared ${SHARED_NETWORK} network: ${result.error || "unknown error"}`, {
+      throw new KeelarrError(`Unable to create the shared ${SHARED_NETWORK} network: ${result.error || "unknown error"}`, {
         statusCode: 500
       });
     }
@@ -322,14 +322,14 @@ export class ManagedStackService {
       const service = this.requireService(settings, serviceId);
 
       if (input.confirmContainerName !== service.containerName) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `Rollback confirmation does not match. Expected the container name ${service.containerName}.`,
           { statusCode: 400 }
         );
       }
 
       if (!(await this.serviceIsDeployed(service))) {
-        throw new StackarrError(`${service.name} has no managed compose file to roll back.`, {
+        throw new KeelarrError(`${service.name} has no managed compose file to roll back.`, {
           statusCode: 409
         });
       }
@@ -337,7 +337,7 @@ export class ManagedStackService {
       const point = await this.findRollbackPoint(settings, service, { logger });
 
       if (!point) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `No previous image is recorded for ${service.name}. Rollback is only available after an upgrade or install made a backup.`,
           { statusCode: 409 }
         );
@@ -346,7 +346,7 @@ export class ManagedStackService {
       // Rolling back to an image the host no longer has would leave the
       // service unable to start, so refuse before touching the container.
       if (!(await this.imageExistsLocally(settings, point.imageRef, { logger }))) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `The previous image for ${service.name} (${point.imageRef}) is no longer present on this host.`,
           { statusCode: 409 }
         );
@@ -361,7 +361,7 @@ export class ManagedStackService {
         : null;
 
       if (input.restoreConfig && point.configSnapshot && !configMount) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `Cannot restore configuration for ${service.name}: no /config mount was found on the running container.`,
           { statusCode: 409 }
         );
@@ -393,7 +393,7 @@ export class ManagedStackService {
           // The service is down at this point. Bring it back before reporting,
           // rather than leaving it stopped on a failed restore.
           await this.generateAndDeploy(settings, service, { logger: stepLogger });
-          throw new StackarrError(`Unable to restore the saved configuration for ${service.name}: ${restored.reason}`, {
+          throw new KeelarrError(`Unable to restore the saved configuration for ${service.name}: ${restored.reason}`, {
             statusCode: 500,
             details: { serviceRestarted: true }
           });
@@ -417,7 +417,7 @@ export class ManagedStackService {
 
       if (!result.ok) {
         await this.undoPin(ctx, settings, service, currentImage, stepLogger);
-        throw new StackarrError(`Compose failed to start ${service.name} on the previous image.`, {
+        throw new KeelarrError(`Compose failed to start ${service.name} on the previous image.`, {
           statusCode: 500,
           details: { stdout: result.stdout, stderr: result.stderr, restored: true }
         });
@@ -436,7 +436,7 @@ export class ManagedStackService {
 
     if (health.outcome === HEALTH_OUTCOME.FAILED) {
       await this.undoPin(ctx, settings, service, currentImage, stepLogger);
-      throw new StackarrError(`${service.name} did not come up on the previous image. The newer image was restored.`, {
+      throw new KeelarrError(`${service.name} did not come up on the previous image. The newer image was restored.`, {
         statusCode: 500,
         details: { reason: health.reason, restored: true }
       });
@@ -561,7 +561,7 @@ export class ManagedStackService {
     if (!result.ok) {
       // Surface something actionable instead of a raw Docker manifest error.
       const explanation = explainDeployFailure(`${result.stdout}\n${result.stderr}`);
-      throw new StackarrError(
+      throw new KeelarrError(
         explanation
           ? `Could not deploy ${service.name}. ${explanation}`
           : `Could not deploy ${service.name}.`,
@@ -660,7 +660,7 @@ export class ManagedStackService {
     });
 
     if (!result.ok) {
-      throw new StackarrError(`Could not restart ${service.name}.`, {
+      throw new KeelarrError(`Could not restart ${service.name}.`, {
         statusCode: 500,
         details: { stdout: result.stdout, stderr: result.stderr }
       });
@@ -943,7 +943,7 @@ export class ManagedStackService {
           });
 
           if (!outcome.ok) {
-            throw new StackarrError(outcome.error || `Upgrade failed for ${service.name}.`, { statusCode: 500 });
+            throw new KeelarrError(outcome.error || `Upgrade failed for ${service.name}.`, { statusCode: 500 });
           }
 
           return {

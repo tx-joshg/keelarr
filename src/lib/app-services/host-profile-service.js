@@ -15,7 +15,7 @@ import {
   normalizeSettings,
   saveSettings
 } from "../store.js";
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 import { listDirectories } from "../path-browser.js";
 
@@ -238,7 +238,7 @@ export class HostProfileService {
         errors: validation.errors,
         warnings: validation.warnings
       });
-      throw new StackarrError(summarizeValidationErrors(validation), {
+      throw new KeelarrError(summarizeValidationErrors(validation), {
         statusCode: 400,
         details: {
           ...validation,
@@ -303,7 +303,7 @@ export class HostProfileService {
           pathsChanged,
           path: null,
           content,
-          message: "Stackarr could not reach its own deploy directory from inside the container, so deploy/.env was not updated. Apply these values by hand and recreate the controller."
+          message: "Keelarr could not reach its own deploy directory from inside the container, so deploy/.env was not updated. Apply these values by hand and recreate the controller."
         };
       }
 
@@ -333,7 +333,7 @@ export class HostProfileService {
 
   /** The controller's own compose labels and mounts, read from its container. */
   async readControllerDefinition(settings, logger) {
-    const inspects = await this.inspectContainers(settings, [hostname(), "stackarr"], { logger });
+    const inspects = await this.inspectContainers(settings, [hostname(), "keelarr"], { logger });
     const inspect = inspects[0] || null;
     const labels = inspect?.Config?.Labels || {};
 
@@ -366,7 +366,7 @@ export class HostProfileService {
         errors: validation.errors,
         warnings: validation.warnings
       });
-      throw new StackarrError(summarizeValidationErrors(validation), {
+      throw new KeelarrError(summarizeValidationErrors(validation), {
         statusCode: 400,
         details: {
           ...validation,

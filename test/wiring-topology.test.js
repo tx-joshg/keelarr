@@ -30,7 +30,7 @@ const DRIVERS = new Map([
   ["ombi_default", "bridge"],
   ["deploy_default", "bridge"],
   ["bridge", "bridge"],
-  ["stackarr", "bridge"]
+  ["keelarr", "bridge"]
 ]);
 
 // --- imported stack: every service landed on a different kind of network ---
@@ -79,9 +79,9 @@ function ombi() {
 
 function controller() {
   return buildEndpoint({
-    serviceId: "stackarr",
-    name: "Stackarr",
-    containerName: "stackarr",
+    serviceId: "keelarr",
+    name: "Keelarr",
+    containerName: "keelarr",
     fallbackPort: 4687,
     networkDrivers: DRIVERS,
     inspect: inspectFor({
@@ -103,8 +103,8 @@ function catalogService(serviceId, name, port) {
     fallbackPort: port,
     networkDrivers: DRIVERS,
     inspect: inspectFor({
-      networkMode: "stackarr",
-      networks: { stackarr: { IPAddress: `172.30.0.${port % 200}` } },
+      networkMode: "keelarr",
+      networks: { keelarr: { IPAddress: `172.30.0.${port % 200}` } },
       exposed: [port],
       ports: { [`${port}/tcp`]: [{ HostIp: "0.0.0.0", HostPort: String(port) }] }
     })
@@ -248,7 +248,7 @@ test("a stopped container is reported as unreachable rather than given an addres
     containerName: "prowlarr",
     fallbackPort: 9696,
     networkDrivers: DRIVERS,
-    inspect: inspectFor({ running: false, networkMode: "stackarr", networks: {}, exposed: [9696] })
+    inspect: inspectFor({ running: false, networkMode: "keelarr", networks: {}, exposed: [9696] })
   });
 
   const link = resolveLink(radarr(), stopped, { hostAddress: HOST_ADDRESS });

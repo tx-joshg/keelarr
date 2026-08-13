@@ -1,4 +1,4 @@
-# Stackarr QNAP Live Status
+# Keelarr QNAP Live Status
 
 This document records the state of the live QNAP deployment. It is the source
 of truth for what is actually running, and supersedes earlier drafts that
@@ -9,7 +9,7 @@ Compose v5.1.4).
 
 ## Current State
 
-All eight catalog services are managed by Stackarr.
+All eight catalog services are managed by Keelarr.
 
 | Service | Origin | Network | Notes |
 | --- | --- | --- | --- |
@@ -19,11 +19,11 @@ All eight catalog services are managed by Stackarr.
 | `ombi` | imported | bridge | |
 | `tautulli` | imported | bridge | read-only Plex logs mount |
 | `trailarr` | imported | project default | |
-| `prowlarr` | installed from catalog | `stackarr` | |
-| `bazarr` | installed from catalog | `stackarr` | |
+| `prowlarr` | installed from catalog | `keelarr` | |
+| `bazarr` | installed from catalog | `keelarr` | |
 
-Controller: `/share/Container/stackarr`, data in
-`/share/Container/stackarr/data`, generated stacks under
+Controller: `/share/Container/keelarr`, data in
+`/share/Container/keelarr/data`, generated stacks under
 `/share/Container/docker/<service>/`.
 
 ## How The Imports Were Recovered
@@ -31,7 +31,7 @@ Controller: `/share/Container/stackarr`, data in
 The six pre-existing services had been cut over to Compose on August 4, but
 their generated compose files were later deleted while their containers kept
 running. That left them Compose-labelled but orphaned: running, yet with no
-file for Stackarr to manage them through.
+file for Keelarr to manage them through.
 
 Because each container still carried its original Compose labels, writing a
 faithful draft back to the recorded path was enough to bring it under
@@ -57,7 +57,7 @@ labels for the same project only needs its compose file restored.
 
 Every Compose project gets its own network by default, which leaves services
 unable to reach each other. Catalog-installed services therefore join a shared
-`stackarr` network and resolve each other by container name. Stackarr creates
+`keelarr` network and resolve each other by container name. Keelarr creates
 that network on demand.
 
 Imported services keep whatever network they were already on, so their live

@@ -29,7 +29,7 @@ test("applies detection suggestions over draft settings", () => {
   const next = applyDetectionSuggestions(
     {
       dockerBin: "docker",
-      stackRoot: "/opt/stackarr/stacks"
+      stackRoot: "/opt/keelarr/stacks"
     },
     {
       suggestedSettings: {
@@ -56,8 +56,8 @@ test("resets generic host defaults when explicitly switching away from a QNAP pr
   });
 
   assert.deepEqual(suggested, {
-    stackRoot: "/opt/stackarr/stacks",
-    configRoot: "/srv/stackarr/config",
+    stackRoot: "/opt/keelarr/stacks",
+    configRoot: "/srv/keelarr/config",
     mediaRoot: "/srv/media",
     downloadsRoot: "/srv/media/downloads",
     plexLogsRoot: ""
@@ -65,7 +65,7 @@ test("resets generic host defaults when explicitly switching away from a QNAP pr
 });
 
 test("host validation fails when the saved Docker binary is invalid", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "stackarr-host-validation-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "keelarr-host-validation-"));
   const stackRoot = path.join(root, "stacks");
   const configRoot = path.join(root, "config");
   const mediaRoot = path.join(root, "media");
@@ -76,7 +76,7 @@ test("host validation fails when the saved Docker binary is invalid", async () =
   await mkdir(downloadsRoot, { recursive: true });
 
   const result = await validateGenericDockerHost({
-    dockerBin: "/definitely-not-stackarr/docker",
+    dockerBin: "/definitely-not-keelarr/docker",
     stackRoot,
     configRoot,
     mediaRoot,
@@ -96,17 +96,17 @@ test("detection suggests the roots this controller was actually mounted with", a
   const paths = resolveGenericDockerSuggestedPaths({}, {
     preferredAdapterId: "generic-docker",
     mountedRoots: {
-      stackRoot: "/Users/someone/stackarr/stacks",
-      configRoot: "/Users/someone/stackarr/config",
-      mediaRoot: "/Users/someone/stackarr/media",
-      downloadsRoot: "/Users/someone/stackarr/media/downloads"
+      stackRoot: "/Users/someone/keelarr/stacks",
+      configRoot: "/Users/someone/keelarr/config",
+      mediaRoot: "/Users/someone/keelarr/media",
+      downloadsRoot: "/Users/someone/keelarr/media/downloads"
     }
   });
 
-  assert.equal(paths.stackRoot, "/Users/someone/stackarr/stacks");
-  assert.equal(paths.configRoot, "/Users/someone/stackarr/config");
-  assert.equal(paths.mediaRoot, "/Users/someone/stackarr/media");
-  assert.equal(paths.downloadsRoot, "/Users/someone/stackarr/media/downloads");
+  assert.equal(paths.stackRoot, "/Users/someone/keelarr/stacks");
+  assert.equal(paths.configRoot, "/Users/someone/keelarr/config");
+  assert.equal(paths.mediaRoot, "/Users/someone/keelarr/media");
+  assert.equal(paths.downloadsRoot, "/Users/someone/keelarr/media/downloads");
 });
 
 test("without mounted roots the generic defaults still apply", async () => {
@@ -115,7 +115,7 @@ test("without mounted roots the generic defaults still apply", async () => {
     mountedRoots: {}
   });
 
-  assert.equal(paths.stackRoot, "/opt/stackarr/stacks");
+  assert.equal(paths.stackRoot, "/opt/keelarr/stacks");
   assert.equal(paths.mediaRoot, "/srv/media");
 });
 
@@ -123,7 +123,7 @@ test("what the operator already chose outranks the mounted root", async () => {
   // Changing a root and re-detecting must not silently revert it to the mount.
   const paths = resolveGenericDockerSuggestedPaths(
     { initialized: true, mediaRoot: "/tank/media" },
-    { mountedRoots: { mediaRoot: "/Users/someone/stackarr/media" } }
+    { mountedRoots: { mediaRoot: "/Users/someone/keelarr/media" } }
   );
 
   assert.equal(paths.mediaRoot, "/tank/media");
@@ -134,10 +134,10 @@ test("before the first save, placeholder settings lose to a real mount", async (
   // so preferring them over an actual mount is what produced a first-run
   // suggestion the controller could not see.
   const paths = resolveGenericDockerSuggestedPaths(
-    { initialized: false, mediaRoot: "/srv/media", stackRoot: "/opt/stackarr/stacks" },
-    { mountedRoots: { mediaRoot: "/Users/someone/stackarr/media", stackRoot: "/Users/someone/stackarr/stacks" } }
+    { initialized: false, mediaRoot: "/srv/media", stackRoot: "/opt/keelarr/stacks" },
+    { mountedRoots: { mediaRoot: "/Users/someone/keelarr/media", stackRoot: "/Users/someone/keelarr/stacks" } }
   );
 
-  assert.equal(paths.mediaRoot, "/Users/someone/stackarr/media");
-  assert.equal(paths.stackRoot, "/Users/someone/stackarr/stacks");
+  assert.equal(paths.mediaRoot, "/Users/someone/keelarr/media");
+  assert.equal(paths.stackRoot, "/Users/someone/keelarr/stacks");
 });

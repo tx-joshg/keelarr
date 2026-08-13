@@ -237,7 +237,7 @@ export async function buildAdoptionIssues(serviceMatch, inspect, mounts) {
   if (!serviceMatch) {
     issues.push({
       level: "warn",
-      message: "Container is not currently mapped to a Stackarr-supported service."
+      message: "Container is not currently mapped to a Keelarr-supported service."
     });
     return issues;
   }
@@ -266,7 +266,7 @@ export async function buildAdoptionIssues(serviceMatch, inspect, mounts) {
   if (inspect.Config?.Image && inspect.Config.Image !== serviceMatch.definition.defaultImage) {
     issues.push({
       level: "info",
-      message: `Image differs from the current Stackarr default: ${inspect.Config.Image}`
+      message: `Image differs from the current Keelarr default: ${inspect.Config.Image}`
     });
   }
 
@@ -498,7 +498,7 @@ export function shouldIncludeInventoryItem(item) {
     return false;
   }
 
-  if (item.containerName === "stackarr") {
+  if (item.containerName === "keelarr") {
     return false;
   }
 

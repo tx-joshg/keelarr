@@ -6,7 +6,7 @@ import { containerPathToHost } from "./path-plan.js";
 /**
  * Creates a library folder the app is about to be pointed at.
  *
- * Stackarr already writes download clients into these apps and sets their root
+ * Keelarr already writes download clients into these apps and sets their root
  * folders. Declining to create a directory inside the media root the operator
  * configured is an inconsistent place to stop — an install that ends with two
  * manual chores is not the one-click install it claims to be.
@@ -26,7 +26,7 @@ export async function ensureLibraryFolder(mounts, containerPath, options = {}) {
   if (!hostPath) {
     return {
       ok: false,
-      reason: `${containerPath} is not backed by a host directory Stackarr can reach, so it cannot be created here.`
+      reason: `${containerPath} is not backed by a host directory Keelarr can reach, so it cannot be created here.`
     };
   }
 

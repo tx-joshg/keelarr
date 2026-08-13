@@ -41,8 +41,8 @@ const INVENTORY = [
     serviceId: "prowlarr",
     containerName: "prowlarr",
     status: "running",
-    networkMode: "stackarr",
-    networks: [{ name: "stackarr", address: "172.29.12.3" }],
+    networkMode: "keelarr",
+    networks: [{ name: "keelarr", address: "172.29.12.3" }],
     ports: [{ containerPort: "9696/tcp", hostIp: "0.0.0.0", hostPort: "9696" }]
   }
 ];
@@ -50,16 +50,16 @@ const INVENTORY = [
 const DRIVERS = new Map([
   ["qnet-static-eth1", "qnet"],
   ["host", "host"],
-  ["stackarr", "bridge"],
+  ["keelarr", "bridge"],
   ["deploy_default", "bridge"]
 ]);
 
 const CONTROLLER_INSPECT = {
-  Name: "/stackarr",
+  Name: "/keelarr",
   State: { Running: true, StartedAt: "2026-08-01T00:00:00.000Z" },
-  HostConfig: { NetworkMode: "stackarr" },
+  HostConfig: { NetworkMode: "keelarr" },
   Config: { ExposedPorts: { "4687/tcp": {} } },
-  NetworkSettings: { Networks: { stackarr: { IPAddress: "172.29.12.2" } }, Ports: {} },
+  NetworkSettings: { Networks: { keelarr: { IPAddress: "172.29.12.2" } }, Ports: {} },
   Mounts: []
 };
 

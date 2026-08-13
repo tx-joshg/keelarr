@@ -35,7 +35,7 @@ test("normalizes settings and builds selected services", () => {
 });
 
 test("writeJson replaces the target atomically and leaves no temp files behind", async (t) => {
-  const workDir = await mkdtemp(path.join(tmpdir(), "stackarr-store-"));
+  const workDir = await mkdtemp(path.join(tmpdir(), "keelarr-store-"));
   t.after(() => rm(workDir, { recursive: true, force: true }));
 
   const target = path.join(workDir, "settings.json");
@@ -48,7 +48,7 @@ test("writeJson replaces the target atomically and leaves no temp files behind",
 });
 
 test("writeJson does not clobber the existing file when serialization fails", async (t) => {
-  const workDir = await mkdtemp(path.join(tmpdir(), "stackarr-store-"));
+  const workDir = await mkdtemp(path.join(tmpdir(), "keelarr-store-"));
   t.after(() => rm(workDir, { recursive: true, force: true }));
 
   const target = path.join(workDir, "settings.json");

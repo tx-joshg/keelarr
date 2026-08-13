@@ -6,7 +6,7 @@ import {
 } from "../import-planner.js";
 import { scanDockerInventory } from "../import-scanner.js";
 import { appendActivity, loadSettings, normalizeSettings, saveSettings } from "../store.js";
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
 export class ImportService {
@@ -80,7 +80,7 @@ export class ImportService {
   async adoptImportAsDraft(containerId, context = {}) {
     const settings = await this.loadSettings();
     if (!settings.initialized) {
-      throw new StackarrError("Configure the host profile before adopting an existing container into a managed draft.", {
+      throw new KeelarrError("Configure the host profile before adopting an existing container into a managed draft.", {
         statusCode: 400
       });
     }
@@ -92,7 +92,7 @@ export class ImportService {
     const preview = await this.buildImportPreview(settings, item);
 
     if (!preview.supported || !preview.adoptable || !item.serviceId) {
-      throw new StackarrError("This container cannot be turned into a managed draft until the adoption issues are resolved.", {
+      throw new KeelarrError("This container cannot be turned into a managed draft until the adoption issues are resolved.", {
         statusCode: 400
       });
     }
@@ -185,7 +185,7 @@ export class ImportService {
     const item = inventory.items.find((candidate) => candidate.containerId === containerId);
 
     if (!item) {
-      throw new StackarrError(`Unknown import candidate: ${containerId}`, {
+      throw new KeelarrError(`Unknown import candidate: ${containerId}`, {
         statusCode: 404
       });
     }

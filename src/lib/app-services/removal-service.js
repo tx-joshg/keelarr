@@ -11,7 +11,7 @@ import {
 } from "../runtime.js";
 import { appendActivity, loadSettings, readUpdateState, saveSettings, writeUpdateState } from "../store.js";
 import { JobRegistry } from "../jobs.js";
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
 export const REMOVE_STEPS = [
@@ -21,7 +21,7 @@ export const REMOVE_STEPS = [
   { name: "config", label: "Delete the application configuration" },
   { name: "image", label: "Delete the container image" },
   { name: "stack", label: "Delete the generated stack files" },
-  { name: "backups", label: "Delete Stackarr backups" },
+  { name: "backups", label: "Delete Keelarr backups" },
   { name: "finalize", label: "Remove from the dashboard" }
 ];
 
@@ -109,7 +109,7 @@ export class RemovalService {
     const service = settings.services[serviceId];
 
     if (!service) {
-      throw new StackarrError(`Unknown or disabled service: ${serviceId}`, { statusCode: 404 });
+      throw new KeelarrError(`Unknown or disabled service: ${serviceId}`, { statusCode: 404 });
     }
 
     return service;
@@ -138,7 +138,7 @@ export class RemovalService {
   }
 
   backupRoot(settings, serviceId) {
-    return path.join(settings.stackRoot, ".stackarr-backups", serviceId);
+    return path.join(settings.stackRoot, ".keelarr-backups", serviceId);
   }
 
   /**
@@ -146,7 +146,7 @@ export class RemovalService {
    * before asking for confirmation, so nobody is guessing what a checkbox does.
    *
    * Media and downloads are deliberately absent: they are shared mounts used by
-   * every app in the stack, not data this service owns. Stackarr never offers
+   * every app in the stack, not data this service owns. Keelarr never offers
    * to delete them.
    */
   async describeRemoval(serviceId, context = {}) {
@@ -181,7 +181,7 @@ export class RemovalService {
           // there is no configuration instead of hiding the option.
           : { absent: true, label: "No configuration on disk" },
         image: { label: service.image },
-        backups: { label: "Stackarr backups and config snapshots", path: this.backupRoot(settings, serviceId) }
+        backups: { label: "Keelarr backups and config snapshots", path: this.backupRoot(settings, serviceId) }
       },
       // Never offered. Named here so the UI can say why rather than staying silent.
       preserved: [
@@ -213,7 +213,7 @@ export class RemovalService {
       const service = this.requireService(settings, serviceId);
 
       if (input.confirmContainerName !== service.containerName) {
-        throw new StackarrError(
+        throw new KeelarrError(
           `Removal confirmation does not match. Expected the container name ${service.containerName}.`,
           { statusCode: 400 }
         );
@@ -277,7 +277,7 @@ export class RemovalService {
         : await this.composeDown(settings, service, { logger: stepLogger });
 
       if (!result.ok) {
-        throw new StackarrError(`Could not stop ${service.name}.`, {
+        throw new KeelarrError(`Could not stop ${service.name}.`, {
           statusCode: 500,
           details: { stdout: result.stdout, stderr: result.stderr }
         });

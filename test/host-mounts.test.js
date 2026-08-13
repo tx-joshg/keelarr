@@ -33,7 +33,7 @@ test("a root the controller cannot see is reported with the variable that fixes 
 
   assert.equal(found.length, 1);
   assert.equal(found[0].field, "mediaRoot");
-  assert.match(found[0].message, /not mounted into the Stackarr container/);
+  assert.match(found[0].message, /not mounted into the Keelarr container/);
   assert.match(found[0].message, /HOST_MEDIA_ROOT=\/share\/Public/);
   assert.match(found[0].message, /even though it exists on the host/);
 });
@@ -72,28 +72,28 @@ test("the env file is written from settings, so the two cannot drift", () => {
   assert.match(text, /HOST_PLEX_LOGS_ROOT=\/share\/Container\/plex\/Logs$/m);
 });
 
-test("values Stackarr does not own are preserved, not reset to defaults", () => {
+test("values Keelarr does not own are preserved, not reset to defaults", () => {
   // The data directory is where settings themselves live, so it cannot be
   // derived from them; port and log level are deployment choices.
-  const existing = "STACKARR_PORT=9999\nSTACKARR_LOG_LEVEL=debug\nSTACKARR_DATA_DIR=/share/Container/stackarr/data\n";
+  const existing = "KEELARR_PORT=9999\nKEELARR_LOG_LEVEL=debug\nKEELARR_DATA_DIR=/share/Container/keelarr/data\n";
   const text = renderControllerEnv(SETTINGS, existing);
 
-  assert.match(text, /STACKARR_PORT=9999/);
-  assert.match(text, /STACKARR_LOG_LEVEL=debug/);
-  assert.match(text, /STACKARR_DATA_DIR=\/share\/Container\/stackarr\/data/);
+  assert.match(text, /KEELARR_PORT=9999/);
+  assert.match(text, /KEELARR_LOG_LEVEL=debug/);
+  assert.match(text, /KEELARR_DATA_DIR=\/share\/Container\/keelarr\/data/);
 });
 
 test("a first write falls back to defaults for the values it cannot know", () => {
   const text = renderControllerEnv(SETTINGS, "");
 
-  assert.match(text, /STACKARR_PORT=4687/);
-  assert.match(text, /STACKARR_LOG_LEVEL=info/);
+  assert.match(text, /KEELARR_PORT=4687/);
+  assert.match(text, /KEELARR_LOG_LEVEL=info/);
 });
 
 test("the file says who wrote it and what to do next", () => {
   const text = renderControllerEnv(SETTINGS);
 
-  assert.match(text, /Written by Stackarr/);
+  assert.match(text, /Written by Keelarr/);
   assert.match(text, /Recreate the controller/);
 });
 
@@ -101,11 +101,11 @@ test("the file says who wrote it and what to do next", () => {
 
 test("the recorded deploy directory is used when it is reachable", async () => {
   const found = await resolveControllerEnvPath(
-    { workingDir: "/opt/stackarr/deploy", composeFile: "/opt/stackarr/deploy/compose.example.yml", mounts: [] },
-    { pathExistsImpl: async (p) => p === "/opt/stackarr/deploy/compose.example.yml" }
+    { workingDir: "/opt/keelarr/deploy", composeFile: "/opt/keelarr/deploy/compose.example.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/opt/keelarr/deploy/compose.example.yml" }
   );
 
-  assert.equal(found, "/opt/stackarr/deploy/.env");
+  assert.equal(found, "/opt/keelarr/deploy/.env");
 });
 
 test("a deploy directory reachable only by another path is still found", async () => {
@@ -113,22 +113,22 @@ test("a deploy directory reachable only by another path is still found", async (
   // /share/Container/... — the same directory, reached a different way.
   const found = await resolveControllerEnvPath(
     {
-      workingDir: "/share/CACHEDEV1_DATA/Container/stackarr/deploy",
-      composeFile: "/share/CACHEDEV1_DATA/Container/stackarr/deploy/compose.example.yml",
+      workingDir: "/share/CACHEDEV1_DATA/Container/keelarr/deploy",
+      composeFile: "/share/CACHEDEV1_DATA/Container/keelarr/deploy/compose.example.yml",
       mounts: [{ source: "/share/Container", target: "/share/Container" }]
     },
-    { pathExistsImpl: async (p) => p === "/share/Container/stackarr/deploy/compose.example.yml" }
+    { pathExistsImpl: async (p) => p === "/share/Container/keelarr/deploy/compose.example.yml" }
   );
 
-  assert.equal(found, "/share/Container/stackarr/deploy/.env");
+  assert.equal(found, "/share/Container/keelarr/deploy/.env");
 });
 
 test("a candidate without the compose file in it is not accepted", async () => {
   // Guards against matching a lookalike directory by path shape alone.
   const found = await resolveControllerEnvPath(
     {
-      workingDir: "/opt/stackarr/deploy",
-      composeFile: "/opt/stackarr/deploy/compose.example.yml",
+      workingDir: "/opt/keelarr/deploy",
+      composeFile: "/opt/keelarr/deploy/compose.example.yml",
       mounts: [{ source: "/share/Container", target: "/share/Container" }]
     },
     { pathExistsImpl: async () => false }
@@ -155,11 +155,11 @@ test("the mounted deploy directory is used before anything is deduced", async ()
 test("without that mount it still falls back to deducing the path", async () => {
   // Controllers deployed before the mount existed must keep working.
   const found = await resolveControllerEnvPath(
-    { workingDir: "/opt/stackarr/deploy", composeFile: "/opt/stackarr/deploy/compose.example.yml", mounts: [] },
-    { pathExistsImpl: async (p) => p === "/opt/stackarr/deploy/compose.example.yml" }
+    { workingDir: "/opt/keelarr/deploy", composeFile: "/opt/keelarr/deploy/compose.example.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/opt/keelarr/deploy/compose.example.yml" }
   );
 
-  assert.equal(found, "/opt/stackarr/deploy/.env");
+  assert.equal(found, "/opt/keelarr/deploy/.env");
 });
 
 test("a fresh clone with no .env yet still resolves to the mounted deploy directory", async () => {
@@ -179,11 +179,11 @@ test("an empty deploy mount is not mistaken for the deploy directory", async () 
   // Neither marker present, so nothing there identifies it and the fallback
   // deduction has to be what answers.
   const found = await resolveControllerEnvPath(
-    { workingDir: "/opt/stackarr/deploy", composeFile: "/opt/stackarr/deploy/compose.example.yml", mounts: [] },
-    { pathExistsImpl: async (p) => p === "/opt/stackarr/deploy/compose.example.yml" }
+    { workingDir: "/opt/keelarr/deploy", composeFile: "/opt/keelarr/deploy/compose.example.yml", mounts: [] },
+    { pathExistsImpl: async (p) => p === "/opt/keelarr/deploy/compose.example.yml" }
   );
 
-  assert.equal(found, "/opt/stackarr/deploy/.env");
+  assert.equal(found, "/opt/keelarr/deploy/.env");
 });
 
 test("a renamed compose file still identifies the mounted deploy directory", async () => {
@@ -197,15 +197,15 @@ test("a renamed compose file still identifies the mounted deploy directory", asy
 
 test("the roots Compose mounted are read back from the environment", () => {
   const roots = mountedRootsFromEnv({
-    HOST_STACK_ROOT: "/Users/someone/stackarr/stacks",
-    HOST_MEDIA_ROOT: "/Users/someone/stackarr/media",
+    HOST_STACK_ROOT: "/Users/someone/keelarr/stacks",
+    HOST_MEDIA_ROOT: "/Users/someone/keelarr/media",
     HOST_PLEX_LOGS_ROOT: "   ",
     UNRELATED: "/nope"
   });
 
   assert.deepEqual(roots, {
-    stackRoot: "/Users/someone/stackarr/stacks",
-    mediaRoot: "/Users/someone/stackarr/media"
+    stackRoot: "/Users/someone/keelarr/stacks",
+    mediaRoot: "/Users/someone/keelarr/media"
   });
 });
 
@@ -216,18 +216,18 @@ test("a controller deployed before those variables existed reports none", () => 
 });
 
 test("a pinned controller version survives a settings save", () => {
-  // Stackarr rewrites this file whenever a host path changes. Dropping a value
+  // Keelarr rewrites this file whenever a host path changes. Dropping a value
   // it does not manage would move the operator onto latest without asking.
   const text = renderControllerEnv(
-    { stackRoot: "/srv/stackarr/stacks" },
-    "STACKARR_VERSION=v0.2.0\nSTACKARR_PORT=4687\n"
+    { stackRoot: "/srv/keelarr/stacks" },
+    "KEELARR_VERSION=v0.2.0\nKEELARR_PORT=4687\n"
   );
 
-  assert.match(text, /^STACKARR_VERSION=v0\.2\.0$/m);
+  assert.match(text, /^KEELARR_VERSION=v0\.2\.0$/m);
 });
 
 test("no pin means no line, rather than an empty one", () => {
-  const text = renderControllerEnv({ stackRoot: "/srv/stackarr/stacks" }, "STACKARR_PORT=4687\n");
+  const text = renderControllerEnv({ stackRoot: "/srv/keelarr/stacks" }, "KEELARR_PORT=4687\n");
 
-  assert.doesNotMatch(text, /STACKARR_VERSION/);
+  assert.doesNotMatch(text, /KEELARR_VERSION/);
 });

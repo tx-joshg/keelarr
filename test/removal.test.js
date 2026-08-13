@@ -11,7 +11,7 @@ import { normalizeSettings } from "../src/lib/store.js";
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -96,7 +96,7 @@ test("the preview reports real paths and sizes so the choice is informed", async
   assert.equal(preview.targets.config.path, "/share/Container/radarr/config");
   assert.equal(preview.targets.config.size, "412M");
   assert.equal(preview.targets.stack.path, "/share/Container/docker/radarr");
-  assert.match(preview.targets.backups.path, /\.stackarr-backups\/radarr$/);
+  assert.match(preview.targets.backups.path, /\.keelarr-backups\/radarr$/);
 });
 
 test("removing an app other apps depend on warns about them", async () => {

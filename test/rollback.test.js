@@ -15,7 +15,7 @@ import { normalizeSettings } from "../src/lib/store.js";
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -28,7 +28,7 @@ services:
 `;
 
 async function createStack(t) {
-  const root = await mkdtemp(path.join(tmpdir(), "stackarr-rollback-"));
+  const root = await mkdtemp(path.join(tmpdir(), "keelarr-rollback-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const stackDir = path.join(root, "radarr");
@@ -50,7 +50,7 @@ async function createStack(t) {
 }
 
 async function writeBackup(root, stamp, record) {
-  const dir = path.join(root, ".stackarr-backups", "radarr", stamp);
+  const dir = path.join(root, ".keelarr-backups", "radarr", stamp);
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, "rollback.json"), JSON.stringify(record), "utf8");
   return dir;
@@ -712,7 +712,7 @@ test("a failed deploy does not claim the service is current", async (t) => {
 async function seedBackups(root, serviceId, stamps) {
   const { mkdir: md, writeFile: wf } = await import("node:fs/promises");
   for (const stamp of stamps) {
-    const dir = path.join(root, ".stackarr-backups", serviceId, stamp);
+    const dir = path.join(root, ".keelarr-backups", serviceId, stamp);
     await md(dir, { recursive: true });
     await wf(path.join(dir, "rollback.json"), JSON.stringify({ imageId: `sha256:${stamp}` }), "utf8");
   }
@@ -733,7 +733,7 @@ test("pruning keeps only the newest backups the retention setting allows", async
   const result = await pruneServiceBackups({ ...stack.settings, backupRetention: 2 }, "radarr");
 
   assert.equal(result.pruned, 2);
-  const left = (await readdir(path.join(stack.root, ".stackarr-backups", "radarr"))).sort();
+  const left = (await readdir(path.join(stack.root, ".keelarr-backups", "radarr"))).sort();
   // Timestamped dirs sort chronologically, so the newest are the tail.
   assert.deepEqual(left, ["2026-08-03T00-00-00-000Z", "2026-08-04T00-00-00-000Z"]);
 });
@@ -746,7 +746,7 @@ test("retention of 1 leaves exactly the latest backup", async (t) => {
   await seedBackups(stack.root, "radarr", ["2026-08-01T00-00-00-000Z", "2026-08-05T00-00-00-000Z"]);
   await pruneServiceBackups({ ...stack.settings, backupRetention: 1 }, "radarr");
 
-  assert.deepEqual(await readdir(path.join(stack.root, ".stackarr-backups", "radarr")), ["2026-08-05T00-00-00-000Z"]);
+  assert.deepEqual(await readdir(path.join(stack.root, ".keelarr-backups", "radarr")), ["2026-08-05T00-00-00-000Z"]);
 });
 
 test("a retention of 0 keeps everything", async (t) => {
@@ -758,7 +758,7 @@ test("a retention of 0 keeps everything", async (t) => {
   const result = await pruneServiceBackups({ ...stack.settings, backupRetention: 0 }, "radarr");
 
   assert.equal(result.pruned, 0);
-  assert.equal((await readdir(path.join(stack.root, ".stackarr-backups", "radarr"))).length, 3);
+  assert.equal((await readdir(path.join(stack.root, ".keelarr-backups", "radarr"))).length, 3);
 });
 
 test("pruning a service that has no backups yet is not an error", async (t) => {

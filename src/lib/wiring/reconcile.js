@@ -62,7 +62,7 @@ function reconcile({ candidates, matches, describeChanges, describe }) {
       // Two comparable entries and neither matches means we cannot know which
       // one was meant. Picking either would silently rewrite something a person
       // deliberately created, so this state never leads to a write.
-      reason: `${candidates.length} comparable entries exist and none match, so Stackarr cannot tell which one you meant. Resolve this in the app itself.`
+      reason: `${candidates.length} comparable entries exist and none match, so Keelarr cannot tell which one you meant. Resolve this in the app itself.`
     };
   }
 
@@ -189,6 +189,6 @@ export function reconcileRootFolder(existing = [], { mountPath, expectedPath }) 
     state: RECONCILE_STATE.ABSENT,
     target: null,
     changes: [],
-    reason: `No root folder is configured inside ${mountPath}. Stackarr would add ${expectedPath}.`
+    reason: `No root folder is configured inside ${mountPath}. Keelarr would add ${expectedPath}.`
   };
 }

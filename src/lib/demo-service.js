@@ -6,7 +6,7 @@ import {
 import { APP_NAME, APP_VERSION } from "./app-meta.js";
 import { normalizeSettings } from "./store.js";
 import { listServices } from "./service-catalog.js";
-import { StackarrError } from "./errors.js";
+import { KeelarrError } from "./errors.js";
 import { JobRegistry, buildJobSnapshot } from "./jobs.js";
 import { CUTOVER_STEPS, REVERT_STEPS, rollbackNameFor } from "./app-services/cutover-service.js";
 
@@ -41,8 +41,8 @@ function createDemoDetection(draftSettings = {}) {
     adapterType: "generic-docker",
     hostLabel: "Generic Docker Host",
     dockerBin: "docker",
-    stackRoot: "/srv/stackarr/stacks",
-    configRoot: "/srv/stackarr/config",
+    stackRoot: "/srv/keelarr/stacks",
+    configRoot: "/srv/keelarr/config",
     mediaRoot: "/srv/media",
     downloadsRoot: "/srv/media/downloads",
     plexLogsRoot: "",
@@ -158,12 +158,12 @@ function selectDemoDetection(detection, preferredAdapterId = null) {
 function createDemoScenario() {
   const settings = normalizeSettings({
     initialized: true,
-    projectName: "Stackarr",
+    projectName: "Keelarr",
     adapterType: "generic-docker",
     hostLabel: "Generic Docker Host",
     dockerBin: "docker",
-    stackRoot: "/srv/stackarr/stacks",
-    configRoot: "/srv/stackarr/config",
+    stackRoot: "/srv/keelarr/stacks",
+    configRoot: "/srv/keelarr/config",
     mediaRoot: "/srv/media",
     downloadsRoot: "/srv/media/downloads",
     plexLogsRoot: "",
@@ -265,7 +265,7 @@ function createDemoScenario() {
         issues: [
           {
             level: "info",
-            message: "The live container is using a development tag while the Stackarr default tracks latest."
+            message: "The live container is using a development tag while the Keelarr default tracks latest."
           }
         ],
         adoptable: true,
@@ -319,7 +319,7 @@ function createDemoScenario() {
         issues: [
           {
             level: "warn",
-            message: "Container is not currently mapped to a Stackarr-supported service."
+            message: "Container is not currently mapped to a Keelarr-supported service."
           }
         ],
         adoptable: false,
@@ -335,8 +335,8 @@ const demoBrowseTree = new Map([
   ["/share/Container", ["docker", "plex", "trailarr", "ombi", "tautulli"]],
   ["/share/Container/plex", ["Logs"]],
   ["/share/Media", ["Downloads", "Movies", "TV"]],
-  ["/srv", ["stackarr", "media"]],
-  ["/srv/stackarr", ["config", "stacks"]],
+  ["/srv", ["keelarr", "media"]],
+  ["/srv/keelarr", ["config", "stacks"]],
   ["/srv/media", ["downloads", "movies", "tv"]]
 ]);
 
@@ -345,7 +345,7 @@ function browseDemoDirectories(inputPath = "/") {
   const children = demoBrowseTree.get(targetPath);
 
   if (!children) {
-    throw new StackarrError(`Unable to browse ${targetPath}.`, {
+    throw new KeelarrError(`Unable to browse ${targetPath}.`, {
       statusCode: 404,
       details: {
         code: "ENOENT",
@@ -390,7 +390,7 @@ function buildDemoDiagnostics(settings) {
   return diagnostics;
 }
 
-export class DemoStackarrAppService {
+export class DemoKeelarrAppService {
   constructor() {
     // The demo drives the real registry so the job polling contract is
     // identical to live mode; only the Docker work underneath is simulated.
@@ -588,7 +588,7 @@ export class DemoStackarrAppService {
   async adoptImportAsDraft(containerId) {
     const item = this.findImportCandidate(containerId);
     if (!item.adoptable || !item.serviceId) {
-      throw new StackarrError("This demo container is not ready for managed draft adoption.", {
+      throw new KeelarrError("This demo container is not ready for managed draft adoption.", {
         statusCode: 400
       });
     }
@@ -646,13 +646,13 @@ export class DemoStackarrAppService {
     const item = this.findImportCandidate(containerId);
 
     if (!item.adoptedDraft) {
-      throw new StackarrError("Generate the managed draft before running a demo cutover.", {
+      throw new KeelarrError("Generate the managed draft before running a demo cutover.", {
         statusCode: 409
       });
     }
 
     if (input.confirmContainerName !== item.containerName) {
-      throw new StackarrError(
+      throw new KeelarrError(
         `Cutover confirmation does not match. Expected the container name ${item.containerName}.`,
         { statusCode: 400 }
       );
@@ -714,7 +714,7 @@ export class DemoStackarrAppService {
     const service = this.requireService(settings, serviceId);
 
     if (input.confirmContainerName !== service.containerName) {
-      throw new StackarrError(
+      throw new KeelarrError(
         `Revert confirmation does not match. Expected the container name ${service.containerName}.`,
         { statusCode: 400 }
       );
@@ -797,7 +797,7 @@ export class DemoStackarrAppService {
    * apply. Saying so is more honest than pretending to configure something.
    */
   async startWiring() {
-    throw new StackarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
+    throw new KeelarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
   }
 
   async describeWiring() {
@@ -819,7 +819,7 @@ export class DemoStackarrAppService {
           ? {
               state: "correct",
               address: { baseUrl: "http://sabnzbd:8080", host: "sabnzbd", port: 8080, strategy: "shared-network" },
-              addressReason: `${settings.services[id].name} and SABnzbd share the stackarr network, so SABnzbd resolves by container name.`,
+              addressReason: `${settings.services[id].name} and SABnzbd share the keelarr network, so SABnzbd resolves by container name.`,
               actual: { id: 1, name: "SABnzbd", enabled: true, host: "sabnzbd", port: 8080 },
               changes: [],
               reason: "The SABnzbd download client is already configured correctly.",
@@ -842,7 +842,7 @@ export class DemoStackarrAppService {
                 prowlarrUrl: "http://prowlarr:9696",
                 strategy: "shared-network"
               },
-              addressReason: `Prowlarr and ${settings.services[id].name} share the stackarr network.`,
+              addressReason: `Prowlarr and ${settings.services[id].name} share the keelarr network.`,
               actual: { id: 2, name: settings.services[id].name, implementation: settings.services[id].name, baseUrl: `http://${id}:${settings.services[id].port}` },
               changes: [],
               reason: `${settings.services[id].name} in Prowlarr is already configured correctly.`,
@@ -871,7 +871,7 @@ export class DemoStackarrAppService {
         serviceId: id,
         name: settings.services[id].name,
         running: true,
-        topology: { kind: "bridge", networkMode: "stackarr", containerPort: settings.services[id].port },
+        topology: { kind: "bridge", networkMode: "keelarr", containerPort: settings.services[id].port },
         monitoring: {
           level: "probe",
           summary: `Checked over HTTP at http://${id}:${settings.services[id].port}.`
@@ -880,12 +880,12 @@ export class DemoStackarrAppService {
           ? { found: true, state: "found", source: "/config/config.xml", fingerprint: "demo1234" }
           : id === "sabnzbd"
             ? { found: true, state: "found", source: "/config/sabnzbd.ini", fingerprint: "demo5678" }
-            : { found: false, state: "unsupported", reason: `Stackarr does not read an API key for ${settings.services[id].name}.` },
+            : { found: false, state: "unsupported", reason: `Keelarr does not read an API key for ${settings.services[id].name}.` },
         controllerLink: {
           ok: true,
           baseUrl: `http://${id}:${settings.services[id].port}`,
           strategy: "shared-network",
-          reason: `Stackarr and ${settings.services[id].name} share the stackarr network.`
+          reason: `Keelarr and ${settings.services[id].name} share the keelarr network.`
         },
         downloads: id === "sabnzbd" ? { completeDir: "/Media/Downloads/complete", hostWhitelist: ["sabnzbd"] } : null
       })),
@@ -934,7 +934,7 @@ export class DemoStackarrAppService {
         stack: { label: "Generated stack files", path: service.stackDir, always: true },
         config: { label: "Configuration and database", path: service.configDir, type: "bind", size: "412M" },
         image: { label: service.image },
-        backups: { label: "Stackarr backups and config snapshots", path: `${settings.stackRoot}/.stackarr-backups/${serviceId}` }
+        backups: { label: "Keelarr backups and config snapshots", path: `${settings.stackRoot}/.keelarr-backups/${serviceId}` }
       },
       preserved: [
         { label: "Media library", path: settings.mediaRoot, reason: "Shared by every app in the stack." },
@@ -951,7 +951,7 @@ export class DemoStackarrAppService {
     const service = this.requireService(settings, serviceId);
 
     if (input.confirmContainerName !== service.containerName) {
-      throw new StackarrError(`Removal confirmation does not match. Expected the container name ${service.containerName}.`, { statusCode: 400 });
+      throw new KeelarrError(`Removal confirmation does not match. Expected the container name ${service.containerName}.`, { statusCode: 400 });
     }
 
     const job = this.jobs.create({
@@ -1236,7 +1236,7 @@ export class DemoStackarrAppService {
       <div class="panel">
         <p class="eyebrow">Demo App</p>
         <h1>${service.name}</h1>
-        <p class="copy">${service.description} This is a Stackarr demo destination page so you can verify deep links without running the real upstream app.</p>
+        <p class="copy">${service.description} This is a Keelarr demo destination page so you can verify deep links without running the real upstream app.</p>
         <div class="row">
           <span class="label ${statusTone}">${service.reachable ? "Healthy" : "Needs Review"}</span>
           <span class="label ${updateTone}">${service.updateStatus === "ready" ? "Update Ready" : "Current"}</span>
@@ -1257,7 +1257,7 @@ export class DemoStackarrAppService {
           </div>
         </div>
         <p class="copy" style="margin-top: 24px;">
-          <a href="/">Return to Stackarr dashboard</a>
+          <a href="/">Return to Keelarr dashboard</a>
         </p>
       </div>
     </main>
@@ -1268,7 +1268,7 @@ export class DemoStackarrAppService {
   findImportCandidate(containerId) {
     const item = this.demo.importItems.find((candidate) => candidate.containerId === containerId);
     if (!item) {
-      throw new StackarrError(`Unknown import candidate: ${containerId}`, {
+      throw new KeelarrError(`Unknown import candidate: ${containerId}`, {
         statusCode: 404
       });
     }
@@ -1290,7 +1290,7 @@ export class DemoStackarrAppService {
   requireService(settings, serviceId) {
     const service = settings.services[serviceId];
     if (!service) {
-      throw new StackarrError(`Unknown or disabled service: ${serviceId}`, {
+      throw new KeelarrError(`Unknown or disabled service: ${serviceId}`, {
         statusCode: 404
       });
     }

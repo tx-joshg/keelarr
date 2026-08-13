@@ -1,4 +1,4 @@
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 
 /**
  * The value an Arr returns in place of a secret it will not disclose.
@@ -16,7 +16,7 @@ function findSchema(schemas, implementation) {
   );
 
   if (!match) {
-    throw new StackarrError(`This app does not offer a ${implementation} integration.`, { statusCode: 422 });
+    throw new KeelarrError(`This app does not offer a ${implementation} integration.`, { statusCode: 422 });
   }
 
   return match;
@@ -27,7 +27,7 @@ function findSchema(schemas, implementation) {
  *
  * Only named fields are touched; everything else keeps the app's default, which
  * is how categories, priorities, and sync options stay whatever the app thinks
- * they should be rather than whatever Stackarr was written to assume.
+ * they should be rather than whatever Keelarr was written to assume.
  */
 function patchFields(schema, values) {
   return (schema.fields || []).map((field) =>

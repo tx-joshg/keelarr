@@ -10,9 +10,9 @@ catch different bugs.
 
 | | What exists beforehand | What it proves |
 | --- | --- | --- |
-| **A. Build new** | Nothing | Stackarr can create a working stack from an empty host |
-| **B. Delete and redeploy** | Config on disk, no containers | Stackarr can put back what it removed, unchanged |
-| **C. Adopt existing** | A running stack nobody told Stackarr about | Stackarr can take over without disturbing it |
+| **A. Build new** | Nothing | Keelarr can create a working stack from an empty host |
+| **B. Delete and redeploy** | Config on disk, no containers | Keelarr can put back what it removed, unchanged |
+| **C. Adopt existing** | A running stack nobody told Keelarr about | Keelarr can take over without disturbing it |
 
 ---
 
@@ -35,7 +35,7 @@ A host with Docker and nothing else.
    Prowlarr applications are configured without being asked for, and what an
    app needs in order to accept them — a download category, a library directory
    — is created rather than left as homework.
-6. The check ends at **needs you**, listing only what Stackarr cannot supply:
+6. The check ends at **needs you**, listing only what Keelarr cannot supply:
    an indexer key, a Usenet account, a Plex token. Each with what it breaks and
    a link to the page that fixes it.
 
@@ -69,7 +69,7 @@ database gets reported as absent.
 
 ## C. Adopt an existing stack
 
-A host already running these apps, configured by hand over years, where Stackarr
+A host already running these apps, configured by hand over years, where Keelarr
 is being introduced to manage them.
 
 1. The read-only scan reports what is running without exposing secrets, and
@@ -85,7 +85,7 @@ is being introduced to manage them.
 5. Existing configuration is read, never overwritten. A download client already
    pointing somewhere is reported as drift; two of them are ambiguous and are
    left alone.
-6. The password is Stackarr's own, set on first run like any other install. It
+6. The password is Keelarr's own, set on first run like any other install. It
    is not an account in any of the adopted apps and does not touch their logins.
 
 **The trap:** composing an address from the host URL and a port. It produces
@@ -97,10 +97,10 @@ that can never fail.
 ## Running them
 
 A and B can be run end to end against a live host. C needs a stack that predates
-Stackarr, so it is exercised against the imported services already present
+Keelarr, so it is exercised against the imported services already present
 rather than staged from scratch.
 
 Order matters when running these for real: least valuable service first, and
 take an independent copy of anything irreplaceable before touching it. The
-config snapshot Stackarr writes is not a substitute for that when the code
+config snapshot Keelarr writes is not a substitute for that when the code
 taking it is the code under test.

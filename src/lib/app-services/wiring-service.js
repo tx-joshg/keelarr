@@ -1,7 +1,7 @@
 import { access } from "node:fs/promises";
 
 import { createLogger } from "../logger.js";
-import { StackarrError } from "../errors.js";
+import { KeelarrError } from "../errors.js";
 import { JobRegistry } from "../jobs.js";
 import { appendActivity, loadSettings } from "../store.js";
 import {
@@ -52,7 +52,7 @@ const READINESS = Object.freeze({
   BLOCKED: "blocked",
   PENDING: "pending",
   /**
-   * Every connection Stackarr manages is correct, but the stack still cannot do
+   * Every connection Keelarr manages is correct, but the stack still cannot do
    * its job because something only the operator can supply is missing.
    *
    * Worth its own state. Reporting "ready" here would be true about the wiring
@@ -107,7 +107,7 @@ function unreadable(app, fallbackReason) {
 }
 
 /**
- * What Stackarr actually relies on to know this app is alive.
+ * What Keelarr actually relies on to know this app is alive.
  *
  * Worth stating outright: an app the controller cannot reach is not
  * unmonitored if Docker is health-checking it, and one with neither is a real
@@ -124,13 +124,13 @@ function describeMonitoring(endpoint, controllerLink) {
   if (endpoint.hasHealthcheck) {
     return {
       level: "healthcheck",
-      summary: `Stackarr cannot reach this app directly, but the container reports its own health, which is a real signal.`
+      summary: `Keelarr cannot reach this app directly, but the container reports its own health, which is a real signal.`
     };
   }
 
   return {
     level: "process",
-    summary: `Stackarr cannot reach this app and the container has no healthcheck, so only the process is known to be up — nothing confirms it is serving.`
+    summary: `Keelarr cannot reach this app and the container has no healthcheck, so only the process is known to be up — nothing confirms it is serving.`
   };
 }
 
@@ -235,7 +235,7 @@ export class WiringService {
     // before it can report anything about it.
     const inspects = await this.inspectContainers(
       settings,
-      [...services.map((service) => service.containerName), "stackarr"],
+      [...services.map((service) => service.containerName), "keelarr"],
       { logger }
     );
     const byName = new Map(inspects.map((inspect) => [String(inspect.Name || "").replace(/^\//, ""), inspect]));
@@ -265,11 +265,11 @@ export class WiringService {
     }
 
     const controller = buildEndpoint({
-      serviceId: "stackarr",
-      name: "Stackarr",
-      containerName: "stackarr",
+      serviceId: "keelarr",
+      name: "Keelarr",
+      containerName: "keelarr",
       fallbackPort: null,
-      inspect: byName.get("stackarr"),
+      inspect: byName.get("keelarr"),
       networkDrivers: drivers
     });
 
@@ -280,7 +280,7 @@ export class WiringService {
     for (const service of services) {
       const endpoint = endpoints.get(service.id);
       const controllerLink = resolveLink(controller, endpoint, { hostAddress });
-      let descriptor = { found: false, state: "unsupported", reason: `Stackarr does not read an API key for ${service.name}.` };
+      let descriptor = { found: false, state: "unsupported", reason: `Keelarr does not read an API key for ${service.name}.` };
       let downloadSettings = null;
 
       if (hasReadableApiKey(service.id) && endpoint.running) {
@@ -483,7 +483,7 @@ export class WiringService {
         actionable.subtitles.length;
 
       if (total === 0) {
-        throw new StackarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
+        throw new KeelarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
       }
 
       plan = { ...gathered, actionable, downloadCategories: gathered.downloadCategories };
@@ -574,7 +574,7 @@ export class WiringService {
       const downloadKey = keys.get("sabnzbd");
 
       if (!downloadKey) {
-        throw new StackarrError("SABnzbd's API key could not be read, so no download client can be configured.", {
+        throw new KeelarrError("SABnzbd's API key could not be read, so no download client can be configured.", {
           statusCode: 422
         });
       }
@@ -585,7 +585,7 @@ export class WiringService {
         const schema = await this.arrApi.downloadClientSchema(link.source, base, key);
 
         if (!schema.ok) {
-          throw new StackarrError(`${link.sourceName} would not describe its download client options: ${schema.error}`, {
+          throw new KeelarrError(`${link.sourceName} would not describe its download client options: ${schema.error}`, {
             statusCode: 502
           });
         }
@@ -595,7 +595,7 @@ export class WiringService {
         const missingCategory = missingCategoryFor(schema.data, link.source, downloadCategories);
 
         if (missingCategory) {
-          // Adding it rather than asking the operator to. Stackarr already
+          // Adding it rather than asking the operator to. Keelarr already
           // writes download clients into these apps; refusing to add the
           // category that makes one work is an inconsistent place to stop.
           const added = await this.sabnzbdApi.createCategory(
@@ -648,7 +648,7 @@ export class WiringService {
       const failedBefore = this.outcome.failed.length;
       for (const folder of actionable.rootFolders) {
         // The app will not accept a folder that is not there, and the path is
-        // inside the media root the operator configured, so Stackarr creates
+        // inside the media root the operator configured, so Keelarr creates
         // it. Note the translation: the app sees /Media, the controller sees
         // /share/Media, and checking the container path here would test a
         // directory that can never exist on this filesystem.
@@ -717,7 +717,7 @@ export class WiringService {
       const schema = await this.arrApi.applicationSchema(base, key);
 
       if (!schema.ok) {
-        throw new StackarrError(`Prowlarr would not describe its application options: ${schema.error}`, {
+        throw new KeelarrError(`Prowlarr would not describe its application options: ${schema.error}`, {
           statusCode: 502
         });
       }
@@ -1001,7 +1001,7 @@ export class WiringService {
   /**
    * Reads the few things only the operator can supply, so the report can say
    * what is missing. Counted or checked for presence, never read: an indexer
-   * key and a Usenet password are the operator's, and Stackarr has no use for
+   * key and a Usenet password are the operator's, and Keelarr has no use for
    * their values.
    */
   async readPrerequisiteState(services, current, keys, settings, logger) {
@@ -1076,7 +1076,7 @@ export class WiringService {
         const app = current.get(service.id);
 
         if (!app?.reachable) {
-          return { ...base, ...unreadable(app, `Stackarr could not read ${service.name}'s configuration.`) };
+          return { ...base, ...unreadable(app, `Keelarr could not read ${service.name}'s configuration.`) };
         }
 
         const link = resolveLink(endpoints.get(service.id), endpoints.get("sabnzbd"), { hostAddress });
@@ -1130,7 +1130,7 @@ export class WiringService {
       };
 
       if (!app?.reachable) {
-        return { ...base, ...unreadable(app, "Stackarr could not read Prowlarr's configuration.") };
+        return { ...base, ...unreadable(app, "Keelarr could not read Prowlarr's configuration.") };
       }
 
       // A Prowlarr application needs both directions: baseUrl is how Prowlarr
@@ -1188,7 +1188,7 @@ export class WiringService {
         };
 
         if (!app?.reachable) {
-          return { ...base, ...unreadable(app, "Stackarr could not read Bazarr's configuration.") };
+          return { ...base, ...unreadable(app, "Keelarr could not read Bazarr's configuration.") };
         }
 
         const link = resolveLink(endpoints.get("bazarr"), endpoints.get(service.id), { hostAddress });
@@ -1225,7 +1225,7 @@ export class WiringService {
         const base = { serviceId: service.id, name: service.name };
 
         if (!app?.reachable) {
-          return { ...base, ...unreadable(app, `Stackarr could not read ${service.name}'s configuration.`) };
+          return { ...base, ...unreadable(app, `Keelarr could not read ${service.name}'s configuration.`) };
         }
 
         const plan = planRootFolder(mounts.get(service.id) || [], service.id, settings.mediaRoot);
@@ -1341,7 +1341,7 @@ export class WiringService {
         readiness: READINESS.READY,
         readinessMessage: summary.total > 0
           ? `Stack ready. All ${summary.total} connections are configured correctly.`
-          : "Stack ready. Nothing needs connecting yet — add another app and Stackarr will wire them together."
+          : "Stack ready. Nothing needs connecting yet — add another app and Keelarr will wire them together."
       };
     }
 
@@ -1350,7 +1350,7 @@ export class WiringService {
       summary.drift && `${summary.drift} pointing elsewhere`,
       summary.ambiguous && `${summary.ambiguous} ambiguous`,
       // Named explicitly, or the count simply would not add up on screen.
-      summary.unknown && `${summary.unknown} that Stackarr could not read`
+      summary.unknown && `${summary.unknown} that Keelarr could not read`
     ].filter(Boolean);
 
     return {

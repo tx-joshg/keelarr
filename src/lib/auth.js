@@ -7,13 +7,13 @@ const KEY_LENGTH = 64;
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Deliberately not a configurable minimum. Stackarr holds the Docker socket, so
+ * Deliberately not a configurable minimum. Keelarr holds the Docker socket, so
  * anyone reaching it can run containers on this host; a four-character password
  * is not a meaningful gate over that.
  */
 export const MIN_PASSWORD_LENGTH = 8;
 
-export const SESSION_COOKIE = "stackarr_session";
+export const SESSION_COOKIE = "keelarr_session";
 
 export async function hashPassword(password, salt = randomBytes(16).toString("hex")) {
   const derived = await scryptAsync(String(password), salt, KEY_LENGTH);

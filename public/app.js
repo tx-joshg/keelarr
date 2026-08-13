@@ -2,15 +2,15 @@
  * Where the heart icon and the footer link point.
  *
  * A single constant because this ships in software other people run on their
- * own hardware: anyone forking Stackarr should be able to point it at their own
+ * own hardware: anyone forking Keelarr should be able to point it at their own
  * page, or empty it, in one edit. Empty means no heart and no footer link at
  * all — a fork with nobody to pay should not be asking for money.
  *
- * A link and nothing else. Stackarr holds the Docker socket; it has no business
+ * A link and nothing else. Keelarr holds the Docker socket; it has no business
  * anywhere near a payment, and the service on the other end is the one equipped
  * to handle cards, receipts and tax.
  */
-const SUPPORT_URL = "https://ko-fi.com/stackarr";
+const SUPPORT_URL = "https://ko-fi.com/keelarr";
 
 const appOrder = [
   "prowlarr",
@@ -146,7 +146,7 @@ function normalizeBrowsePath(value) {
 }
 
 function appDisplayName() {
-  return state.meta?.appName || "Stackarr";
+  return state.meta?.appName || "Keelarr";
 }
 
 function appVersion() {
@@ -327,13 +327,13 @@ function renderUsageMetrics(service) {
 function managementStateMeta(service) {
   switch (service.managementState) {
     case "managed":
-      return { label: "Managed", tone: "info", detail: "Running under Stackarr Compose." };
+      return { label: "Managed", tone: "info", detail: "Running under Keelarr Compose." };
     case "draft":
       return { label: "Draft", tone: "warn", detail: "Managed draft exists, but cutover is still pending." };
     case "detected":
-      return { label: "Detected", tone: "manual", detail: "Live container found outside Stackarr management." };
+      return { label: "Detected", tone: "manual", detail: "Live container found outside Keelarr management." };
     case "generated":
-      return { label: "Generated", tone: "manual", detail: "Compose files exist, but the service is not running under Stackarr." };
+      return { label: "Generated", tone: "manual", detail: "Compose files exist, but the service is not running under Keelarr." };
     default:
       return { label: "Catalog", tone: "manual", detail: "Selected in catalog only." };
   }
@@ -341,11 +341,11 @@ function managementStateMeta(service) {
 
 /**
  * Compose ownership as one icon. The distinction that matters is whether
- * Stackarr can operate this service, not the internal state name.
+ * Keelarr can operate this service, not the internal state name.
  */
 function composeIconMeta(service) {
   if (service.managementState === "managed") {
-    return { icon: "fa-solid fa-circle-check", tone: "good", title: "Managed by Stackarr — compose files in place and owned by this stack." };
+    return { icon: "fa-solid fa-circle-check", tone: "good", title: "Managed by Keelarr — compose files in place and owned by this stack." };
   }
 
   if (service.managementState === "draft") {
@@ -353,7 +353,7 @@ function composeIconMeta(service) {
   }
 
   if (service.managementState === "detected") {
-    return { icon: "fa-solid fa-eye", tone: "warn", title: "Running outside Stackarr. Generate a draft to adopt it." };
+    return { icon: "fa-solid fa-eye", tone: "warn", title: "Running outside Keelarr. Generate a draft to adopt it." };
   }
 
   if (service.managementState === "generated") {
@@ -407,7 +407,7 @@ function healthIconMeta(service) {
     return {
       icon: "fa-solid fa-heart",
       tone: "good",
-      title: `Responding${detail ? ` (${detail})` : ""}. This image has no built-in healthcheck, so Stackarr checked the app URL.`
+      title: `Responding${detail ? ` (${detail})` : ""}. This image has no built-in healthcheck, so Keelarr checked the app URL.`
     };
   }
 
@@ -1044,7 +1044,7 @@ function renderStackView() {
   const services = selectedServices();
 
   if (!services.length) {
-    return '<div class="empty-copy">No services are selected yet. Open Settings to choose the apps Stackarr should manage.</div>';
+    return '<div class="empty-copy">No services are selected yet. Open Settings to choose the apps Keelarr should manage.</div>';
   }
 
   const rows = services
@@ -1102,7 +1102,7 @@ function renderStackView() {
   const runningCount = services.filter((service) => isServiceRunning(service)).length;
   const updateReadyCount = services.filter((service) => service.updateStatus === "ready").length;
   const summary = runningCount === 0
-    ? `${escapeHtml(String(services.length))} apps selected, none currently running under Stackarr monitoring.`
+    ? `${escapeHtml(String(services.length))} apps selected, none currently running under Keelarr monitoring.`
     : `${escapeHtml(String(runningCount))} of ${escapeHtml(String(services.length))} live ${updateReadyCount > 0 ? `· ${escapeHtml(String(updateReadyCount))} update${updateReadyCount === 1 ? "" : "s"} ready` : "· no managed updates pending"}`;
 
   return `
@@ -1134,7 +1134,7 @@ function renderImportTable() {
         <i class="fa-solid fa-circle-info"></i>
         <span>No scan run yet. Use "Scan Existing Docker" for a read-only inventory of current containers.</span>
       </div>
-      <div class="muted-paragraph">Stackarr never writes during a scan. Recognized containers appear here with the managed Compose draft it would generate, so you can compare before any cutover.</div>
+      <div class="muted-paragraph">Keelarr never writes during a scan. Recognized containers appear here with the managed Compose draft it would generate, so you can compare before any cutover.</div>
     `;
   }
 
@@ -1144,7 +1144,7 @@ function renderImportTable() {
         <i class="fa-solid fa-circle-info"></i>
         <span>Read-only scan found no unmanaged containers.</span>
       </div>
-      <div class="muted-paragraph">Stackarr never writes during a scan. Recognized containers appear here with the managed Compose draft it would generate, so you can compare before any cutover.</div>
+      <div class="muted-paragraph">Keelarr never writes during a scan. Recognized containers appear here with the managed Compose draft it would generate, so you can compare before any cutover.</div>
     `;
   }
 
@@ -1211,7 +1211,7 @@ function renderImportPreview() {
       <div class="preview-card">
         <h3 class="preview-title">${escapeHtml(state.importPreview.source.containerName)}</h3>
         <div class="preview-copy">${escapeHtml(state.importPreview.source.image)}</div>
-        <div style="margin-top:14px;">${warnings || '<div class="preview-copy">This container is outside the current Stackarr scope.</div>'}</div>
+        <div style="margin-top:14px;">${warnings || '<div class="preview-copy">This container is outside the current Keelarr scope.</div>'}</div>
       </div>
     `;
   }
@@ -1738,7 +1738,7 @@ function renderSettingsView() {
         : ""}
       <fieldset class="fieldset">
         <legend class="legend">Apps To Manage</legend>
-        <div class="manage-intro">${escapeHtml(`${selectedServiceIds().length} of ${state.catalog.length || 10} services selected. Stackarr generates and operates only what is checked.`)}</div>
+        <div class="manage-intro">${escapeHtml(`${selectedServiceIds().length} of ${state.catalog.length || 10} services selected. Keelarr generates and operates only what is checked.`)}</div>
         ${manageRows}
       </fieldset>
       <div class="action-row">
@@ -1934,10 +1934,10 @@ function renderCutoverModal() {
       : `Cut over ${dialog.serviceName} to Compose`;
 
   const explanation = rollingBack
-    ? `Stackarr will back up the current state, pin the stack to <code>${escapeHtml(dialog.rollbackImage || "the previous image")}</code>, and recreate the container on it. If it does not come up, the newer image is restored automatically. Running an upgrade later clears the pin.`
+    ? `Keelarr will back up the current state, pin the stack to <code>${escapeHtml(dialog.rollbackImage || "the previous image")}</code>, and recreate the container on it. If it does not come up, the newer image is restored automatically. Running an upgrade later clears the pin.`
     : reverting
-      ? `Stackarr will stop and remove the Compose container, then rename <code>${escapeHtml(dialog.rollbackContainerName || "")}</code> back to <code>${escapeHtml(dialog.containerName)}</code> and start it.`
-      : `Stackarr will back up the container, stop it, rename it to <code>${escapeHtml(dialog.containerName)}-stackarr-rollback</code>, then start the managed Compose stack. The original container is kept, not deleted, so this can be reverted.`;
+      ? `Keelarr will stop and remove the Compose container, then rename <code>${escapeHtml(dialog.rollbackContainerName || "")}</code> back to <code>${escapeHtml(dialog.containerName)}</code> and start it.`
+      : `Keelarr will back up the container, stop it, rename it to <code>${escapeHtml(dialog.containerName)}-keelarr-rollback</code>, then start the managed Compose stack. The original container is kept, not deleted, so this can be reverted.`;
 
   return `
     <div class="modal-backdrop" data-modal-backdrop="cutover">
@@ -2014,7 +2014,7 @@ function renderFooter() {
     <span>${escapeHtml(String(services.length))} apps &middot; ${escapeHtml(String(running))} running &middot; ${escapeHtml(warnings)} &middot; PUID ${escapeHtml(state.settings?.puid || "1000")} / PGID ${escapeHtml(state.settings?.pgid || "1000")}</span>
     <span>
       ${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())} &middot; compose-native ARR control plane${SUPPORT_URL
-        ? ` &middot; <a class="footer-support" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer">Support Stackarr</a>`
+        ? ` &middot; <a class="footer-support" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer">Support Keelarr</a>`
         : ""}
     </span>
   `;
@@ -2050,12 +2050,12 @@ function renderAuthGate() {
   appNode.innerHTML = `
     <div class="auth-shell">
       <form class="auth-card" data-auth-form>
-        <div class="brand-mark auth-mark">SA</div>
+        <div class="brand-mark auth-mark">KA</div>
         <h1 class="auth-title">${firstRun ? "Set a password" : "Sign in"}</h1>
         <p class="auth-lead">
           ${firstRun
-            ? `Stackarr controls Docker on this machine, so it needs a password before it will do anything else. Choose one of at least ${minLength} characters.`
-            : "Enter the password you set for this Stackarr."}
+            ? `Keelarr controls Docker on this machine, so it needs a password before it will do anything else. Choose one of at least ${minLength} characters.`
+            : "Enter the password you set for this Keelarr."}
         </p>
         <label class="auth-field">
           <span>Password</span>
@@ -2079,7 +2079,7 @@ function renderAuthGate() {
         </button>
         ${firstRun ? `
           <p class="auth-note">
-            There is no password reset. If you lose it, delete <code>auth.json</code> from Stackarr's data directory and this screen comes back.
+            There is no password reset. If you lose it, delete <code>auth.json</code> from Keelarr's data directory and this screen comes back.
           </p>
         ` : ""}
       </form>
@@ -2111,7 +2111,7 @@ function render() {
       <div class="app-shell">
         <header class="app-header">
           <div class="brand-slot">
-            <div class="brand-mark">SA</div>
+            <div class="brand-mark">KA</div>
             <span class="brand-wordmark">${escapeHtml(appDisplayName())}</span>
           </div>
           <div class="header-search">
@@ -2123,7 +2123,7 @@ function render() {
           <div class="header-icons">
             <span class="header-icon header-icon-warning" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
             ${SUPPORT_URL
-              ? `<a class="header-icon header-icon-donate" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer" title="Support Stackarr"><i class="fa-solid fa-heart"></i></a>`
+              ? `<a class="header-icon header-icon-donate" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer" title="Support Keelarr"><i class="fa-solid fa-heart"></i></a>`
               : ""}
             ${state.auth?.required
               ? '<button class="header-icon header-icon-account" type="button" data-auth-signout title="Sign out"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>'
@@ -2172,9 +2172,9 @@ function render() {
       scroller.scrollTop = previousScroll;
     }
 
-    window.__stackarrRenderError = null;
+    window.__keelarrRenderError = null;
   } catch (error) {
-    window.__stackarrRenderError = error?.message || "Render failed.";
+    window.__keelarrRenderError = error?.message || "Render failed.";
     console.error(error);
     appNode.innerHTML = `
       <div class="app-shell">
@@ -2341,14 +2341,14 @@ async function saveSettingsOnly() {
 
   // Host paths live in two places by necessity: here, and in the controller's
   // own Compose env file, which has to exist before the container it configures
-  // does. Stackarr keeps that file in step, but only a recreate applies it —
+  // does. Keelarr keeps that file in step, but only a recreate applies it —
   // saying so beats leaving it to be discovered when a path reads as missing.
   const env = data.controllerEnv;
 
   if (env && !env.written) {
     showToast(env.message || "Host settings saved, but deploy/.env could not be updated.", "warn");
   } else if (env?.pathsChanged) {
-    showToast("Host settings saved. Recreate the Stackarr container to apply the new paths.", "warn");
+    showToast("Host settings saved. Recreate the Keelarr container to apply the new paths.", "warn");
   } else {
     showToast("Host settings saved.", "success");
   }
@@ -2565,7 +2565,7 @@ function renderRemovalModal() {
         `).join("")}
 
         ${p.imported
-          ? '<div class="result-list result-list-warning"><strong>Imported service</strong><ul><li>This container existed before Stackarr managed it. Removing it deletes a container you created yourself.</li></ul></div>'
+          ? '<div class="result-list result-list-warning"><strong>Imported service</strong><ul><li>This container existed before Keelarr managed it. Removing it deletes a container you created yourself.</li></ul></div>'
           : ""}
 
         <div class="muted-paragraph" style="margin:12px 0 6px;">Always removed:</div>
@@ -2583,7 +2583,7 @@ function renderRemovalModal() {
         ${choice("removeImage", `Delete the image ${t.image.label}`,
             "Only affects disk space. It is re-pulled on the next install, and is kept automatically if another service still uses it.",
             dialog.removeImage)}
-        ${choice("removeBackups", "Delete Stackarr backups",
+        ${choice("removeBackups", "Delete Keelarr backups",
             `${escapeHtml(t.backups.path)}. Includes config snapshots taken before upgrades, which are what make a rollback possible.`,
             dialog.removeBackups)}
 
@@ -2597,7 +2597,7 @@ function renderRemovalModal() {
                <i class="fa-solid fa-rotate-left"></i>
                <span>
                  <strong>Reinstalling brings ${escapeHtml(p.serviceName)} back as it is now.</strong>
-                 Stackarr keeps a record of what this app was and where its stack files are archived, so a later
+                 Keelarr keeps a record of what this app was and where its stack files are archived, so a later
                  install restores this exact service rather than a fresh one — settings, library, and anything
                  configured inside it included.
                </span>
@@ -2744,10 +2744,10 @@ function renderWiringModal() {
         key.state === "found"
           ? `API key read from ${key.source}`
           : key.state === "unsupported"
-            ? "Stackarr does not need an API key for this app"
+            ? "Keelarr does not need an API key for this app"
             : key.reason;
 
-      // Tone follows how the app is actually watched, not whether Stackarr
+      // Tone follows how the app is actually watched, not whether Keelarr
       // personally reached it. A container reporting its own health is fine.
       const monitoring = participant.monitoring || { level: "probe", summary: "" };
       const tone = monitoring.level === "process" ? "warn" : "ok";
@@ -2831,7 +2831,7 @@ function renderWiringModal() {
 }
 
 /**
- * The things Stackarr cannot do for you, with a way to go and do them.
+ * The things Keelarr cannot do for you, with a way to go and do them.
  *
  * These are credentials — an indexer key, a Usenet account, a Plex token — and
  * they are the reason a stack can be perfectly wired and still unable to find a
@@ -2870,7 +2870,7 @@ function renderWiringPrerequisites(report) {
     <div class="wiring-section-title">Needs you</div>
     <ul class="wiring-list">${rows}</ul>
     <div class="wiring-row-reason wiring-needs-you-note">
-      Stackarr configures everything that is not a secret. These carry your own credentials, so it reports them
+      Keelarr configures everything that is not a secret. These carry your own credentials, so it reports them
       rather than holding them.
     </div>
   `;
@@ -2878,7 +2878,7 @@ function renderWiringPrerequisites(report) {
 
 /**
  * Only genuinely missing connections are offered. Drift and ambiguity are shown
- * in the report above but never included here — Stackarr does not overwrite a
+ * in the report above but never included here — Keelarr does not overwrite a
  * configuration someone made on purpose.
  */
 function wiringActionable(report) {
@@ -2904,7 +2904,7 @@ function renderWiringApply(report) {
   return `
     <div class="wiring-apply">
       ${items.length
-        ? `<div class="wiring-section-title" style="margin-top:0;">Stackarr can configure</div>
+        ? `<div class="wiring-section-title" style="margin-top:0;">Keelarr can configure</div>
            <ul class="removal-list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
            <div class="wiring-row-reason">Each one is tested against the app before it is saved, so a connection that
            would not work is refused rather than written.</div>`
@@ -2951,7 +2951,7 @@ function stopJobPolling() {
   }
 }
 
-const DISMISSED_JOBS_KEY = "stackarr.dismissedJobs";
+const DISMISSED_JOBS_KEY = "keelarr.dismissedJobs";
 // A job that finished while the page was away is still worth showing: the
 // operator needs the outcome of a destructive action they did not watch.
 const REATTACH_RECENT_MS = 10 * 60 * 1000;

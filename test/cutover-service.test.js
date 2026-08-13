@@ -12,7 +12,7 @@ import { normalizeSettings } from "../src/lib/store.js";
 const noop = () => {};
 const silentLogger = createLogger({
   level: "error",
-  filePath: path.join(tmpdir(), "stackarr-test.log"),
+  filePath: path.join(tmpdir(), "keelarr-test.log"),
   consoleImpl: { debug: noop, info: noop, warn: noop, error: noop, log: noop }
 });
 
@@ -129,17 +129,17 @@ test("a verified cutover stops, renames, deploys, and records managed state in o
   // The rename must land between the stop and the compose up: the old
   // container has to release the name before Compose can claim it.
   assert.deepEqual(calls, [
-    "exists:trailarr-stackarr-rollback",
+    "exists:trailarr-keelarr-rollback",
     "backup",
     "stop:trailarr",
-    "rename:trailarr->trailarr-stackarr-rollback",
+    "rename:trailarr->trailarr-keelarr-rollback",
     "compose-up",
     "verify"
   ]);
 
   assert.equal(stepByName(job, "revert").status, STEP_STATUS.SKIPPED);
   assert.equal(saved.at(-1).serviceOverrides.trailarr.mode, "imported");
-  assert.equal(saved.at(-1).serviceOverrides.trailarr.rollbackContainerName, "trailarr-stackarr-rollback");
+  assert.equal(saved.at(-1).serviceOverrides.trailarr.rollbackContainerName, "trailarr-keelarr-rollback");
 });
 
 test("the original container is preserved, never deleted, on success", async () => {
@@ -147,7 +147,7 @@ test("the original container is preserved, never deleted, on success", async () 
   const job = await settle(service.startCutover("c-trailarr", { confirmContainerName: "trailarr" }));
 
   assert.ok(!calls.some((call) => call.startsWith("rm")));
-  assert.match(job.result.cleanupHint, /preserved as trailarr-stackarr-rollback/);
+  assert.match(job.result.cleanupHint, /preserved as trailarr-keelarr-rollback/);
 });
 
 test("a failed compose up restores the original container and fails the job", async () => {
@@ -161,7 +161,7 @@ test("a failed compose up restores the original container and fails the job", as
   assert.deepEqual(calls.slice(-4), [
     "compose-up",
     "compose-down",
-    "rename:trailarr-stackarr-rollback->trailarr",
+    "rename:trailarr-keelarr-rollback->trailarr",
     "start:trailarr"
   ]);
   // A failed cutover must not leave the service marked as cut over.
@@ -178,7 +178,7 @@ test("a container that comes up dead is rolled back automatically", async () => 
   assert.equal(stepByName(job, "revert").status, STEP_STATUS.SUCCEEDED);
   assert.deepEqual(calls.slice(-3), [
     "compose-down",
-    "rename:trailarr-stackarr-rollback->trailarr",
+    "rename:trailarr-keelarr-rollback->trailarr",
     "start:trailarr"
   ]);
   assert.equal(saved.length, 0);
@@ -225,7 +225,7 @@ test("a leftover rollback container blocks the cutover before anything is stoppe
 
   assert.equal(job.status, JOB_STATUS.FAILED);
   assert.match(job.error.message, /still exists/);
-  assert.deepEqual(calls, ["exists:trailarr-stackarr-rollback"]);
+  assert.deepEqual(calls, ["exists:trailarr-keelarr-rollback"]);
 });
 
 test("a service without a reviewed draft cannot be cut over", async () => {
@@ -254,7 +254,7 @@ test("revert takes compose down, restores the original container, and clears cut
           trailarr: {
             mode: "imported",
             containerName: "trailarr",
-            rollbackContainerName: "trailarr-stackarr-rollback"
+            rollbackContainerName: "trailarr-keelarr-rollback"
           }
         }
       }),
@@ -269,9 +269,9 @@ test("revert takes compose down, restores the original container, and clears cut
 
   assert.equal(job.status, JOB_STATUS.SUCCEEDED);
   assert.deepEqual(calls, [
-    "exists:trailarr-stackarr-rollback",
+    "exists:trailarr-keelarr-rollback",
     "compose-down",
-    "rename:trailarr-stackarr-rollback->trailarr",
+    "rename:trailarr-keelarr-rollback->trailarr",
     "start:trailarr",
     "verify"
   ]);
@@ -298,5 +298,5 @@ test("revert refuses when there is no rollback container to restore", async () =
 });
 
 test("rollbackNameFor is stable and suffix-based", () => {
-  assert.equal(rollbackNameFor("sabnzbd"), "sabnzbd-stackarr-rollback");
+  assert.equal(rollbackNameFor("sabnzbd"), "sabnzbd-keelarr-rollback");
 });

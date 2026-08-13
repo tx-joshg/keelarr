@@ -265,7 +265,7 @@ export function buildEndpointFromInventory({ serviceId, name, containerName, fal
  * is exactly how a host-networked source behaves.
  *
  * The dashboard needs this as a separate answer from the controller's: the URL
- * Stackarr uses to check an app and the URL you click to open it are two
+ * Keelarr uses to check an app and the URL you click to open it are two
  * different questions whenever the two sit in different places.
  */
 export const LAN_CLIENT = Object.freeze({
@@ -283,9 +283,9 @@ export const LAN_CLIENT = Object.freeze({
 /** The controller is a source like any other, so it gets an endpoint too. */
 export function buildControllerEndpoint(inspect, networkDrivers = new Map()) {
   return buildEndpoint({
-    serviceId: "stackarr",
-    name: "Stackarr",
-    containerName: "stackarr",
+    serviceId: "keelarr",
+    name: "Keelarr",
+    containerName: "keelarr",
     fallbackPort: null,
     inspect,
     networkDrivers
@@ -311,7 +311,7 @@ export async function loadControllerEndpoint(settings, { inspectContainersImpl, 
     return controllerEndpoint;
   }
 
-  const candidates = [hostname, "stackarr"].filter(Boolean);
+  const candidates = [hostname, "keelarr"].filter(Boolean);
   let inspect = null;
 
   try {
@@ -328,7 +328,7 @@ export async function loadControllerEndpoint(settings, { inspectContainersImpl, 
     // Deliberately not cached. A transient failure here would otherwise pin the
     // controller to the fallback for the life of the process, which is exactly
     // the over-broad addressing this function exists to replace.
-    return { ...LAN_CLIENT, serviceId: "stackarr", name: "Stackarr" };
+    return { ...LAN_CLIENT, serviceId: "keelarr", name: "Keelarr" };
   }
 
   const drivers = await inspectNetworkDrivers(
@@ -387,7 +387,7 @@ export function resolveLink(source, target, { hostAddress } = {}) {
   }
 
   if (!target.containerPort) {
-    return blocked(`${target.name} does not expose a port that Stackarr can identify.`);
+    return blocked(`${target.name} does not expose a port that Keelarr can identify.`);
   }
 
   if (target.kind === ENDPOINT_KIND.HOST) {

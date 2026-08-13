@@ -1,4 +1,4 @@
-# Stackarr Roadmap
+# Keelarr Roadmap
 
 This roadmap translates the product and architecture documents into a staged implementation plan.
 
@@ -171,7 +171,7 @@ Exit criteria:
 
 Goal:
 
-Make Stackarr safe enough for broader real-world use.
+Make Keelarr safe enough for broader real-world use.
 
 Required work:
 
@@ -183,7 +183,7 @@ Required work:
 
 Exit criteria:
 
-- Stackarr can be recommended beyond LAN-only development use
+- Keelarr can be recommended beyond LAN-only development use
 
 ## Phase 8: Observe-Only External Services
 
@@ -216,7 +216,7 @@ Required work:
 
 Exit criteria:
 
-- Stackarr can guide a native user into a Docker-managed stack without claiming full native lifecycle management
+- Keelarr can guide a native user into a Docker-managed stack without claiming full native lifecycle management
 
 ## Explicit Non-Goals Until Later
 

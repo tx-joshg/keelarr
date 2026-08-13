@@ -2,7 +2,7 @@
 
 Demo mode simulates every Docker call, and the automated tests use a stub
 `docker` binary. Both prove sequencing and argument construction. Neither proves
-that a real daemon behaves the way Stackarr expects.
+that a real daemon behaves the way Keelarr expects.
 
 This document covers the two steps between "passes in demo" and "migrated the
 live NAS".
@@ -13,38 +13,38 @@ Run this on any machine with Docker — a laptop is fine. It exercises the real
 `docker stop`, `docker rename`, and `docker compose up` paths with no blast
 radius, so a bug costs nothing.
 
-Stackarr recognizes a container by **name first**, then by image repository.
+Keelarr recognizes a container by **name first**, then by image repository.
 That means a container named `ombi` is adopted as Ombi regardless of what image
 it runs, so a small image is enough to rehearse with. Adoption requires
 `/config` and `/Media` mounts.
 
 ```bash
-mkdir -p /tmp/stackarr-rehearsal/{stacks,config/ombi/config,media,downloads,data}
+mkdir -p /tmp/keelarr-rehearsal/{stacks,config/ombi/config,media,downloads,data}
 ```
 
 ```bash
-docker run -d --name ombi -p 3579:80 -v /tmp/stackarr-rehearsal/config/ombi/config:/config -v /tmp/stackarr-rehearsal/media:/Media httpd:alpine
+docker run -d --name ombi -p 3579:80 -v /tmp/keelarr-rehearsal/config/ombi/config:/config -v /tmp/keelarr-rehearsal/media:/Media httpd:alpine
 ```
 
 `httpd:alpine` answers HTTP on port 80, published here on Ombi's expected 3579.
 Ombi accepts a 200 as healthy, so the verify step should resolve to `verified`
 rather than `unverified` — which exercises the success path end to end.
 
-Start Stackarr against a scratch data directory so this never touches real
+Start Keelarr against a scratch data directory so this never touches real
 state:
 
 ```bash
-STACKARR_DATA_DIR=/tmp/stackarr-rehearsal/data STACKARR_LOG_LEVEL=debug npm start
+KEELARR_DATA_DIR=/tmp/keelarr-rehearsal/data KEELARR_LOG_LEVEL=debug npm start
 ```
 
 In Settings, point every path at the rehearsal tree:
 
 ```text
 Docker Binary:      docker
-Compose Stack Root: /tmp/stackarr-rehearsal/stacks
-Config Root:        /tmp/stackarr-rehearsal/config
-Media Root:         /tmp/stackarr-rehearsal/media
-Downloads Root:     /tmp/stackarr-rehearsal/downloads
+Compose Stack Root: /tmp/keelarr-rehearsal/stacks
+Config Root:        /tmp/keelarr-rehearsal/config
+Media Root:         /tmp/keelarr-rehearsal/media
+Downloads Root:     /tmp/keelarr-rehearsal/downloads
 Host URL:           http://localhost
 ```
 
@@ -54,8 +54,8 @@ Then: `Adoption` → `Scan Docker` → preview `ombi` → `Generate Managed Draf
 What should happen:
 
 - every step goes green, `Roll back to the original container` shows `Not needed`
-- `docker ps -a` shows a new Compose-managed `ombi` and a stopped `ombi-stackarr-rollback`
-- `/tmp/stackarr-rehearsal/stacks/.stackarr-backups/ombi/<timestamp>/` holds
+- `docker ps -a` shows a new Compose-managed `ombi` and a stopped `ombi-keelarr-rollback`
+- `/tmp/keelarr-rehearsal/stacks/.keelarr-backups/ombi/<timestamp>/` holds
   `compose.yml`, `.env`, `inspect.json`, and `rollback.json`
 - the Stack row shows `Managed` with a revert button
 
@@ -66,7 +66,7 @@ Worth rehearsing deliberately, since these are the paths that matter when
 something goes wrong:
 
 - **failed deploy**: occupy the port first (`docker run -d -p 3579:80 --name blocker httpd:alpine`
-  after generating the draft but before cutting over) and confirm Stackarr
+  after generating the draft but before cutting over) and confirm Keelarr
   restores the original container automatically
 - **unverified**: publish the container on a port nothing answers on, and
   confirm the outcome reports `unverified` rather than success, and that the
@@ -75,7 +75,7 @@ something goes wrong:
 Clean up:
 
 ```bash
-docker rm -f ombi ombi-stackarr-rollback blocker 2>/dev/null; rm -rf /tmp/stackarr-rehearsal
+docker rm -f ombi ombi-keelarr-rollback blocker 2>/dev/null; rm -rf /tmp/keelarr-rehearsal
 ```
 
 ## Step 2: The live QNAP run
@@ -89,7 +89,7 @@ Deploy this branch to the NAS and rebuild the controller:
 cd deploy && docker compose -f compose.example.yml up -d --build
 ```
 
-Set `STACKARR_LOG_LEVEL=debug` in `deploy/.env` before the first cutover. That
+Set `KEELARR_LOG_LEVEL=debug` in `deploy/.env` before the first cutover. That
 logs every Docker command and its full output, which is what you want the first
 time this runs against real containers.
 
@@ -98,14 +98,14 @@ Before clicking anything, confirm:
 - `docker ps` shows `ombi` running
 - the dashboard shows Ombi as `Draft`, not `Detected` — if it shows `Detected`,
   generate the managed draft first
-- no leftover rollback container: `docker ps -a --filter name=stackarr-rollback`
+- no leftover rollback container: `docker ps -a --filter name=keelarr-rollback`
   should be empty
 - `IMPORT-REVIEW.md` in the Ombi stack folder describes the container you expect
 
 Watch it run:
 
 ```bash
-docker logs -f stackarr
+docker logs -f keelarr
 ```
 
 Afterwards, verify by hand rather than trusting the dashboard alone:
@@ -114,8 +114,8 @@ Afterwards, verify by hand rather than trusting the dashboard alone:
 - `/config` inside the new container holds the same database
 - `docker inspect ombi` shows the mounts and restart policy you expect
 
-Leave `ombi-stackarr-rollback` in place until you have used the app for a while.
-Stackarr never deletes it; removing it is a deliberate manual step.
+Leave `ombi-keelarr-rollback` in place until you have used the app for a while.
+Keelarr never deletes it; removing it is a deliberate manual step.
 
 ## Manual escape hatch
 
@@ -127,11 +127,11 @@ docker compose -f /share/Container/docker/ombi/compose.yml down
 ```
 
 ```bash
-docker rename ombi-stackarr-rollback ombi && docker start ombi
+docker rename ombi-keelarr-rollback ombi && docker start ombi
 ```
 
 The pre-cutover state is preserved under
-`<stackRoot>/.stackarr-backups/<service>/<timestamp>/`. `rollback.json` there
+`<stackRoot>/.keelarr-backups/<service>/<timestamp>/`. `rollback.json` there
 records the exact image id and repo digest the container was running, which is
 what you need if the image tag has since moved.
 
@@ -171,7 +171,7 @@ Run against a real Docker daemon (Docker 29.4.1, Compose v5.1.3) using the
 Step 1 rehearsal above:
 
 - cutover to `verified`, with Compose taking ownership and the original
-  container preserved as `ombi-stackarr-rollback`
+  container preserved as `ombi-keelarr-rollback`
 - `rollback.json` capturing the real pre-cutover image id and repo digest
 - revert restoring the original container under its original name
 - automatic revert after a genuinely failed `compose up`

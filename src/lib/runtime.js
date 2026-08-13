@@ -311,7 +311,7 @@ export async function pruneServiceBackups(settings, serviceId, options = {}) {
     return { pruned: 0, kept: null };
   }
 
-  const root = path.join(settings.stackRoot, ".stackarr-backups", serviceId);
+  const root = path.join(settings.stackRoot, ".keelarr-backups", serviceId);
   let stamps = [];
 
   try {
@@ -336,7 +336,7 @@ export async function pruneServiceBackups(settings, serviceId, options = {}) {
 export async function backupService(settings, service, options = {}) {
   const backedUpAt = new Date().toISOString();
   const timestamp = backedUpAt.replace(/[:.]/g, "-");
-  const backupDir = path.join(settings.stackRoot, ".stackarr-backups", service.id, timestamp);
+  const backupDir = path.join(settings.stackRoot, ".keelarr-backups", service.id, timestamp);
   await mkdir(backupDir, { recursive: true });
 
   await backupFileIfPresent(service.composePath, backupDir);
@@ -470,7 +470,7 @@ export async function composeDown(settings, service, options = {}) {
  * back to the image you are already on is a no-op the caller should not offer.
  */
 export async function findRollbackPoint(settings, service, options = {}) {
-  const serviceBackupRoot = path.join(settings.stackRoot, ".stackarr-backups", service.id);
+  const serviceBackupRoot = path.join(settings.stackRoot, ".keelarr-backups", service.id);
   let stamps = [];
 
   try {

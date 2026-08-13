@@ -2,7 +2,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 
 /**
- * The host paths Stackarr needs to see, and the variable that grants each one.
+ * The host paths Keelarr needs to see, and the variable that grants each one.
  *
  * The controller only perceives what its own Compose file mounted. A directory
  * that plainly exists on the host is invisible to it otherwise, and every
@@ -100,7 +100,7 @@ export async function resolveControllerEnvPath({ workingDir, composeFile, mounts
   //
   // Either file identifies it. Looking only for .env would fail on exactly the
   // installation that needs this most — a fresh clone, where the whole point is
-  // that no .env exists yet and Stackarr is meant to write the first one.
+  // that no .env exists yet and Keelarr is meant to write the first one.
   for (const marker of [".env", composeName, "compose.example.yml"]) {
     if (await exists(path.join(DEPLOY_MOUNT, marker))) {
       return path.join(DEPLOY_MOUNT, ".env");
@@ -140,25 +140,25 @@ export async function resolveControllerEnvPath({ workingDir, composeFile, mounts
  * exists, and a process inside that container cannot tell it.
  */
 export function renderControllerEnv(settings, existing = "") {
-  // Pins the controller's own image. Stackarr has no opinion about it, but it
-  // lives in the file Stackarr rewrites — so it has to be carried across, or
+  // Pins the controller's own image. Keelarr has no opinion about it, but it
+  // lives in the file Keelarr rewrites — so it has to be carried across, or
   // saving a host path would quietly un-pin the version and move someone onto
   // `latest` without asking.
-  const pinnedVersion = readExisting(existing, "STACKARR_VERSION");
+  const pinnedVersion = readExisting(existing, "KEELARR_VERSION");
 
   const managed = {
-    ...(pinnedVersion ? { STACKARR_VERSION: pinnedVersion } : {}),
-    STACKARR_PORT: readExisting(existing, "STACKARR_PORT") || "4687",
-    STACKARR_LOG_LEVEL: readExisting(existing, "STACKARR_LOG_LEVEL") || "info",
+    ...(pinnedVersion ? { KEELARR_VERSION: pinnedVersion } : {}),
+    KEELARR_PORT: readExisting(existing, "KEELARR_PORT") || "4687",
+    KEELARR_LOG_LEVEL: readExisting(existing, "KEELARR_LOG_LEVEL") || "info",
     // Not derivable from settings: it is where settings themselves live.
-    STACKARR_DATA_DIR: readExisting(existing, "STACKARR_DATA_DIR") || "../data",
+    KEELARR_DATA_DIR: readExisting(existing, "KEELARR_DATA_DIR") || "../data",
     ...Object.fromEntries(
       REQUIRED_ROOTS.filter((root) => settings[root.field]).map((root) => [root.variable, settings[root.field]])
     )
   };
 
   return [
-    "# Written by Stackarr from its own settings. Edit paths in the app rather",
+    "# Written by Keelarr from its own settings. Edit paths in the app rather",
     "# than here, or the next save will overwrite them.",
     "#",
     "# Recreate the controller for changes to take effect:",
@@ -187,6 +187,6 @@ export function findUnmountedRoots(settings, controllerMounts) {
       level: "warn",
       field: root.field,
       path: settings[root.field],
-      message: `${root.label} ${settings[root.field]} is not mounted into the Stackarr container, so Stackarr cannot see it — it will report the path as missing even though it exists on the host. Set ${root.variable}=${settings[root.field]} in deploy/.env and recreate the controller.`
+      message: `${root.label} ${settings[root.field]} is not mounted into the Keelarr container, so Keelarr cannot see it — it will report the path as missing even though it exists on the host. Set ${root.variable}=${settings[root.field]} in deploy/.env and recreate the controller.`
     }));
 }

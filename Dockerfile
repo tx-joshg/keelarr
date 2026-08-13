@@ -14,8 +14,8 @@ COPY src ./src
 COPY data/.gitkeep ./data/.gitkeep
 
 ENV NODE_ENV=production \
-    STACKARR_PORT=4687 \
-    STACKARR_DATA_DIR=/app/data
+    KEELARR_PORT=4687 \
+    KEELARR_DATA_DIR=/app/data
 
 EXPOSE 4687
 

@@ -4,7 +4,7 @@ import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import YAML from "yaml";
 
 import { buildComposeSpec, isImportedMode } from "./service-catalog.js";
-import { StackarrError } from "./errors.js";
+import { KeelarrError } from "./errors.js";
 
 async function fileExists(filePath) {
   try {
@@ -81,7 +81,7 @@ export async function setComposeImage(service, imageRef) {
   const serviceKey = Object.keys(spec?.services || {})[0];
 
   if (!serviceKey) {
-    throw new StackarrError(`No service block found in ${service.composePath}.`, {
+    throw new KeelarrError(`No service block found in ${service.composePath}.`, {
       statusCode: 500
     });
   }
@@ -187,7 +187,7 @@ export async function writeStacks(settings, serviceIds = settings.selectedServic
       const envExists = await fileExists(service.envPath);
 
       if (!composeExists || !envExists) {
-        throw new StackarrError(`Imported draft files are missing for ${service.name}. Re-run the adoption draft before deploying.`, {
+        throw new KeelarrError(`Imported draft files are missing for ${service.name}. Re-run the adoption draft before deploying.`, {
           statusCode: 400
         });
       }

@@ -1,7 +1,7 @@
-export class StackarrError extends Error {
+export class KeelarrError extends Error {
   constructor(message, options = {}) {
     super(message);
-    this.name = "StackarrError";
+    this.name = "KeelarrError";
     this.statusCode = options.statusCode || 500;
     this.details = options.details || null;
   }
