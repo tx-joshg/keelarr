@@ -118,3 +118,27 @@ test("config snapshot exclusions match either casing apps use", async () => {
   // Shipped frontend assets, not configuration.
   assert.match(patterns, /\.\/web/);
 });
+
+test("a port conflict names the port, because a busy host has many", () => {
+  const dockerSays = "Error response from daemon: failed to set up container networking: "
+    + "driver failed programming external connectivity on endpoint sabnzbd (12c6): "
+    + "Bind for 0.0.0.0:8080 failed: port is already allocated";
+
+  const explained = explainDeployFailure(dockerSays);
+
+  assert.match(explained, /8080/);
+  assert.match(explained, /already in use/);
+  // Actionable, not just descriptive.
+  assert.match(explained, /Change this app's port|stop whatever holds/);
+});
+
+test("the older bind message is recognised too", () => {
+  assert.match(explainDeployFailure("listen tcp 0.0.0.0:9696: bind: address already in use"), /9696/);
+});
+
+test("a conflict with no port in the message still explains itself", () => {
+  const explained = explainDeployFailure("port is already allocated");
+
+  assert.match(explained, /already in use/);
+  assert.doesNotMatch(explained, /undefined/);
+});

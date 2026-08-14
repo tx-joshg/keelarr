@@ -647,7 +647,14 @@ export function explainDeployFailure(output = "") {
   }
 
   if (/port is already allocated|address already in use/i.test(text)) {
-    return "That host port is already in use by another container or service.";
+    // Naming the port is the whole value of the message: "a port is in use" on
+    // a host running a dozen containers sends you looking through all of them.
+    const port = text.match(/Bind for [^:]*:(\d+) failed/i)?.[1]
+      || text.match(/(?:0\.0\.0\.0|127\.0\.0\.1):(\d+)/)?.[1];
+
+    return port
+      ? `Host port ${port} is already in use by another container or service. Change this app's port in Settings, or stop whatever holds ${port}.`
+      : "That host port is already in use by another container or service.";
   }
 
   if (/pull access denied|authentication required/i.test(text)) {

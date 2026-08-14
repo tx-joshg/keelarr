@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { buildDashboardState, isComposeManagedBy, selectInventoryItemForService } from "../src/lib/status.js";
+import { buildDashboardState, isComposeManagedBy, selectInventoryItemForService, deriveReachable, findUnpublishedPorts } from "../src/lib/status.js";
 
 test("selectInventoryItemForService prefers imported source identifiers before generic matches", () => {
   const service = {
@@ -357,4 +357,32 @@ test("compose ownership is matched by the container's own labels", () => {
   // A plain `docker run` container carries no compose labels at all.
   assert.equal(isComposeManagedBy({ compose: null }, service), false);
   assert.equal(isComposeManagedBy(null, service), false);
+});
+
+test("a running container is not called reachable when nothing probed it", () => {
+  // The false green: SABnzbd's port never published, so nothing on the host
+  // could open it — and the address shown belonged to whichever service did
+  // claim that port. Keelarr called it reachable because the process was up.
+  assert.equal(deriveReachable({ status: "running" }, null), null);
+  assert.equal(deriveReachable({ status: "running" }, { reachable: false }), null);
+});
+
+test("reachable stays true only when something actually answered", () => {
+  assert.equal(deriveReachable({ status: "running" }, { reachable: true }), true);
+  assert.equal(deriveReachable({ status: "running", healthStatus: "healthy" }, null), true);
+});
+
+test("a stopped container is unreachable, which is a fact rather than a guess", () => {
+  assert.equal(deriveReachable({ status: "exited" }, null), false);
+  assert.equal(deriveReachable({ status: "running", healthStatus: "unhealthy" }, null), false);
+});
+
+test("a declared port with no host binding is reported", () => {
+  const ports = [
+    { containerPort: "8080/tcp", hostIp: null, hostPort: null },
+    { containerPort: "9696/tcp", hostIp: "0.0.0.0", hostPort: "9696" }
+  ];
+
+  assert.deepEqual(findUnpublishedPorts(ports), ["8080/tcp"]);
+  assert.deepEqual(findUnpublishedPorts([]), []);
 });

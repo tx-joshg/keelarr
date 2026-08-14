@@ -12,7 +12,7 @@ import {
   restartService,
   restoreConfigSnapshot
 } from "../runtime.js";
-import { SHARED_NETWORK, isImportedMode } from "../service-catalog.js";
+import { SHARED_NETWORK, getServiceDefinition, isImportedMode } from "../service-catalog.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
 import { JobRegistry } from "../jobs.js";
 import {
@@ -638,7 +638,12 @@ export class ManagedStackService {
   }
 
   async installManagedService(serviceId, context = {}) {
-    const settings = await this.loadSettings();
+    // Installing an app is how you say you want it managed, so selecting it is
+    // part of installing rather than a step to do first. Removal takes a
+    // service out of the selection, which made "remove, then reinstall" fail
+    // with "Unknown or disabled service" — and the same for any app installed
+    // from the catalog without visiting Settings.
+    const settings = await this.ensureSelected(serviceId, context);
     const service = this.requireService(settings, serviceId);
     await this.writeStacks(settings, [service.id]);
     // backup: an install may be replacing an existing container, so capture
@@ -650,6 +655,35 @@ export class ManagedStackService {
       stdout: result.stdout,
       stderr: result.stderr
     };
+  }
+
+  /**
+   * Adds a service to the selection if it is not already there, and hands back
+   * settings that include it.
+   *
+   * Deliberately narrow: it only ever adds, and only the service being
+   * installed. Nothing else about the selection is touched.
+   */
+  async ensureSelected(serviceId, context = {}) {
+    const settings = await this.loadSettings();
+
+    if (settings.services[serviceId]) {
+      return settings;
+    }
+
+    if (!getServiceDefinition(serviceId)) {
+      throw new KeelarrError(`Unknown service: ${serviceId}`, { statusCode: 404 });
+    }
+
+    if (!this.hostProfileService) {
+      throw new KeelarrError(`${serviceId} is not part of this stack yet. Select it in Settings first.`, {
+        statusCode: 409
+      });
+    }
+
+    this.scopedLogger(context).info("service.selected", { serviceId });
+
+    return this.hostProfileService.addSelectedService(serviceId);
   }
 
   async restartManagedService(serviceId, context = {}) {

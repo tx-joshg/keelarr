@@ -69,6 +69,28 @@ export class HostProfileService {
       : this.logger;
   }
 
+  /**
+   * Adds one service to the selection and saves.
+   *
+   * Only ever adds, and only the one named. Installing an app is how an
+   * operator says they want it managed, so it should not also require a trip
+   * to Settings to tick a box — and after a removal, which drops the service
+   * from the selection, that trip was the difference between "reinstall" and
+   * "Unknown or disabled service".
+   */
+  async addSelectedService(serviceId) {
+    const current = await this.loadSettings();
+
+    if (current.selectedServiceIds.includes(serviceId)) {
+      return current;
+    }
+
+    return this.saveSettings(this.normalizeSettings({
+      ...current,
+      selectedServiceIds: [...current.selectedServiceIds, serviceId]
+    }));
+  }
+
   buildCandidateSettings(rawSettings, detection, options = {}) {
     const preferredAdapterId = options.preferredAdapterId || null;
     const selectedSuggestions = detection?.selected?.suggestedSettings || {};

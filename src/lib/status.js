@@ -120,7 +120,7 @@ function deriveHealthStatus(inventoryItem, probe) {
   return "unknown";
 }
 
-function deriveReachable(inventoryItem, probe) {
+export function deriveReachable(inventoryItem, probe) {
   if (inventoryItem?.healthStatus === "healthy") {
     return true;
   }
@@ -133,11 +133,32 @@ function deriveReachable(inventoryItem, probe) {
     return true;
   }
 
+  // A running container is not a reachable app, and saying so was a false
+  // green: a SABnzbd whose port never published showed as reachable, with a
+  // link that opened whatever else happened to own that port on the host.
+  //
+  // Null rather than false, because "nothing asked" is not "asked and failed".
+  // The dashboard renders the three differently, so an app the controller
+  // cannot route to is not painted as down.
   if (inventoryItem?.status === "running") {
-    return true;
+    return null;
   }
 
   return false;
+}
+
+/**
+ * A port the compose file declares but Docker never bound.
+ *
+ * Happens when the port was already taken at create time. The container runs,
+ * the app answers inside it, and nothing on the host can reach it — including
+ * the link Keelarr shows, which then belongs to whichever service did get the
+ * port. Keelarr already has this in the inventory; it just never said so.
+ */
+export function findUnpublishedPorts(publishings = []) {
+  return publishings
+    .filter((entry) => entry && entry.containerPort && !entry.hostPort)
+    .map((entry) => entry.containerPort);
 }
 
 function deriveManagementState(service, generated, runtimeSource, inventoryItem) {
@@ -329,6 +350,9 @@ export async function buildDashboardState(settings, dependencies = {}) {
       managementState,
       runtimeStatus,
       publishings: inventoryItem?.ports || runtime?.Publishers || [],
+      // Named separately from reachability so the dashboard can explain why an
+      // app it cannot open is nonetheless running.
+      unpublishedPorts: findUnpublishedPorts(inventoryItem?.ports || runtime?.Publishers || []),
       networks: inventoryItem?.networks || [],
       reachable,
       healthStatus,

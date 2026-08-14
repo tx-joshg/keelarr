@@ -186,7 +186,11 @@ function buildRenderService(id) {
     managementState: live?.managementState || "catalog",
     runtimeStatus: live?.runtimeStatus || "not-deployed",
     runtimeSource: live?.runtimeSource || "none",
-    reachable: live?.reachable === true,
+    // Three states, not two: true is "something answered", false is "asked and
+    // failed", null is "not checked from here". Collapsing null into false
+    // paints an app the controller cannot route to as though it were down.
+    reachable: live?.reachable ?? null,
+    unpublishedPorts: live?.unpublishedPorts || [],
     healthStatus: live?.healthStatus || "unknown",
     httpStatus: live?.httpStatus ?? null,
     latencyMs: live?.latencyMs ?? null,
@@ -414,6 +418,18 @@ function healthIconMeta(service) {
 
   if (!isServiceRunning(service)) {
     return { icon: "fa-regular fa-circle", tone: "idle", title: "Not running." };
+  }
+
+  // A declared port that Docker never bound is the specific, fixable reason —
+  // worth saying instead of the general one, because the app is fine and the
+  // address is not.
+  if (service.unpublishedPorts?.length) {
+    return {
+      icon: "fa-solid fa-plug-circle-exclamation",
+      tone: "warn",
+      title: `Running, but ${service.unpublishedPorts.join(", ")} was never published to the host — usually because that port was already taken. `
+        + `The app cannot be opened at the address shown, and that address may belong to whatever else claimed the port.`
+    };
   }
 
   return {
