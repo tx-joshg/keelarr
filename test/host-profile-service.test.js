@@ -339,9 +339,19 @@ test("prepareSetup preserves existing service overrides when saving host setting
 test("saveProfile persists validated settings without generating stacks", async () => {
   let savedPayload = null;
   let writeStacksCalled = false;
+  const envWrites = [];
 
   const service = new HostProfileService({
     appendActivityImpl: async () => [],
+    // Stubbed deliberately. Left real, saveProfile runs syncControllerEnv for
+    // real: it inspects the developer's actual Docker, finds their running
+    // controller, and overwrites that controller's deploy/.env with the QNAP
+    // paths from this fixture. `npm test` broke a live controller here twice
+    // before this was found.
+    inspectContainersImpl: async () => [],
+    writeFileImpl: async (target, content) => {
+      envWrites.push({ target, content });
+    },
     detectHostEnvironmentImpl: async () => ({
       selected: {
         adapterId: "qnap",
@@ -390,6 +400,9 @@ test("saveProfile persists validated settings without generating stacks", async 
   assert.equal(savedPayload.adapterType, "qnap");
   assert.equal(savedPayload.preferredAdapterId, undefined);
   assert.equal(writeStacksCalled, false);
+  // No controller to find, so nothing on disk is touched. Any write escaping
+  // here lands on a real file outside the test's control.
+  assert.deepEqual(envWrites, []);
 });
 
 test("detectHost applies preferred adapter suggestions over stale saved host paths", async () => {
@@ -532,4 +545,41 @@ test("a changed host profile is not served from the previous cache entry", async
   await service.resolveStateSettings();
 
   assert.equal(inspections, 2);
+});
+
+test("installing an app selects it, so a reinstall does not need a trip to Settings", async () => {
+  // Removal drops the service from the selection, which made remove-then-
+  // reinstall fail with "Unknown or disabled service".
+  let saved = null;
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => normalizeSettings({
+      initialized: true,
+      selectedServiceIds: ["radarr"]
+    }),
+    saveSettingsImpl: async (next) => {
+      saved = next;
+      return next;
+    }
+  });
+
+  const result = await service.addSelectedService("prowlarr");
+
+  assert.equal(result.selectedServiceIds.includes("prowlarr"), true);
+  assert.equal(result.selectedServiceIds.includes("radarr"), true, "it must only add, never replace");
+  assert.equal(saved.selectedServiceIds.length, 2);
+});
+
+test("selecting an app that is already selected changes nothing", async () => {
+  let saves = 0;
+  const service = new HostProfileService({
+    loadSettingsImpl: async () => normalizeSettings({ initialized: true, selectedServiceIds: ["radarr"] }),
+    saveSettingsImpl: async (next) => {
+      saves += 1;
+      return next;
+    }
+  });
+
+  await service.addSelectedService("radarr");
+
+  assert.equal(saves, 0, "an unnecessary save would rewrite deploy/.env for nothing");
 });
