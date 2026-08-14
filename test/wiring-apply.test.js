@@ -117,6 +117,12 @@ function createHarness(overrides = {}) {
         return overrides.categoryCreatable === false
           ? { ok: false, data: null, error: "SABnzbd rejected the request." }
           : { ok: true, data: {}, error: null };
+      },
+      setHostWhitelist: async (base, _key, entries) => {
+        calls.push({ call: "set-host-whitelist", base, entries });
+        return overrides.whitelistWritable === false
+          ? { ok: false, data: null, error: "SABnzbd rejected the request." }
+          : { ok: true, data: {}, error: null };
       }
     },
     appendActivityImpl: async (entry) => activity.push(entry),
@@ -151,7 +157,9 @@ function createHarness(overrides = {}) {
           ? {
               completeDir: "/Media/Downloads/complete",
               categories: overrides.categories || ["movies", "tv", "music"],
-              hostWhitelist: []
+              // `??` would collapse an explicit null, which is the case that
+              // matters: unread is not the same as empty.
+              hostWhitelist: "hostWhitelist" in overrides ? overrides.hostWhitelist : []
             }
           : null
     };
@@ -265,6 +273,8 @@ test("applying creates only what is missing, and tests each payload before writi
 
   const order = calls.map((entry) => entry.call);
   assert.deepEqual(order, [
+    // First, or the write that follows is answered with a bare 403.
+    "set-host-whitelist",
     "test-client",
     "create-client",
     "test-application",
@@ -332,7 +342,54 @@ test("drift is never written by the apply job, only reported by the check", asyn
   );
 });
 
-test("a fully wired stack refuses the job rather than writing duplicates", async () => {
+// A fresh SABnzbd whitelists only the hostname it sees itself as — inside a
+// container, its own ID — and answers 403 to its container *name*, which is
+// exactly what every app on a shared network uses. Verified live: a from-scratch
+// SABnzbd returned 403 to `http://sabnzbd:8080/api` and 200 to the same call by
+// IP, which is why the fix is sent to the IP.
+test("a fresh SABnzbd is told to accept the hostname the apps address it by", async () => {
+  const { service, calls } = createHarness({ hostWhitelist: [] });
+
+  await settle(service.startWiring());
+  const written = calls.find((entry) => entry.call === "set-host-whitelist");
+
+  assert.ok(written, "it should have added the hostname");
+  assert.ok(written.entries.includes("sabnzbd"), `entries were ${written.entries}`);
+  // Sent to the IP: the hostname is the thing being refused, so it cannot
+  // carry its own fix.
+  assert.equal(written.base, "http://172.30.0.11:8080");
+});
+
+test("an existing whitelist entry is kept rather than replaced", async () => {
+  // SABnzbd's API has no append — it overwrites the list — so anything already
+  // there has to be sent back with the addition or it is silently dropped.
+  const { service, calls } = createHarness({ hostWhitelist: ["1ca676b7b555"] });
+
+  await settle(service.startWiring());
+  const written = calls.find((entry) => entry.call === "set-host-whitelist");
+
+  assert.deepEqual(written.entries, ["1ca676b7b555", "sabnzbd"]);
+});
+
+test("a whitelist that already names the host is left alone", async () => {
+  const { service, calls } = createHarness({ hostWhitelist: ["sabnzbd"] });
+
+  await settle(service.startWiring());
+
+  assert.equal(calls.filter((entry) => entry.call === "set-host-whitelist").length, 0);
+});
+
+test("a whitelist that could not be read is not guessed at", async () => {
+  const { service, calls } = createHarness({ hostWhitelist: null });
+
+  await settle(service.startWiring());
+
+  // Null means unread, which is not the same as empty. Writing a list built
+  // from nothing would wipe whatever the operator actually had.
+  assert.equal(calls.filter((entry) => entry.call === "set-host-whitelist").length, 0);
+});
+
+test("a fully wired stack finishes without writing duplicates, and says so as a success", async () => {
   const { service, calls } = createHarness({
     downloadClients: [
       {
@@ -352,8 +409,11 @@ test("a fully wired stack refuses the job rather than writing duplicates", async
   });
   const job = await settle(service.startWiring());
 
-  assert.equal(job.status, JOB_STATUS.FAILED);
-  assert.match(job.error.message, /Nothing to wire/);
+  // Wiring runs automatically after every install, so a stack that needs
+  // nothing must not be reported as a failed job over a successful install.
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+  assert.equal(job.result.changed, false);
+  assert.match(job.result.summary, /every connection is already configured/);
   assert.equal(calls.length, 0);
 });
 
@@ -409,8 +469,12 @@ test("planning gives up waiting rather than hanging on an app that never settles
   // serve anything on the NAS — so what matters is that it terminates at all.
   assert.ok(waits.length <= 24, `waited ${waits.length} times`);
   assert.ok(waits.every((ms) => ms > 0), "each wait should actually pause");
-  assert.equal(job.status, JOB_STATUS.FAILED);
-  assert.match(job.error.message, /Nothing to wire/);
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+  assert.equal(job.result.changed, false);
+  // Nothing was written because nothing could be read. Claiming the stack is
+  // fully configured here would be the exact false green this job exists to
+  // avoid — "we wrote nothing" and "everything is correct" are different facts.
+  assert.doesNotMatch(job.result.summary, /already configured/);
 });
 
 test("a category the download client lacks is named, because blanking it does not work", () => {

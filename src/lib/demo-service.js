@@ -9,6 +9,7 @@ import { listServices } from "./service-catalog.js";
 import { KeelarrError } from "./errors.js";
 import { JobRegistry, buildJobSnapshot } from "./jobs.js";
 import { CUTOVER_STEPS, REVERT_STEPS, rollbackNameFor } from "./app-services/cutover-service.js";
+import { WIRING_STEPS } from "./app-services/wiring-service.js";
 
 function clone(value) {
   return structuredClone(value);
@@ -794,10 +795,24 @@ export class DemoKeelarrAppService {
    */
   /**
    * The demo stack always reports as fully wired, so there is never anything to
-   * apply. Saying so is more honest than pretending to configure something.
+   * apply. It returns a finished job saying exactly that, the same shape the
+   * live service returns — a stack that needs nothing is a success, and the
+   * demo must not be the one place that calls it a failure.
    */
   async startWiring() {
-    throw new KeelarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
+    const summary = "Nothing to change — every connection is already configured.";
+    const job = this.jobs.create({ kind: "wiring", subject: { scope: "stack" }, steps: WIRING_STEPS });
+
+    this.jobs.start(job, async (ctx) => {
+      await ctx.step("plan", async () => ({ detail: summary }));
+      for (const step of WIRING_STEPS.slice(1)) {
+        ctx.skip(step.name, "Nothing needed configuring.");
+      }
+
+      return { created: [], failed: [], notes: [], skipped: [], verification: [], changed: false, summary };
+    });
+
+    return { ok: true, job: buildJobSnapshot(job) };
   }
 
   async describeWiring() {

@@ -234,6 +234,37 @@ export const sabnzbdApi = {
       dir: name,
       script: "Default",
       priority: "-100"
+    }),
+
+  readHostWhitelist: async (base, key) => {
+    const result = await sabnzbdRequest(base, key, {
+      mode: "get_config",
+      section: "misc",
+      keyword: "host_whitelist"
+    });
+
+    if (!result.ok) {
+      return result;
+    }
+
+    const value = result.data?.config?.misc?.host_whitelist;
+    const entries = Array.isArray(value)
+      ? value
+      : String(value || "").split(",");
+
+    return { ok: true, data: entries.map((entry) => entry.trim()).filter(Boolean), error: null };
+  },
+
+  /**
+   * Replaces the whole whitelist, so callers must pass the entries they want
+   * kept as well as the ones they are adding. SABnzbd has no append.
+   */
+  setHostWhitelist: (base, key, entries) =>
+    sabnzbdRequest(base, key, {
+      mode: "set_config",
+      section: "misc",
+      keyword: "host_whitelist",
+      value: entries.join(",")
     })
 };
 

@@ -50,6 +50,16 @@ export const WIRING_STEPS = [
   { name: "verify", label: "Run each app's own connection tests" }
 ];
 
+/**
+ * Whether an address is a literal IP rather than a name.
+ *
+ * SABnzbd's whitelist only governs names — an IP in the Host header is always
+ * accepted — so an address that is already an IP needs nothing added for it.
+ */
+function isIpAddress(host) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
+}
+
 const READINESS = Object.freeze({
   READY: "ready",
   INCOMPLETE: "incomplete",
@@ -378,6 +388,9 @@ export class WiringService {
       controller,
       // SABnzbd's real category list, so a payload never names one it lacks.
       downloadCategories: downloadDirs?.categories || null,
+      // The hostnames SABnzbd will answer to. Null means it could not be read,
+      // which is different from an empty list.
+      downloadWhitelist: downloadDirs?.hostWhitelist || null,
       endpoints,
       mounts,
       keys,
@@ -503,8 +516,63 @@ export class WiringService {
     return gathered;
   }
 
+  /**
+   * Nothing is going to be written. Says why, without claiming more than it knows.
+   *
+   * "Every connection is already configured" is only true when every link is
+   * correct. Blocked, still starting, drifted and ambiguous links are all
+   * equally "nothing to write" — and reporting those as a finished, fully wired
+   * stack is how an operator ends up believing in a connection that does not
+   * exist.
+   */
+  describeNothingToDo(report) {
+    const entries = [...(report.links || []), ...(report.rootFolders || [])];
+    const count = (state) => entries.filter((entry) => entry.state === state).length;
+    const correct = count(RECONCILE_STATE.CORRECT);
+    const reasons = [
+      ["blocked", "cannot be reached"],
+      ["pending", "still starting up"],
+      ["unknown", "could not be read"],
+      [RECONCILE_STATE.DRIFT, "already pointing elsewhere and left alone"],
+      [RECONCILE_STATE.AMBIGUOUS, "too ambiguous to touch safely"]
+    ].map(([state, phrase]) => [count(state), phrase]);
+
+    const parts = reasons.filter(([n]) => n > 0).map(([n, phrase]) => `${n} ${phrase}`);
+    // Whatever the list above does not name. Counted rather than ignored, so a
+    // state added later cannot quietly fall through into "everything is fine".
+    const unaccounted = entries.length - correct - reasons.reduce((total, [n]) => total + n, 0);
+
+    if (unaccounted > 0) {
+      parts.push(`${unaccounted} in an unrecognised state`);
+    }
+
+    if (entries.length === 0) {
+      return {
+        everythingCorrect: false,
+        detail: "Nothing to configure — no connections were found between the apps in this stack.",
+        skipReason: "There was nothing to configure."
+      };
+    }
+
+    if (parts.length === 0) {
+      return {
+        everythingCorrect: true,
+        detail: "Nothing to change — every connection is already configured.",
+        skipReason: "Nothing needed configuring."
+      };
+    }
+
+    return {
+      everythingCorrect: false,
+      detail: `Nothing could be written: ${parts.join(", ")}. Run a stack check for the detail.`,
+      skipReason: "Nothing could be written."
+    };
+  }
+
   async runWiring(ctx, input, context) {
     let plan = null;
+    /** Set when the plan finds nothing to write, which is an outcome, not a fault. */
+    let unchanged = null;
 
     await ctx.step("plan", async () => {
       // An app deployed moments ago has not written its API key yet, and one
@@ -537,12 +605,41 @@ export class WiringService {
         actionable.subtitles.length;
 
       if (total === 0) {
-        throw new KeelarrError("Nothing to wire — every connection is already configured.", { statusCode: 409 });
+        unchanged = this.describeNothingToDo(gathered.report);
+        return { detail: unchanged.detail };
       }
 
       plan = { ...gathered, actionable, downloadCategories: gathered.downloadCategories };
       return { detail: `${total} connection${total === 1 ? "" : "s"} to configure.` };
     });
+
+    // A stack that needs nothing is a success, not a failure. This job runs
+    // automatically after every install, so failing it here painted a red
+    // failure over an install that had worked perfectly.
+    if (unchanged) {
+      for (const step of WIRING_STEPS.slice(1)) {
+        ctx.skip(step.name, unchanged.skipReason);
+      }
+
+      await this.appendActivity({
+        kind: "wiring-apply",
+        level: unchanged.everythingCorrect ? "info" : "warn",
+        message: unchanged.detail
+      });
+      this.scopedLogger(context).info("wiring.unchanged", {
+        everythingCorrect: unchanged.everythingCorrect
+      });
+
+      return {
+        created: [],
+        failed: [],
+        notes: [],
+        skipped: [],
+        verification: [],
+        changed: false,
+        summary: unchanged.detail
+      };
+    }
 
     const { keys, current, logger } = plan;
     const created = [];
@@ -616,6 +713,7 @@ export class WiringService {
       notes,
       skipped,
       verification: verification.results,
+      changed: true,
       summary: failed.length
         ? `Configured ${created.length} connection${created.length === 1 ? "" : "s"}; ${failed.length} could not be configured.`
         : `Configured ${created.length} connection${created.length === 1 ? "" : "s"}.`
@@ -629,6 +727,60 @@ export class WiringService {
    * from anything the app returned: Arr apps mask secret fields on read, and a
    * client created from a masked value stores the mask and gets 403 forever.
    */
+  /**
+   * Makes SABnzbd accept the hostname the rest of the stack addresses it by.
+   *
+   * A fresh SABnzbd whitelists only the hostname it sees itself as, which
+   * inside a container is the container *ID*, and answers 403 to every other
+   * name — including its own container name. That is the name Keelarr and every
+   * Arr app use on a shared network, so on a from-scratch install nothing can
+   * talk to it: the category call, Radarr's own connection test and Keelarr's
+   * writes are all refused with a 403 that says nothing about why.
+   *
+   * The entry is appended through SABnzbd's own API, never replacing what is
+   * already there, and the request is addressed by IP — the hostname is
+   * precisely what is being refused, so it cannot carry its own fix.
+   */
+  async ensureDownloadHostAccepted(plan, logger) {
+    const { actionable, endpoints, keys, downloadWhitelist } = plan;
+    const key = keys.get("sabnzbd");
+
+    if (!key || !Array.isArray(downloadWhitelist)) {
+      // Nothing was read, so nothing is known. Silence beats a guess.
+      return null;
+    }
+
+    const wanted = [
+      ...new Set(
+        actionable.downloadClients
+          .filter((link) => link.target === "sabnzbd")
+          .map((link) => link.address?.host)
+          .filter((host) => host && !isIpAddress(host))
+      )
+    ];
+    const missing = wanted.filter((host) => !downloadWhitelist.includes(host));
+
+    if (missing.length === 0) {
+      return null;
+    }
+
+    const address = (endpoints.get("sabnzbd")?.networks || []).find((network) => network.address)?.address;
+    const port = endpoints.get("sabnzbd")?.containerPort;
+
+    if (!address || !port) {
+      return { ok: false, reason: "SABnzbd has no address Keelarr can reach that is not the refused hostname." };
+    }
+
+    const result = await this.sabnzbdApi.setHostWhitelist(`http://${address}:${port}`, key, [
+      ...downloadWhitelist,
+      ...missing
+    ]);
+
+    logger.info("wiring.download_host_whitelisted", { added: missing, ok: result.ok });
+
+    return result.ok ? { ok: true, added: missing } : { ok: false, reason: result.error };
+  }
+
   async applyDownloadClients(ctx, plan, created, logger) {
     const { actionable, current, keys, downloadCategories } = plan;
 
@@ -640,6 +792,13 @@ export class WiringService {
     await ctx.step("downloadclients", async () => {
       const failedBefore = this.outcome.failed.length;
       const downloadKey = keys.get("sabnzbd");
+      const whitelisted = await this.ensureDownloadHostAccepted(plan, logger);
+
+      if (whitelisted?.ok === false) {
+        this.outcome.notes.push(`SABnzbd may refuse these connections: ${whitelisted.reason}`);
+      } else if (whitelisted?.ok) {
+        this.outcome.notes.push(`Told SABnzbd to accept ${whitelisted.added.join(", ")} as a hostname.`);
+      }
 
       if (!downloadKey) {
         throw new KeelarrError("SABnzbd's API key could not be read, so no download client can be configured.", {
