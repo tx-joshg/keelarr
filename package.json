@@ -1,6 +1,7 @@
 {
   "name": "keelarr",
   "version": "0.1.0",
+  "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "type": "module",
   "description": "Arr-focused Compose controller MVP for Sonarr, Radarr, Trailarr, Ombi, and Tautulli style stacks.",
