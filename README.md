@@ -1,584 +1,271 @@
-# Keelarr MVP
-
-Keelarr is an Arr-focused control plane MVP for Docker Compose environments. It is intentionally narrow: install and manage the media automation stack from one controller rather than trying to be a generic homelab dashboard.
-
-## Scope
-
-This MVP is built around:
-
-- Prowlarr
-- Radarr
-- Sonarr
-- Lidarr
-- Bazarr
-- Trailarr
-- Ombi
-- Tautulli
-- SABnzbd
-
-The core workflow is:
-
-1. Install Keelarr once.
-2. Fill out one host-level wizard.
-3. Generate per-app Compose folders.
-4. Deploy apps from the dashboard.
-5. Check health, open the app, and run per-service or bulk upgrades.
-
-## Current Validated State
-
-As of August 5, 2026, all eight catalog services run under Keelarr management
-on the live QNAP. Six were imported from existing containers; Prowlarr and
-Bazarr were installed from the catalog in one click. See
-[docs/qnap-first-test.md](docs/qnap-first-test.md) for the per-service detail.
-
-Validated on that host:
-
-- Keelarr runs as its own controller container on QNAP through `deploy/compose.example.yml`
-- host detection and validation succeed against the QNAP share layout using `docker` inside the controller container
-- adoption scan finds the live stack without exposing secret values in the UI
-- managed drafts preserve the live container shape, including host networking, a custom network with a static address, named volumes, and entrypoint/command overrides
-- per-service versions are read from image labels, so `:latest` tags still show a real release
-- a real upgrade, a rollback to the previous image digest, and an upgrade forward that cleared the pin
-- one-click install of Prowlarr and Bazarr, both healthy and able to reach the rest of the stack
-
-The dashboard can also run a read-only adoption scan:
-
-1. Inspect current Docker containers.
-2. Match supported Arr/Ombi/Tautulli services by name or image.
-3. Show mounts, ports, restart policy, networks, and env key names only.
-4. Flag obvious adoption issues such as missing `/config`, `/Media`, or `/plex_logs` mounts.
-
-## What The MVP Already Does
-
-- Host-level setup wizard
-- Host detection with confidence hints and QNAP-aware suggestions
-- Arr-focused service catalog
-- Per-app Compose generation
-- `.env` generation beside each stack, with a key-only `.env.example` that documents the expected keys without repeating this host's resolved paths
-- Catalog-installed services join a shared `keelarr` network so they resolve each other by container name; imported services keep the network they were already on
-- Per-service version read from image labels rather than the image tag
-- Image rollback to the previously running digest, verified before it is kept, with automatic restore if it fails to come up
-- Read-only Docker inventory scan for existing container adoption
-- Per-container adoption preview
-- Safe managed-draft generation for recognized existing containers
-- Managed drafts preserve the live container image, ports, restart policy, mounts, entrypoint, command, and custom Docker networks
-- Managed drafts also write `import-summary.json` and `IMPORT-REVIEW.md` beside the Compose files for cutover review
-- Imported drafts are persisted in local Keelarr state so later save, generate, and install actions keep using the reviewed draft files instead of snapping back to catalog defaults
-- Managed runtime detection now handles the single-object `docker compose ps --format json` output seen on QNAP one-service projects
-- Per-service deploy
-- Per-service update check
-- Per-service upgrade
-- Upgrade-all action
-- Deep links into each app
-- Interactive demo mode with simulated actions and stub app destinations
-- Reachability checks against each app URL
-- Compose runtime checks via `docker compose ps`
-- Pre-upgrade backups of compose files and container inspect output
-- Each backup also writes `rollback.json` recording the image id and repo digest the container was running before the operation, so a rollback can pin the previous image instead of re-pulling a mutable tag
-- Per-service cutover and revert from the dashboard, run as background jobs with a live step checklist (see [Cutover](#cutover))
-- App removal with explicit choices about configuration, image, and backups, and a preview of exactly what will be deleted (see [Removing An App](#removing-an-app))
-
-## Removing An App
-
-Removal is a job like cutover, with a preview first:
-
-```text
-GET  /api/services/:serviceId/removal-preview -> { targets, preserved, warnings }
-POST /api/services/:serviceId/remove          -> 202 { job }
-```
-
-The preview reports real paths and measured sizes so the choice is informed
-rather than a guess about what a checkbox does.
-
-Always removed: the container and the generated stack folder.
-
-Optional, each an explicit choice:
-
-- **Configuration and database** — the app's `/config`, whether that is a bind
-  path or a named volume. Keeping it lets you reinstall exactly where you left
-  off.
-- **The image** — disk space only; it is kept automatically if another service
-  still uses it.
-- **Keelarr backups** — including the config snapshots that make rollback
-  possible.
+<div align="center">
 
-**Media and downloads are never offered.** They are shared mounts used by every
-app in the stack, not data any one service owns, so deleting them while
-removing a single app would destroy the library and break everything else. The
-dialog says so explicitly rather than staying silent about it.
+# Keelarr
 
-Two more safeguards: a final config snapshot is taken before the configuration
-is destroyed (unless the backups are being deleted too, which would make it
-pointless), and removing a service other apps depend on — Prowlarr or SABnzbd —
-warns which apps break.
+**A control plane for your \*arr stack that generates Compose files you can read,
+adopts the containers you already run, and wires the whole thing together —
+without ever claiming it did something it didn't.**
 
-## Rollback
+[Quick start](#quick-start) · [What makes it different](#what-makes-it-different) ·
+[What is actually tested](docs/testing.md) · [Help wanted](#help-wanted)
 
-Every install and upgrade writes `rollback.json` recording the image id and repo
-digest the container was running beforehand. A `Roll Back` button appears on a
-managed service once such a record exists and its image is still present on the
-host.
+![The Keelarr dashboard: eight apps, their images, ports, Compose state and health](docs/images/dashboard.png)
 
-```text
-POST /api/services/:serviceId/rollback -> 202 { job }
-```
+</div>
 
-Rollback pins the image digest directly into `compose.yml` and recreates the
-container, then verifies it the same way a cutover does. If it fails to come
-up, the newer image is restored automatically. The pin stays until an upgrade
-clears it, so a rolled-back service will not silently jump forward on the next
-deploy — and upgrading always clears the pin first, so it can still move
-forward when you want it to.
+---
 
-### Backup retention
+## The problem
 
-Every install, upgrade, and rollback writes a backup with a config snapshot, so
-they accumulate — one afternoon of upgrade testing left nine snapshots for a
-single service. `Settings -> Backups -> Backups Kept` controls how many are
-retained per service; older ones are pruned automatically after each new
-backup lands.
+Running an \*arr stack is not hard because the containers are hard. It is hard
+because of everything between them.
 
-The default keeps **only the latest**. Keeping more lets you roll back further
-than one step, at the cost of disk. `Keep all` disables pruning entirely.
+Nine apps, and each one has to be told about the others: the download client
+registered in Radarr, Sonarr and Lidarr with a category apiece; every app
+registered in Prowlarr, with an address that works *from Prowlarr's side of the
+network*; Bazarr pointed at Radarr and Sonarr; FlareSolverr registered as
+Prowlarr's proxy; root folders that exist inside the container *and* on the host,
+owned by the right user. Then a container moves to a different network, or you
+rebuild one, and half of those addresses silently stop resolving.
 
-A value of zero or below is read as "keep all" rather than "keep none", since
-keeping no backups would silently remove the ability to roll back at all.
+Most of that work is mechanical. It is also exactly the work that no tool does
+for you.
 
-### Configuration snapshots
+## What Keelarr does
 
-Reverting the image alone is not always enough. A major upgrade often migrates
-the application's database forward, and the older version may then refuse to
-read it. So every backup also captures the service's `/config` — database and
-settings — into `config-snapshot.tar.gz` beside the image record.
+It runs as one container, reads your Docker socket, and gives you:
 
-Rollback can then optionally restore that snapshot:
+- **A dashboard** for the stack — what is deployed, running, reachable, and out of date.
+- **One-click install** of any app in the catalog, with the Compose file written to disk.
+- **Adoption** of containers you already run, read-only first, with a revert.
+- **Wiring**: it works out what should be connected to what, resolves an address
+  that works from each app's own position on the network, tests the connection
+  using the app's own test endpoint, and only then writes it.
+- **Upgrades and rollbacks**, including a config snapshot so a rollback restores
+  the app's database, not just its image.
+- **Removal that is reversible** — keep the config, reinstall later, and the app
+  comes back as itself rather than as a fresh install.
 
-```json
-{ "confirmContainerName": "tautulli", "restoreConfig": true }
-```
+Twelve apps in the catalog: Prowlarr, Radarr, Sonarr, Lidarr, Bazarr, SABnzbd,
+qBittorrent, FlareSolverr, Jellyfin, Trailarr, Ombi, Tautulli.
 
-This is **opt-in and destructive**: it rewinds the application's data to the
-moment before the upgrade, discarding anything recorded since. The dashboard
-presents it as an unchecked box with that warning spelled out, and only when a
-snapshot actually exists for the rollback point.
+The stack check is the clearest picture of what it is for — every connection,
+the address each one resolved to, whether the app itself confirmed it, and the
+short list of things only you can supply:
 
-Snapshots work for both bind mounts and named volumes, since they run through a
-helper container rather than the controller's own filesystem. Regenerable
-directories (`logs`, `MediaCover`, `Backups`, `cache`) are excluded, which keeps
-a typical capture to tens of megabytes.
+![Stack wiring: six connections confirmed, with Prowlarr still needing an indexer only the operator can add](docs/images/stack-check.png)
 
-The service is stopped before its configuration is replaced, because restoring
-a database under a running app would leave it holding stale handles. If the
-restore fails, the service is brought back up before the failure is reported.
+## What makes it different
 
-## Cutover
+### It writes Compose files, and they are yours
 
-A cutover moves one detected container from manual Docker management to a Keelarr-managed Compose stack. Because the managed draft reuses the live container's name, the original container has to release that name first — so the cutover stops it, renames it to `<name>-keelarr-rollback`, and only then starts the Compose service.
+Keelarr is not a runtime. Every service it manages is a real `compose.yml` and
+`.env` on disk, in a directory you choose, that you can read, edit, `docker
+compose up` by hand, or commit to git. There is no hidden state describing your
+infrastructure — the Compose file *is* the state.
 
-The original container is **renamed, never removed**. That is what makes revert cheap: it is a rename back, not a rebuild from the inspect backup. Keelarr never deletes it, on success or failure; removing it is your call once the replacement has been used.
+Which means leaving costs nothing. Stop the controller and your stack keeps
+running, because nothing about it depended on Keelarr being alive.
 
-In the dashboard: open `Adoption`, scan, preview a recognized container, and generate its managed draft. `Cut Over To Compose` then appears. The confirmation dialog requires typing the container name, and progress renders as a live step checklist. Once a service is cut over, a revert button appears on its row in `Stack` for as long as the rollback container exists.
+### It adopts what you already have
 
-Cutover runs as a background job because it is destructive and can outlive a request:
+Most tools of this kind assume a greenfield. Keelarr assumes the opposite: you
+have a stack, it works, and you are not going to rebuild it to try something.
 
-```text
-POST /api/import/:containerId/cutover   -> 202 { job }
-POST /api/services/:serviceId/revert-cutover -> 202 { job }
-GET  /api/jobs/:jobId                   -> { job }
-GET  /api/jobs                          -> { jobs }
-```
+So adoption is read-only first. It scans your containers, shows you the mounts,
+ports, networks and env *key names* — never values — and produces a managed draft
+that preserves the shape of what you already run, down to host networking, static
+addresses on a macvlan, named volumes, and entrypoint overrides. Cutover is a
+separate, explicit step. Revert is one click.
 
-Both POST bodies require `confirmContainerName` matching the container being replaced. A mismatch is rejected before anything is touched.
+![The adoption scan listing existing containers, what each was recognised as, and one marked unsupported](docs/images/adoption.png)
 
-The job reports a fixed step plan (`preflight`, `backup`, `stop`, `rename`, `deploy`, `verify`, `revert`, `finalize`) from the moment it is created, so progress can be polled and rendered as a checklist.
+Note the last row. Keelarr says when it does *not* recognise something, rather
+than adopting it and hoping.
 
-Preflight refuses the cutover when:
+### It knows the difference between "no" and "I don't know"
 
-- the host profile is not configured, or the service has no reviewed import draft
-- the live container no longer matches the reviewed draft — a container recreated or reconfigured since the draft was written would otherwise be silently rolled back to the older shape
-- a rollback container from an earlier attempt still exists
+This is the part that took the longest and matters the most.
 
-Verification is tiered, because "running" is not "working":
+A container that is running is not necessarily reachable. A connection that was
+not written is not necessarily broken. An app that answered nothing might be
+starting, or might be unreachable forever, and those need different words.
 
-- a container healthcheck reporting `healthy` is decisive
-- with no healthcheck, an acceptable HTTP response from the app URL verifies it
-- a container that is running but proves nothing either way is reported as `unverified` rather than success
+So Keelarr reports three states, not two. `reachable: null` means *not
+determined*, and the dashboard says so rather than showing green. A wiring run
+that changes nothing reports as finished, not failed — but only says "everything
+is already configured" when every link was actually confirmed correct; if two
+links were merely unreachable, it says that instead.
 
-Jobs are persisted to `data/jobs.json` and survive a controller restart. A job that was still running when the process died is reported as interrupted rather than left looking live, with a step list showing how far it got. The job panel reattaches after a page reload, so refreshing mid-cutover does not orphan it, and a job that finished while the page was away is still shown.
-
-To try this against a real Docker daemon before touching a live stack, see [docs/live-cutover-test.md](docs/live-cutover-test.md).
-
-Outcomes:
-
-| Outcome | Job status | What happens |
-| --- | --- | --- |
-| `verified` | succeeded | Service is recorded as Compose-managed. Rollback container kept. |
-| `unverified` | succeeded | Same, but health was never confirmed. Rollback container kept so you can revert. |
-| Container exited, or Compose failed to start | failed | Automatically reverted to the original container. |
-
-## Stack Wiring
-
-The Stack tab's **Check Wiring** button reports how the apps are connected to each other. It is read-only: it reads each app's API key from its own config file, works out the address each app must use to reach the others, compares that against what is configured, and then asks each app to run its **own** connection tests.
-
-Using the app's tests rather than probing from the controller matters on a mixed stack. A controller-side probe only proves that *Keelarr* can reach something, from Keelarr's network position. What the configuration needs is whether *Radarr* can reach SABnzbd, from Radarr's.
-
-Addresses are derived from `docker inspect`, never composed from `hostUrl` and a port. On a QNAP the difference is not academic: SABnzbd on a `qnet` network answers on its own LAN address, while the host address at the same port is the NAS administration interface — which returns `200` and would look exactly like success.
-
-Each connection is reported in one of six states:
-
-| State | Meaning |
-| --- | --- |
-| `correct` | Configured, and the app's own test passed |
-| `absent` | Nothing configured |
-| `drift` | Configured, but pointing somewhere other than the resolved address |
-| `ambiguous` | Several comparable entries exist and none match, so nothing can be assumed |
-| `blocked` | This host's networking cannot carry the connection at all |
-| `pending` | The app has only just started and has not written its API key yet |
-
-A seventh state sits alongside these: **needs you**. Keelarr configures everything that is not a secret, so what remains is credentials it cannot hold — an indexer key, a Usenet account, a Plex token. The check reports each one, what it breaks, and a link straight to the page that fixes it.
-
-That distinction matters because the two fail independently. A stack whose every connection is correct and whose Prowlarr has no indexers is perfectly wired and cannot find a single release, so the verdict says so rather than reporting `ready`.
-
-These are not read, only counted or checked for presence. Arr apps mask fields marked `privacy: apiKey`, so an indexer key already configured in Radarr comes back as `***` and could not be copied into Prowlarr even if that were wanted. Detection and a link are genuinely the most that can be done, and a credential is better held by the app that needs it than copied into a second place that then has to protect it too.
-
-`pending` is deliberately distinct from `absent`. A freshly installed app writes `config.xml` a few seconds after first start, and reporting that as missing turns a normal startup into a false alarm.
-
-**Configure** then acts on the `absent` rows only, as a job you can watch. Payloads are built by patching values into the schema each app publishes, so fields Keelarr does not name keep the app's own defaults — your categories and priorities survive. Each payload is tested against the app before it is saved, and a refusal is reported with the app's own words rather than overridden: Arr apps offer a `forceSave` escape hatch, and using it produces configuration that looks right and never works.
-
-Prowlarr applications are registered with `syncLevel: addOnly`, so indexers you configured directly inside an Arr are not deleted by the first sync.
-
-Identity is matched on implementation plus address, never on the entry's name — users rename these — and API keys are never persisted, never logged, and never returned by the API. The check reports only the key's source file and a truncated `sha256` fingerprint. Objects fetched from an app are re-projected field by field rather than passed through, so what reaches the response is always a decision rather than whatever the remote app happened to send.
-
-## Host Paths And The Controller
-
-The controller can only see what its own Compose file mounted. A directory that
-plainly exists on the host is invisible to it otherwise, and every existence
-check inside the container then reports it missing — technically true, and
-thoroughly misleading.
-
-Those five host paths therefore live in two places by necessity: in
-`settings.json`, where the app reads them, and in `deploy/.env`, where Compose
-reads them before the container it configures exists. A process inside that
-container cannot tell Compose what to mount, so the file cannot be eliminated.
-
-What it can do is stop drifting. Saving host settings rewrites `deploy/.env`
-from them, preserving the values Keelarr does not own — port, log level, and
-the data directory, which is where settings themselves live. Recreate the
-controller for new paths to take effect; the app says so rather than leaving it
-to be discovered.
-
-When the two do disagree, the dashboard names the variable that fixes it instead
-of reporting the path as missing.
-
-## The Three Scenarios
-
-Setup, deployment, wiring, and removal are checked against three situations that
-differ in what already exists: building new, deleting and redeploying, and
-adopting a stack that predates Keelarr. They catch different bugs, and a change
-that improves one has more than once broken another. See
-[docs/scenarios.md](docs/scenarios.md).
-
-## What Is Still Deliberately Missing
-
-- Multi-user access control (there is one password, not accounts and roles)
-- Repairing app-to-app configuration that already exists (Keelarr adds missing connections, but a link that points somewhere unexpected is reported for you to change inside the app)
-- Indexer, Usenet account, and Plex credentials — detected and linked to, never held
-- Remote path mapping writes (disagreeing paths are detected and described, but not yet corrected)
-- Reverse proxy and certificate automation
-- One-click indexer/download-client/provider setup inside each app
-- Generic marketplace support for unrelated self-hosted software
-
-## Project Shape
-
-```text
-keelarr/
-├── deploy/              # example controller deployment files
-├── docs/                # product and architecture docs
-├── public/              # static frontend
-├── src/
-│   ├── lib/             # store, templates, runtime, status logic
-│   └── server.js        # Express API + static app host
-├── data/                # local controller state, ignored by git
-└── test/                # Node test runner coverage for core logic
-```
-
-## Run Locally
+Every one of those distinctions exists because the honest-looking version was
+wrong first, in a way a green dashboard hid. [docs/testing.md](docs/testing.md)
+lists what has been proven and on which host, and keeps automated coverage and
+live evidence in separate columns, because they prove different things.
+
+### It never touches what is yours
+
+- **API keys are never persisted, logged, or returned by the API.** They are read
+  at the moment they are needed. What the API returns is a source path and a
+  truncated fingerprint. A test asserts no 32-character hex key appears in any
+  response.
+- **Indexers are counted, never read or written.** They carry credentials you paid
+  for. Keelarr has no business in them.
+- **Existing configuration is never overwritten.** A download client pointing
+  somewhere unexpected is reported as drift and left exactly as it is. Two
+  candidates and no clear match is reported as ambiguous and left alone.
+- **App databases are moved, never edited.** Config snapshots are tarballs. Nothing
+  parses another app's schema, so nothing breaks on its next migration.
+- **Command output that could contain secrets is withheld from the log** — byte
+  counts instead of contents.
+
+### It tells you what only you can supply
+
+A stack can be perfectly wired and still not work, because it needs an indexer,
+a Usenet account, or a Plex token — things no tool can invent. Keelarr separates
+*wired* from *working*, and ends the stack check with the short list only you can
+finish.
+
+## Quick start
+
+Requires Docker and the Compose plugin. No checkout needed — the image is
+published.
 
 ```bash
-cd keelarr
-npm install
-npm run dev
-```
-
-Then open `http://localhost:4687`.
-
-## Run As A Docker Controller
-
-Keelarr can now run as its own container while still managing the host Docker daemon.
-
-Requirements:
-
-- mount the Docker socket into the Keelarr container
-- mount the host paths Keelarr needs to inspect at the same absolute paths inside the container
-- keep Keelarr's own `data/` directory on persistent storage
-
-Quick start — no checkout, no toolchain, one file:
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/tx-joshg/keelarr/main/deploy/compose.example.yml
+mkdir -p ~/keelarr && cd ~/keelarr && curl -fsSLO https://raw.githubusercontent.com/tx-joshg/keelarr/main/deploy/compose.example.yml
 ```
 
 ```bash
 docker compose -f compose.example.yml up -d
 ```
 
-That pulls a published image built for both `linux/amd64` and `linux/arm64`, so
-the same command works on an Intel NAS, an ARM one, a Raspberry Pi, or an Apple
-Silicon desktop. Then open `http://<host>:4687` and choose a password.
+Then open <http://localhost:4687>. On first run it asks you to set a password,
+detects your host, and suggests paths. Nothing needs editing before the first
+start — the defaults land under `$HOME/keelarr`, and you change them in the app.
 
-Nothing needs editing first. Every path has a working default, so the controller
-starts, and its setup wizard then detects the right ones for this machine — a
-QNAP's `/share/Media`, a Synology's `/volume1/media`, a plain Linux box's
-`/srv/media`. Saving those settings rewrites `.env`, and one more
-`docker compose up -d` puts the mounts where they belong.
+![Host detection scoring two host profiles, with per-field confidence and validation status](docs/images/host-detection.png)
 
-That ordering is deliberate. The paths are questions the wizard already asks, so
-asking them again in a file you have to get right before anything will start is
-work for no reason — and a wrong value there used to fail with
-`invalid spec: ::ro: empty section between colons`.
+Detection scores every profile it knows and shows you why, per field. It suggests
+— it does not decide.
 
-To pin a version rather than track `latest`, set `KEELARR_VERSION` in `.env`.
-
-### Working On Keelarr Itself
-
-Building from a checkout is the developer path, not the install path:
+To run from a checkout instead:
 
 ```bash
-docker compose -f compose.example.yml -f compose.build.yml up -d --build
+git clone https://github.com/tx-joshg/keelarr.git && cd keelarr/deploy && docker compose -f compose.example.yml -f compose.build.yml up -d --build
 ```
 
-The override names the local image `keelarr:local`, so a build of your own
-working tree can never be confused with the published one.
+### Try it without a stack
 
-Important:
+Demo mode runs against a simulated stack with no Docker socket behind it, so
+there is nothing to break and no password in the way:
 
-- `HOST_STACK_ROOT`, `HOST_CONFIG_ROOT`, `HOST_MEDIA_ROOT`, and `HOST_DOWNLOADS_ROOT` in `.env` must match the real host paths
-- the controller creates the shared `keelarr` Docker network on first start; nothing needs to exist beforehand
-- those paths are mounted into the container at the exact same absolute paths so generated Compose files, backups, and adoption scans stay aligned with the host
-- remove the Plex logs mount line from `compose.example.yml` if you do not use Tautulli or do not want Plex log health support yet
-- controller logs are written to `${KEELARR_DATA_DIR}/keelarr.log` and also mirrored to `docker logs keelarr`
-- set `KEELARR_LOG_LEVEL=debug` in `deploy/.env` when you want verbose Docker command and request logging during troubleshooting
-
-### First Test On QNAP
-
-For the QNAP setup validated on August 5, 2026, the example `deploy/.env.example` values already match the expected share layout:
-
-```text
-HOST_STACK_ROOT=/share/Container/docker
-HOST_CONFIG_ROOT=/share/Container
-HOST_MEDIA_ROOT=/share/Media
-HOST_DOWNLOADS_ROOT=/share/Media/Downloads
-HOST_PLEX_LOGS_ROOT=/share/Container/plex/Logs
+```bash
+KEELARR_DEMO=1 npm start
 ```
 
-After the container starts:
+## Where it runs
 
-1. open `http://<nas-ip>:4687`
-2. go to `Settings`
-3. run `Detect Host`
-4. confirm the detected paths and keep `Docker Binary` as `docker`
-5. save without deploy first
-6. scan existing containers from `Adoption`
-7. review generated stack folders before recreating any managed service
-
-If host validation fails, Keelarr now blocks setup and returns a specific Docker or path error instead of silently saving a broken profile.
-
-For the current live status, the validated Trailarr cutover, and the recommended order for the remaining migrations, see [docs/qnap-first-test.md](docs/qnap-first-test.md).
-
-## What Keelarr Wires, And What It Cannot
-
-Keelarr configures what is not a secret and reports what is. The line falls in a
-specific place, so it is worth stating:
-
-| Connection | Who makes it |
+| Platform | State |
 | --- | --- |
-| Download client into Radarr/Sonarr/Lidarr | Keelarr, including the category |
-| Library folders | Keelarr, creating the directory if it is missing |
-| Apps registered with Prowlarr | Keelarr, both directions |
-| Bazarr pointed at Radarr and Sonarr | Keelarr |
-| FlareSolverr registered in Prowlarr | Keelarr — but you choose which indexers use it |
-| Indexer, Usenet account, Plex token | You. They are paid credentials Keelarr never holds |
-| qBittorrent's web password | You, unless it bypasses auth for the Docker network |
-| Jellyfin's first-run wizard | You |
+| QNAP Container Station (x86_64) | **Live** — the primary test host, a real stack with real media |
+| macOS + Docker Desktop (arm64) | **Live** — a full lifecycle from an empty host |
+| Linux x86_64 / arm64 | **Untested** — the most likely host of all. [Help wanted](#help-wanted) |
+| Synology, Unraid, TrueNAS SCALE | **Untested** |
+| Windows | **Unsupported** outside WSL2 — Keelarr mounts host paths at the same absolute path inside the container, which `C:\` cannot satisfy |
 
-SABnzbd's API key is readable from its own config, so Keelarr propagates it.
-qBittorrent's password is not: it generates a random one and stores only a hash.
-If qBittorrent is set to bypass authentication for a whitelisted subnet — how it
-is often run behind a Docker network — Keelarr detects that and needs nothing
-from you. Otherwise it says so rather than writing a client that cannot log in.
+Being honest about this is the point: two hosts is not "runs anywhere", and the
+table says so.
 
-FlareSolverr is registered as a proxy, but Prowlarr only routes an indexer
-through it when the two share a tag. Tagging every indexer would put a headless
-browser in front of ones that never needed it, so which indexers use it stays
-your decision.
+## How it works
 
-## Keeping Apps Up To Date
+The controller container mounts your Docker socket and the host roots your stack
+uses, at the same absolute path inside the container as outside. That single rule
+is what lets it generate a Compose file whose paths are correct for the host
+while still being able to read them itself.
 
-Checking for updates is a `docker compose pull` of every image in the stack, so
-it is expensive and never happens implicitly. It runs:
+```
+you ──▶ Keelarr controller ──▶ writes compose.yml + .env per service
+                │                       │
+                │                       └──▶ docker compose up
+                │
+                └──▶ each app's own REST API ──▶ download clients, indexer apps,
+                                                 root folders, proxies, subtitles
+```
 
-- once a day,
-- shortly after the controller starts, if the last check is older than that,
-- right after installing a service, which has just pulled anyway,
-- whenever you ask for it.
+Wiring resolves addresses per network topology — host, bridge, a shared
+user-defined network, or macvlan — from the *source* app's position, because
+"localhost" means something different in each. A pair that genuinely cannot reach
+each other is reported as blocked, with the reason, rather than given an address
+that will time out.
 
-**Upgrade All acts on what the last check recorded.** Only services known to
-have an update are touched, and they are the only rows in the progress panel —
-a stack where three of nine need updating shows three. Services whose version
-could not be read are reported rather than upgraded on the assumption that
-unknown means stale.
+More detail in [docs/architecture.md](docs/architecture.md).
 
-Downloads are judged on progress, not on a stopwatch. A pull that keeps
-reporting layers runs as long as it needs; one that goes silent for two minutes
-is reported as stalled. A fixed deadline used to kill perfectly healthy pulls of
-large images on slow connections.
+## Contributing
 
-## Signing In
+The most useful contribution right now is not code.
 
-The first time you open Keelarr it asks you to choose a password, and it will
-not do anything else until you do. Everything under `/api` is behind that
-password afterwards, because the controller holds the Docker socket: whoever
-reaches the port can start, stop, and delete containers on the host.
+### Help wanted
 
-- The password is stored in `data/auth.json` as a salted scrypt hash, mode
-  `0600`, alongside a random secret used to sign sessions. The password itself
-  is never written anywhere.
-- Signing in sets an `HttpOnly` session cookie that lasts 30 days. It is signed
-  rather than stored server-side, so upgrading the controller does not sign you
-  out — recreating the container is a routine event here, and being logged out
-  by every upgrade would buy nothing.
-- `GET /api/health` stays open, and it answers only `{"ok": true}`. The
-  container healthcheck uses it; nothing else does.
-- There is no password reset. Delete `data/auth.json` and the first-run screen
-  comes back — which is also why that file needs to be somewhere only you can
-  read.
-- The cookie is `SameSite=Lax`, so another site cannot make your browser POST
-  to Keelarr using your session.
-- A wrong password costs about a second, which makes guessing tedious rather
-  than impossible. There is no lockout, on the view that locking the operator
-  out of their own containers is the worse failure on a home network.
-- The demo (`npm run demo`) runs with no password. It drives a simulated stack
-  with no Docker socket behind it, so there is nothing there to protect.
+Keelarr has been proven on two hosts. The table above is honest about that, and
+the fastest way to make it less embarrassing is to run it somewhere else and say
+what happened. **A report that it worked is worth as much as a bug report.**
 
-Keelarr still listens on all interfaces, so the password is the only thing
-between the port and your containers. Serve it over HTTPS if it is reachable
-from anywhere you do not control.
+[docs/testing.md](docs/testing.md#help-wanted) lists eleven scenarios written to
+be closeable without a conversation first — run the steps, paste the output, say
+what your host is. Please redact API keys, indexer names, Usenet hostnames and
+Plex tokens.
 
-## Logging
-
-Keelarr now keeps two different operational records:
-
-- `data/activity.json`: user-facing activity feed with summarized action history
-- `data/jobs.json`: cutover and revert job records, including their step-by-step outcome
-- `data/keelarr.log`: structured JSONL operation log for requests, Docker commands, setup/import actions, upgrades, and failures
-
-When Keelarr runs in Docker, the same log entries are also emitted to container stdout, so `docker logs keelarr` stays useful.
-
-The operation log intentionally avoids logging request bodies and redacts obvious secret-like keys such as passwords, tokens, secrets, cookies, and API keys. If you need more detail while testing, raise `KEELARR_LOG_LEVEL` to `debug`.
-
-`data/keelarr.log` rolls over at 5MB and two older copies are kept, so the log
-occupies about 15MB at most however long the controller runs. That matters
-because the data directory often lives on a NAS system volume, and at `debug` a
-busy controller writes several megabytes a day — `command.start` and
-`command.finish` fire for every Docker invocation. Set `KEELARR_LOG_MAX_BYTES`
-to change the threshold, or to `0` to let the log grow without limit.
-
-## Run The Interactive Demo
-
-Use the demo when you want to review the full dashboard without touching a real Docker host:
+### If you do want to write code
 
 ```bash
-cd keelarr
-npm install
-npm run demo
+npm install && npm test
 ```
 
-Then open `http://localhost:4687`.
+No framework, no build step, no transpiler. Plain ES modules, `node:test`, and
+dependency injection through `*Impl` constructor parameters so everything is
+testable without touching Docker.
 
-In demo mode:
+Two rules the codebase actually holds to:
 
-- all Docker operations are simulated
-- import scan data is seeded automatically
-- per-service actions mutate the demo state live
-- `Open` buttons land on Keelarr-served stub app pages
-- `Reset Demo` restores the seeded scenario
+1. **Never claim something you have not verified.** If it cannot be determined,
+   say so. Most of the guards in here exist because a cheerful default hid a real
+   failure.
+2. **Tests stub every injected implementation that touches Docker or the
+   filesystem.** Stubbing one layer is not enough if a layer underneath still
+   reaches the real machine — that mistake once overwrote a live controller's
+   `.env` from a test fixture.
 
-There is also a short guided walkthrough in [docs/demo-walkthrough.md](docs/demo-walkthrough.md).
+Comments explain *why*, not what. If the reason a line exists is a defect that
+was found the hard way, the comment says so, because that is what stops it being
+"simplified" back.
 
-## Product Foundation
+## Licence
 
-The build decisions for scope, support tiers, onboarding, and Docker-first host support are documented in [docs/foundation.md](docs/foundation.md).
+[PolyForm Shield 1.0.0](LICENSE). In plain terms:
 
-The detailed interaction and platform specs live in:
+- **Use it free**, for anything — at home, at work, on a client's server, in a
+  business. Run it, modify it, redistribute it.
+- **The one exception**: you may not use it to build or sell a product that
+  competes with Keelarr. If you want to sell it, or something built from it,
+  talk to me about a commercial licence first.
 
-- [docs/product-spec.md](docs/product-spec.md)
-- [docs/host-support.md](docs/host-support.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/roadmap.md](docs/roadmap.md)
+This is source-available rather than OSI-approved open source, and the
+distinction is worth stating plainly rather than burying: the code is here to
+read, fork and change, and the only thing barred is reselling it as a rival
+product.
 
-## QNAP Notes
+## Support
 
-When Keelarr is running through `deploy/compose.example.yml`, the controller container already includes the Docker CLI. In the Keelarr wizard, the correct value is usually:
+Keelarr is free to use and always will be. If it saved you an evening, you can
+[buy me a coffee](https://ko-fi.com/keelarr) — but a test report from a host
+nobody has tried is worth more.
 
-```text
-Docker Binary: docker
-```
+## Documentation
 
-For manual shell work directly on the QNAP, `docker` may still be missing from the NAS shell `PATH`. In that shell, use:
-
-```text
-/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker
-```
-
-Recommended defaults for the same style of setup we validated on August 5, 2026:
-
-```text
-Compose Stack Root: /share/Container/docker
-Config Root: /share/Container
-Media Root: /share/Media
-Downloads Root: /share/Media/Downloads
-Plex Logs Path: /share/Container/plex/Logs
-```
-
-## Compose Template Defaults
-
-Current port/image defaults in the MVP are aligned with mainstream current Docker docs and the live stack we audited:
-
-- `Radarr`: `7878`
-- `Sonarr`: `8989`
-- `Lidarr`: `8686`
-- `Prowlarr`: `9696`
-- `Bazarr`: `6767`
-- `Trailarr`: `7889`
-- `Ombi`: `3579`
-- `Tautulli`: `8181`
-- `SABnzbd`: `8080`
-
-## Why This Exists
-
-Existing tools split the job:
-
-- dashboards are good at links and status
-- Docker control planes are good at generic stack operations
-- app stores are good at one-click installs
-
-Keelarr is trying to be opinionated for one user type:
-
-- the Arr user who wants one install, one wizard, one dashboard, and one upgrade flow
-
-## Suggested Next Milestones
-
-1. One-click per-service cutover with inspect backup, confirmation, validation, and rollback hooks
-2. Better update/version reporting for imported and externally managed services
-3. Service-to-service onboarding helpers for Prowlarr, SABnzbd, and the Arr apps
-4. Safer image rollback with explicit release snapshots
+| Document | What is in it |
+| --- | --- |
+| [docs/testing.md](docs/testing.md) | What has been tested, on which host, and what has not |
+| [docs/architecture.md](docs/architecture.md) | How the controller, catalog and wiring fit together |
+| [docs/host-support.md](docs/host-support.md) | Host detection and the path model |
+| [docs/scenarios.md](docs/scenarios.md) | End-to-end scenarios and their expected outcomes |
+| [docs/demo-walkthrough.md](docs/demo-walkthrough.md) | A tour of demo mode |
+| [docs/roadmap.md](docs/roadmap.md) | What is next |
