@@ -401,15 +401,12 @@ test("rollback refuses up front when the config mount cannot be found", async (t
 
 /* --- Upgrade All must behave exactly like the per-service upgrade --- */
 
+// Waits on the job itself rather than a tick budget. The previous version gave
+// up after 500 event-loop ticks, which on a loaded CI runner elapsed in 19ms
+// while the job was still doing real I/O — reporting "job never settled" for a
+// job that was fine.
 async function settleJobById(service, jobId) {
-  for (let i = 0; i < 500; i += 1) {
-    const job = service.jobs.get(jobId);
-    if (job.status === JOB_STATUS.SUCCEEDED || job.status === JOB_STATUS.FAILED) {
-      return job;
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  throw new Error("job never settled");
+  return service.jobs.settled(jobId);
 }
 
 function createStackWith(t, ids) {

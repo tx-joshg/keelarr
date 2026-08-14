@@ -75,6 +75,25 @@ export class JobRegistry {
     this.writeJobs = writeJobsImpl;
     this.writeQueue = Promise.resolve();
     this.jobs = new Map();
+    // Completion promises for jobs currently in flight, so a caller can wait
+    // for one rather than poll. Cleared as each job settles, and never
+    // serialized — persistence goes through buildJobSnapshot, which names its
+    // fields.
+    this.inFlight = new Map();
+  }
+
+  /**
+   * Resolves when a job has finished, however it finished.
+   *
+   * Callers used to poll for a fixed number of event-loop ticks, which measures
+   * nothing useful: on a loaded CI runner 500 ticks elapsed in 19ms while the
+   * job was still doing real I/O, and a perfectly healthy job was declared
+   * never to have settled. Waiting on the work itself cannot go wrong that way,
+   * and needs no number chosen by guesswork.
+   */
+  async settled(jobId) {
+    await this.inFlight.get(jobId);
+    return this.get(jobId);
   }
 
   /**
@@ -199,7 +218,7 @@ export class JobRegistry {
 
     const controller = this.buildController(job);
 
-    Promise.resolve()
+    const running = Promise.resolve()
       .then(() => handler(controller))
       .then((result) => {
         job.result = result ?? null;
@@ -258,6 +277,10 @@ export class JobRegistry {
           message: job.error.message
         });
       });
+
+    // The chain above ends in a catch, so this never rejects: awaiting it means
+    // "the job has finished", not "the job succeeded".
+    this.inFlight.set(job.id, running.finally(() => this.inFlight.delete(job.id)));
 
     return job;
   }

@@ -25,16 +25,13 @@ test("demo service can generate a managed draft from an import candidate", async
   assert.equal(scan.items.find((item) => item.containerId === "trailarrdemo")?.adoptedDraft, true);
 });
 
+// Waits on the job rather than a tick budget, for the same reason as
+// settleJobById in rollback.test.js: a tick count is not a measure of how long
+// real work takes, and gets shorter the busier the machine is.
 async function settleJob(service, jobId) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const { job } = await service.getJob(jobId);
-    if (job.status === "succeeded" || job.status === "failed") {
-      return job;
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-
-  throw new Error("Demo job never settled.");
+  await service.jobs.settled(jobId);
+  const { job } = await service.getJob(jobId);
+  return job;
 }
 
 function serviceState(state, id) {

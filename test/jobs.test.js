@@ -324,3 +324,50 @@ test("a job with every step skipped still succeeds", async () => {
 
   assert.equal(registry.get(job.id).status, "succeeded");
 });
+
+test("settled waits for the work, not for a number of event-loop ticks", async () => {
+  const registry = createRegistry();
+  const job = registry.create({ kind: "cutover", subject: {}, steps: [{ name: "slow", label: "Slow" }] });
+  let finished = false;
+
+  registry.start(job, async (ctx) => {
+    await ctx.step("slow", async () => {
+      // Longer than any tick budget would survive, and long enough that a
+      // polling helper counting setImmediate calls would give up first.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      finished = true;
+      return { detail: "done" };
+    });
+  });
+
+  const settled = await registry.settled(job.id);
+
+  assert.equal(finished, true, "it must not resolve before the handler finished");
+  assert.equal(settled.status, JOB_STATUS.SUCCEEDED);
+});
+
+test("settled resolves for a job that failed, rather than rejecting", async () => {
+  const registry = createRegistry();
+  const job = registry.create({ kind: "cutover", subject: {}, steps: [{ name: "boom", label: "Boom" }] });
+
+  registry.start(job, async () => {
+    throw new Error("nope");
+  });
+
+  // Awaiting a job means "it finished", not "it worked". A rejection here would
+  // make every caller wrap this in a try/catch to find out either.
+  const settled = await registry.settled(job.id);
+
+  assert.equal(settled.status, JOB_STATUS.FAILED);
+  assert.equal(settled.error.message, "nope");
+});
+
+test("settled on a job that already finished returns it rather than hanging", async () => {
+  const registry = createRegistry();
+  const job = registry.create({ kind: "cutover", subject: {}, steps: [{ name: "quick", label: "Quick" }] });
+
+  registry.start(job, async (ctx) => ctx.step("quick", async () => ({ detail: "done" })));
+  await registry.settled(job.id);
+
+  assert.equal((await registry.settled(job.id)).status, JOB_STATUS.SUCCEEDED);
+});
