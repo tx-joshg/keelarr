@@ -1,15 +1,19 @@
 # Keelarr QNAP Live Status
 
-This document records the state of the live QNAP deployment. It is the source
-of truth for what is actually running, and supersedes earlier drafts that
-described only the first Trailarr migration.
+**A dated record, not current state.** This is what the live QNAP looked like on
+**August 5, 2026** (QNAP Container Station, Docker 29.5.3, Compose v5.1.4). It is
+kept because it is the first evidence that the whole thing worked on real
+hardware, and because the per-service detail is useful.
 
-Last verified: August 5, 2026, against GobleNAS (QNAP, Docker 29.5.3,
-Compose v5.1.4).
+For what is verified *today*, and on which host, see
+[testing.md](testing.md). That is the source of truth; this is a snapshot.
 
-## Current State
+Since this was written the catalog has grown to twelve services — qBittorrent,
+FlareSolverr and Jellyfin were added — and the stack on this host has changed.
 
-All eight catalog services are managed by Keelarr.
+## State on August 5, 2026
+
+All eight catalog services of the time were managed by Keelarr.
 
 | Service | Origin | Network | Notes |
 | --- | --- | --- | --- |

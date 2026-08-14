@@ -1,5 +1,12 @@
 # Keelarr Foundation
 
+> **The founding decisions, kept as a record of intent.** The principles here
+> still hold and are worth reading; the specifics of scope and catalog have
+> moved on. Where this and the running software differ, the software is right.
+>
+> Current shape: [architecture.md](architecture.md) ·
+> Proven behaviour: [testing.md](testing.md) · Next: [roadmap.md](roadmap.md)
+
 This document captures the product decisions that define Keelarr's initial architecture and scope. It exists so implementation decisions stay consistent as the project grows.
 
 ## Product Definition

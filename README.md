@@ -264,8 +264,14 @@ nobody has tried is worth more.
 | Document | What is in it |
 | --- | --- |
 | [docs/testing.md](docs/testing.md) | What has been tested, on which host, and what has not |
-| [docs/architecture.md](docs/architecture.md) | How the controller, catalog and wiring fit together |
-| [docs/host-support.md](docs/host-support.md) | Host detection and the path model |
-| [docs/scenarios.md](docs/scenarios.md) | End-to-end scenarios and their expected outcomes |
-| [docs/demo-walkthrough.md](docs/demo-walkthrough.md) | A tour of demo mode |
-| [docs/roadmap.md](docs/roadmap.md) | What is next |
+| [docs/architecture.md](docs/architecture.md) | How it is actually built, and which decisions a real host forced |
+| [docs/demo-walkthrough.md](docs/demo-walkthrough.md) | A guided tour of demo mode, screen by screen |
+| [docs/scenarios.md](docs/scenarios.md) | The three scenarios every change is checked against |
+| [docs/host-support.md](docs/host-support.md) | How Keelarr thinks about hosts, and which adapters exist |
+| [docs/roadmap.md](docs/roadmap.md) | What is next, what is not being built, and the known limits |
+
+Kept as a record of intent rather than a description of the software:
+[foundation.md](docs/foundation.md) and [product-spec.md](docs/product-spec.md)
+(the original design), plus [qnap-first-test.md](docs/qnap-first-test.md) and
+[live-cutover-test.md](docs/live-cutover-test.md) (dated test records). Where
+any of them disagrees with the running code, the code is right.

@@ -1,5 +1,14 @@
 # Keelarr Product Spec
 
+> **This is the original specification, kept as a record of intent — not a
+> description of what exists.** Most of it was built; some was built differently
+> once a real host disagreed; a few parts were deliberately dropped. Where this
+> document and the running software differ, the software is right.
+>
+> For what Keelarr does today: [architecture.md](architecture.md).
+> For what is proven, and where: [testing.md](testing.md).
+> For what is next: [roadmap.md](roadmap.md).
+
 This document converts the product foundation into implementable behavior.
 
 It defines:

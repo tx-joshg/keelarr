@@ -4,6 +4,15 @@ This document defines how Keelarr thinks about hosts.
 
 The goal is portability without pretending every environment is identical.
 
+> **What is actually built:** two adapters, `qnap` and `generic-docker`. Sections
+> below that describe a Synology adapter, or capabilities on Unraid and TrueNAS,
+> are **design intent — no such adapter exists**. Those hosts fall back to generic
+> detection today, and nobody has reported what that produces.
+>
+> Two hosts have run Keelarr at all: a QNAP and a Mac. See
+> [testing.md](testing.md#platforms) for the honest platform table, and
+> [help wanted](testing.md#help-wanted) if you have one of the untested ones.
+
 ## Core Principle
 
 Keelarr is host-agnostic at the core and adapter-driven at the edge.
@@ -59,7 +68,7 @@ Adapter expectations:
 
 #### Synology With Docker / Container Manager
 
-Managed capabilities:
+Intended capabilities — **not built, and never tested on a Synology**:
 
 - full Keelarr flow
 - Synology-oriented default path detection
@@ -160,7 +169,11 @@ Improve onboarding on QNAP without making QNAP special in the core architecture.
 - existing containers may come from Container Station rather than Compose
 - some configs may live in Docker-managed volumes instead of bind mounts
 
-## Synology Adapter
+## Synology Adapter — not built
+
+Design intent only. There is no Synology adapter in `src/lib/host-adapters/`;
+Synology hosts fall back to generic Docker detection, and no one has reported
+what that suggests there.
 
 ### Purpose
 

@@ -8,6 +8,10 @@ already happened more than once.
 The scenarios differ in what already exists, which is exactly what makes them
 catch different bugs.
 
+Each has since been run against a real host — A on macOS from an empty machine,
+B and C on the QNAP. What each run actually proved, and the defects each one
+found, is in [testing.md](testing.md).
+
 | | What exists beforehand | What it proves |
 | --- | --- | --- |
 | **A. Build new** | Nothing | Keelarr can create a working stack from an empty host |

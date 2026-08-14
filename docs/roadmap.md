@@ -1,249 +1,88 @@
-# Keelarr Roadmap
+# Roadmap
 
-This roadmap translates the product and architecture documents into a staged implementation plan.
+What is built, what is next, and what is deliberately not being built.
 
-Dates are intentionally omitted at this stage. The goal is sequencing, not calendar promises.
+This replaced a nine-phase plan that had gone stale — it still described
+cutover and rollback as missing months after they shipped, which is the exact
+failure this project keeps trying to avoid everywhere else.
 
-## Phase 0: Foundation
+## Where things stand
 
-Status:
+Everything in the original plan through Phase 6 is built and has run against a
+real stack:
 
-- complete
+| Capability | Where the evidence is |
+| --- | --- |
+| Host detection, profiles, first-run setup | [testing.md](testing.md#lifecycle) |
+| Compose generation per service, `.env` beside it | Live on QNAP and macOS |
+| Install, upgrade, rollback, removal, reinstall | [testing.md](testing.md#lifecycle) |
+| Adoption of existing containers, cutover and revert | Five apps on the live NAS |
+| Config snapshots, so a rollback restores the database | Not just the image tag |
+| Wiring across the whole stack | [testing.md](testing.md#wiring) |
+| Controller password and a closed API | [testing.md](testing.md#credentials-and-safety) |
+| Published multi-arch image | `ghcr.io/tx-joshg/keelarr` |
 
-Outcomes:
+Twelve services in the catalog: Prowlarr, Radarr, Sonarr, Lidarr, Bazarr,
+SABnzbd, qBittorrent, FlareSolverr, Jellyfin, Trailarr, Ombi, Tautulli.
 
-- Arr-focused product scope
-- host support model
-- first product spec
-- initial MVP code scaffold
+## What is actually next
 
-Artifacts:
+Not features. **Evidence.**
 
-- `docs/foundation.md`
-- `docs/product-spec.md`
-- `docs/host-support.md`
-- `docs/architecture.md`
+Keelarr has been proven on two hosts: a QNAP with a real library, and a Mac with
+nothing on it. That is not "runs anywhere", and every feature added before that
+gap closes is a feature nobody has confirmed works outside those two machines.
 
-## Phase 1: Solidify The Current MVP
+### 1. Other hosts
 
-Goal:
+Linux with native Docker is the most likely platform of all and has never been
+tried. Nor has any arm64 *host*, Synology, Unraid, TrueNAS, WSL2, or rootless
+Docker. These are listed as [help wanted](testing.md#help-wanted) because they
+need hardware nobody on the project has.
 
-Make the current controller stable enough for local demos and iterative development.
+### 2. Live proof for what is only unit-tested
 
-Status:
+Two things ship with tests but no live run: qBittorrent registered into a real
+Arr, and Jellyfin inside a real stack. Both are in the catalog, so the honest
+position is that they install and are covered by fixtures — not that they are
+proven.
 
-- in progress
+### 3. Scale
 
-Required work:
+Everything here was proven against stacks of nine services or fewer. The wiring
+check's readiness budget and the update-check timings are guesses above that.
 
-- harden route handlers
-- move workflow logic out of `server.js`
-- improve update result handling
-- improve error messages
-- add more tests around compose rendering and state building
-- make the first-run flow fully predictable
+## Known limits
 
-Exit criteria:
+Stated so nobody spends time rediscovering them:
 
-- reliable local boot
-- stable dashboard refresh
-- stable generate/deploy flow on a Docker host
+- **Windows is unsupported outside WSL2**, by design. Keelarr mounts host paths at
+  the same absolute path inside the container, and `C:\` has no equivalent.
+- **A restored app can hold a stale address.** If a container moved while the app
+  was gone, its own database still points at the old one. The wiring check
+  reports this as drift for apps with an API; for Trailarr and Ombi it can only
+  warn, because correcting it would mean writing into their schema.
+- **Trailarr, Ombi and Tautulli are not wired.** They are deployed, health-checked
+  and monitored. Their settings live in SQLite with no documented write API, and
+  writing into another app's schema is out of scope — it breaks on their next
+  migration and Keelarr would own the corruption.
+- **The Docker socket path is hardcoded** to `/var/run/docker.sock`.
 
-## Phase 2: Host Profiles And Adapters
+## Not being built
 
-Goal:
+- A generic homelab dashboard. Keelarr is opinionated about one stack.
+- Anything that edits another app's database schema.
+- Anything that reads or writes indexers. They carry credentials you paid for.
+- Storing app API keys. They are read when needed and never persisted.
+- A hosted service.
 
-Introduce adapter-driven host detection without changing the core product model.
+## Ideas without commitments
 
-Status:
+Worth doing eventually, in no particular order, and none of them before the
+evidence gap closes:
 
-- largely complete for `generic-docker` and `qnap`
-- synology-specific work has not started yet
-
-Required work:
-
-- create a host adapter interface
-- implement generic Docker adapter
-- implement QNAP adapter
-- stub Synology adapter
-- store field-level detection confidence
-- separate validation from UI flow
-
-Exit criteria:
-
-- host profile detection is modular
-- QNAP-specific logic is not mixed into core service logic
-
-## Phase 3: Better Stack Generation
-
-Goal:
-
-Turn Compose generation into a stable artifact pipeline.
-
-Status:
-
-- in progress
-
-Required work:
-
-- formalize service templates
-- support advanced overrides cleanly
-- add template validation
-- write versioned stack artifacts
-- improve `.env` generation rules
-
-Exit criteria:
-
-- deterministic Compose output
-- readable generated files
-- per-service overrides no longer require ad hoc code paths
-
-## Phase 4: Import Existing Docker
-
-Goal:
-
-Support the real-world migration path for users with messy existing stacks.
-
-Status:
-
-- in progress
-- read-only scan, preview, managed draft generation, and first live cutover are proven
-- full UI-driven cutover and rollback are still missing
-
-Required work:
-
-- container scan
-- image/mount/port/env inference
-- service recognition
-- issue detection
-- adoption preview generation
-- per-service adoption workflow
-- guided cutover confirmation flow
-- inspect backup and rollback hooks
-- runtime status normalization across QNAP and other Docker variants
-
-Exit criteria:
-
-- a Docker-based existing stack can be previewed
-- one supported service can be adopted safely
-- the controller can drive the cutover with explicit confirmation and post-cutover validation
-
-## Phase 5: Guided App Linking
-
-Goal:
-
-Reduce manual setup inside the Arr ecosystem after deployment.
-
-Required work:
-
-- Prowlarr to Arr linking guidance
-- SABnzbd linking guidance
-- Tautulli to Plex guidance
-- path consistency validation
-
-Future direction:
-
-- optional API-driven setup automation where safe
-
-Exit criteria:
-
-- post-install setup burden is reduced meaningfully
-
-## Phase 6: Stronger Upgrade And Rollback
-
-Goal:
-
-Make updates safer and more trustworthy.
-
-Required work:
-
-- explicit pre-upgrade snapshot model
-- better image version tracking
-- rollback metadata
-- per-service rollback flow
-
-Exit criteria:
-
-- upgrade is no longer just pull + recreate
-- rollback path is explicit and testable
-
-## Phase 7: Security And Production Readiness
-
-Goal:
-
-Make Keelarr safe enough for broader real-world use.
-
-Required work:
-
-- controller authentication — done: one password, set on first run, gating every `/api` route
-- secret handling rules
-- mutation protection
-- safer install guidance
-- audit logging improvements
-
-Exit criteria:
-
-- Keelarr can be recommended beyond LAN-only development use
-
-## Phase 8: Observe-Only External Services
-
-Goal:
-
-Start supporting non-Docker users without overpromising lifecycle management.
-
-Required work:
-
-- external service cards
-- link and health-only records
-- manual service registration
-- import path for native installs as external services
-
-Exit criteria:
-
-- a user can include externally managed apps in the dashboard
-
-## Phase 9: Native Migration Helpers
-
-Goal:
-
-Help native-install users move into Docker-managed mode.
-
-Required work:
-
-- migration planning
-- data path guidance
-- service cutover checklists
-
-Exit criteria:
-
-- Keelarr can guide a native user into a Docker-managed stack without claiming full native lifecycle management
-
-## Explicit Non-Goals Until Later
-
-The following should stay out of scope unless the product proves demand:
-
-- generic app marketplace
-- Kubernetes
-- multi-host orchestration
-- public reverse proxy automation
-- vendor-specific GUI integrations as the source of truth
-
-## Practical Next Build Step
-
-The cutover API now exists as a background job with preflight drift detection,
-inspect and image-identity backup, tiered health verification, automatic revert
-on failure, and an explicit revert entry point. See the Cutover section of the
-README for the contract.
-
-Cutover and revert are also wired into the dashboard, driven by job polling,
-with a typed-name confirmation and a live step checklist.
-
-What remains:
-
-1. validate the workflow on a live service, starting with Ombi and then Tautulli
-2. migrate the remaining host-network and custom-network services
-3. improve update/version reporting for imported and externally managed services
-
-Step 1 is the real test. The sequencing is covered by unit tests and by an
-end-to-end test against a stub Docker binary, and the UI has been exercised in
-demo mode, but none of it has run against the live QNAP stack.
+- An adapter for Synology and Unraid path conventions, once someone confirms what
+  generic detection actually suggests there.
+- Correcting Tautulli's Plex link, which is plain ini text rather than a database.
+- Reporting drift on a schedule rather than only when asked.
+- A read-only mode for people who want the dashboard without the write paths.

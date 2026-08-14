@@ -180,8 +180,12 @@ Step 1 rehearsal above:
 - a `kill -9` mid-verify, then restart: the job is reported as interrupted with
   an accurate step list, and the in-app revert recovers from that state
 
-Not yet verified:
+Since verified, and no longer open:
 
-- **the live QNAP stack.** Container Station's Docker and Compose versions,
-  host networking, and the custom SABnzbd network are all still unexercised.
-- upgrade and rollback of an already cut-over service over time.
+- **the live QNAP stack.** Adoption, cutover and revert have since run against
+  Container Station on Trailarr, Radarr, Sonarr, SABnzbd and Ombi, including host
+  networking and the custom SABnzbd network.
+- **upgrade and rollback of an already cut-over service.** Proven on Sonarr, Ombi,
+  SABnzbd, Bazarr and Trailarr, with the config snapshot restored on rollback.
+
+See [testing.md](testing.md) for the current position on both.
