@@ -28,6 +28,8 @@ Hosts used so far:
 | Scenario | Level | Evidence |
 | --- | --- | --- |
 | Fresh install from an empty host | Live · macOS | Clone → `docker compose up -d` with no editing → controller starts, creates its own network, first-run password, host detection, service installed |
+| The quick start exactly as documented | Live · macOS | `curl` the compose file and `docker compose up -d`, no clone and no editing, against the **published** image pulled anonymously: healthy in 1 second, first-run password set, detection returned generic-docker at high confidence with `$HOME/keelarr` paths, validation clean with no errors and no warnings |
+| The published image is pullable by a stranger | Live | Anonymous token from `ghcr.io`, manifest fetched with no credentials, `linux/amd64` and `linux/arm64` both present |
 | Install a single service | Live · QNAP | FlareSolverr and qBittorrent installed from the catalog, generated `compose.yml` and `.env` on disk |
 | Install every service from scratch | Live · macOS | Seven services from an empty host. See [Full lifecycle](#full-lifecycle-macos) |
 | Upgrade one service | Live · QNAP + macOS | Sonarr, Ombi, SABnzbd, Bazarr, Trailarr — image changed, config intact. Prowlarr again on macOS |
