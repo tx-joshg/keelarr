@@ -2,12 +2,14 @@
 
 # Keelarr
 
-**A control plane for your \*arr stack that generates Compose files you can read,
-adopts the containers you already run, and wires the whole thing together —
-without ever claiming it did something it didn't.**
+**Set up and run a self-hosted \*arr media stack with Docker Compose.**
+
+Keelarr installs Radarr, Sonarr, Prowlarr, Bazarr, SABnzbd, qBittorrent, Jellyfin
+and the rest, connects them to each other, and writes Compose files you own —
+without ever claiming it did something it didn't.
 
 [Quick start](#quick-start) · [What makes it different](#what-makes-it-different) ·
-[What is actually tested](docs/testing.md) · [Help wanted](#help-wanted)
+[FAQ](#faq) · [What is actually tested](docs/testing.md) · [Help wanted](#help-wanted)
 
 ![The Keelarr dashboard: eight apps, their images, ports, Compose state and health](docs/images/dashboard.png)
 
@@ -245,6 +247,75 @@ Two rules the codebase actually holds to:
 Comments explain *why*, not what. If the reason a line exists is a defect that
 was found the hard way, the comment says so, because that is what stops it being
 "simplified" back.
+
+## FAQ
+
+**What is an \*arr stack?**
+A set of self-hosted apps that automate a media library. Prowlarr manages your
+indexers, Radarr and Sonarr and Lidarr decide what to fetch, a download client
+(SABnzbd for Usenet, qBittorrent for torrents) fetches it, Bazarr adds subtitles,
+and Plex or Jellyfin plays it. Also written *servarr*. Individually they are easy
+to run; the work is in connecting them.
+
+**How is this different from writing my own Compose files?**
+It isn't, at the end — Keelarr *writes* Compose files, and they are ordinary
+files you can read and edit. What it saves you is the connecting: registering the
+download client in each app with the right category, registering each app in
+Prowlarr with an address that resolves from Prowlarr's side of the network,
+pointing Bazarr at Radarr and Sonarr, creating library folders on both sides of a
+mount. That is the part that is fiddly, easy to get subtly wrong, and breaks
+whenever a container moves.
+
+**How is this different from Portainer, Dockge or Komodo?**
+Those manage containers in general and are agnostic about what is inside them.
+Keelarr knows what these specific apps are and how they are meant to connect, and
+talks to each one's REST API. It is narrower on purpose. It is not a general
+homelab dashboard and does not try to be.
+
+**I already have a stack running. Do I have to start over?**
+No — that case is the reason adoption exists. Keelarr scans your existing
+containers read-only first, shows you what it found, and produces a managed draft
+that preserves how they already run, including host networking, static addresses
+on a macvlan, named volumes and entrypoint overrides. Cutover is a separate
+explicit step, and it has a revert.
+
+**Will it change settings inside my apps?**
+Only to add connections that are missing, and it tests each one with the app's
+own test endpoint before writing it. Anything already configured is left alone: a
+download client pointing somewhere unexpected is reported as drift, not
+overwritten. Indexers are never read or written at all.
+
+**Does it store my API keys?**
+No. They are read at the moment they are needed and never persisted, logged, or
+returned by the API — what you get back is a source path and a truncated
+fingerprint. A test asserts no 32-character hex key appears in any response.
+
+**What happens if I stop using it?**
+Nothing. Your stack keeps running, because it is ordinary Compose files and
+ordinary containers. Stop the controller and delete it; nothing depended on it
+being alive. There is no database describing your infrastructure to be stranded
+in.
+
+**Usenet or torrents?**
+Both. SABnzbd and qBittorrent are in the catalog, and the download-client wiring
+covers either.
+
+**Do I need Plex?**
+No. Jellyfin is in the catalog and nothing requires Plex. Tautulli and Ombi are
+there for people who use Plex, and are simply not deployed if you don't.
+
+**Does it run on my NAS / Raspberry Pi / Linux box?**
+QNAP and macOS are proven. Linux and arm64 hosts are the obvious next ones and
+are genuinely untested — see [issue #1](https://github.com/tx-joshg/keelarr/issues/1)
+and [issue #2](https://github.com/tx-joshg/keelarr/issues/2). Windows works only
+inside WSL2 with POSIX paths. The [platform table](docs/testing.md#platforms) is
+kept honest rather than optimistic.
+
+**What can't it do for me?**
+Anything that needs credentials only you have: an indexer subscription, a Usenet
+account, a Plex token. Keelarr brings the stack to *"everything is connected —
+now add your indexer"* and says so explicitly rather than reporting itself
+finished.
 
 ## Licence
 
