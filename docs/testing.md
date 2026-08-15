@@ -182,10 +182,15 @@ two hosts is not "any Linux box".
 If you are reporting, please redact: API keys, indexer names, Usenet server
 hostnames, Plex tokens, and anything under `/api/…?apikey=`.
 
+The first two are open as GitHub issues — they are the ones that matter, because
+"runs on Linux" is the claim this project most wants to be able to make and
+currently cannot. The rest are listed here and will be opened as anyone shows
+interest, rather than filling the tracker with nine unattended issues.
+
 | # | Scenario | What would close it |
 | --- | --- | --- |
-| 1 | **Linux x86_64, native Docker** | The most likely host of all, and completely untested. Run the [full lifecycle](#full-lifecycle-macos) steps and say which ones did not behave as described |
-| 2 | **Raspberry Pi / arm64 host** | The arm64 image is verified to boot; no arm64 *host* has run the controller. Install two services and paste the output of the stack check |
+| 1 | **Linux x86_64, native Docker** — [issue #1](https://github.com/tx-joshg/keelarr/issues/1) | The most likely host of all, and completely untested. Run the [full lifecycle](#full-lifecycle-macos) steps and say which ones did not behave as described |
+| 2 | **Raspberry Pi / arm64 host** — [issue #2](https://github.com/tx-joshg/keelarr/issues/2) | The arm64 image is verified to boot; no arm64 *host* has run the controller. Install two services and paste the output of the stack check |
 | 3 | **Synology DSM** | There is no adapter, so detection falls back to generic. Say what it detected, and whether the suggested paths were right for DSM |
 | 4 | **Unraid** | Paths live under `/mnt/user`. Say whether host detection suggested usable roots |
 | 5 | **TrueNAS SCALE** | Docker availability varies by version. Say which version, and whether the controller could reach the socket |

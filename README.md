@@ -209,8 +209,16 @@ Keelarr has been proven on two hosts. The table above is honest about that, and
 the fastest way to make it less embarrassing is to run it somewhere else and say
 what happened. **A report that it worked is worth as much as a bug report.**
 
-[docs/testing.md](docs/testing.md#help-wanted) lists eleven scenarios written to
-be closeable without a conversation first — run the steps, paste the output, say
+Two issues are open right now, and they are the ones that matter:
+
+- **[#1 — does it work on Linux with native Docker?](https://github.com/tx-joshg/keelarr/issues/1)**
+  The most likely host of all, and completely untested.
+- **[#2 — does the arm64 image run on an actual arm64 host?](https://github.com/tx-joshg/keelarr/issues/2)**
+  The image is built for arm64 and verified as a manifest. No arm64 *machine* has
+  ever run the controller.
+
+[docs/testing.md](docs/testing.md#help-wanted) lists nine more, each written to be
+closeable without a conversation first — run the steps, paste the output, say
 what your host is. Please redact API keys, indexer names, Usenet hostnames and
 Plex tokens.
 
