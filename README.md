@@ -8,8 +8,9 @@ Keelarr installs Radarr, Sonarr, Prowlarr, Bazarr, SABnzbd, qBittorrent, Jellyfi
 and the rest, connects them to each other, and writes Compose files you own —
 without ever claiming it did something it didn't.
 
-[Quick start](#quick-start) · [What makes it different](#what-makes-it-different) ·
-[FAQ](#faq) · [What is actually tested](docs/testing.md) · [Help wanted](#help-wanted)
+[Quick start](#quick-start) · [Wiki](https://github.com/tx-joshg/keelarr/wiki) ·
+[What makes it different](#what-makes-it-different) · [FAQ](#faq) ·
+[What is actually tested](docs/testing.md) · [Help wanted](#help-wanted)
 
 ![The Keelarr dashboard: eight apps, their images, ports, Compose state and health](docs/images/dashboard.png)
 
@@ -148,6 +149,10 @@ start — the defaults land under `$HOME/keelarr`, and you change them in the ap
 
 Detection scores every profile it knows and shows you why, per field. It suggests
 — it does not decide.
+
+For pinning a version, changing the port, or what the container mounts and why,
+see [Installation](https://github.com/tx-joshg/keelarr/wiki/Installation) in the
+wiki.
 
 To run from a checkout instead:
 
@@ -339,6 +344,26 @@ Keelarr is free to use and always will be. If it saved you an evening, you can
 nobody has tried is worth more.
 
 ## Documentation
+
+**The [wiki](https://github.com/tx-joshg/keelarr/wiki) is the long-form
+documentation** — installation, the path model, how wiring resolves addresses,
+adopting an existing stack, and a troubleshooting page where every entry is a
+failure that actually happened on a real host.
+
+| Wiki page | For |
+| --- | --- |
+| [Installation](https://github.com/tx-joshg/keelarr/wiki/Installation) | Getting the controller running, pinning a version, demo mode |
+| [First Run and Host Setup](https://github.com/tx-joshg/keelarr/wiki/First-Run-and-Host-Setup) | The wizard, host detection, and the path rule everything depends on |
+| [App Catalog](https://github.com/tx-joshg/keelarr/wiki/App-Catalog) | The twelve apps, their ports, and what is wired for each |
+| [Wiring](https://github.com/tx-joshg/keelarr/wiki/Wiring) | How addresses are resolved per app, and why a connection is sometimes refused |
+| [Adopting an Existing Stack](https://github.com/tx-joshg/keelarr/wiki/Adopting-an-Existing-Stack) | Taking over containers Keelarr did not create |
+| [Lifecycle](https://github.com/tx-joshg/keelarr/wiki/Lifecycle) | Upgrades, rollback, snapshots, removal, reinstall |
+| [Security Model](https://github.com/tx-joshg/keelarr/wiki/Security-Model) | What is read, what is written, what is never touched |
+| [Configuration Reference](https://github.com/tx-joshg/keelarr/wiki/Configuration-Reference) | Every setting, environment variable and API route |
+| [Troubleshooting](https://github.com/tx-joshg/keelarr/wiki/Troubleshooting) | Real failures, what they mean, how to fix them |
+| [Contributing and Testing](https://github.com/tx-joshg/keelarr/wiki/Contributing-and-Testing) | Code layout and the rules it holds to |
+
+In this repository:
 
 | Document | What is in it |
 | --- | --- |
