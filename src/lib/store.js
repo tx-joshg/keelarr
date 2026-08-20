@@ -23,8 +23,13 @@ export const defaultSettings = {
   plexLogsRoot: "",
   hostUrl: "http://localhost",
   tz: "America/Chicago",
-  puid: "1000",
-  pgid: "1000",
+  // 911:911, not 1000:1000. Nine of the twelve catalog services are
+  // linuxserver.io images, whose baseimage creates its `abc` user at 911:911
+  // and only overrides it when PUID/PGID are passed. A library first populated
+  // by any of them is therefore owned by 911, and a default of 1000 hands every
+  // new service an identity that cannot write to it.
+  puid: "911",
+  pgid: "911",
   ombiVersion: "latest",
   // How many backups to keep per service. Every install, upgrade, and rollback
   // writes one, so without a cap they grow forever. 0 means keep all.

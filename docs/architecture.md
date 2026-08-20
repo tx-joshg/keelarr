@@ -57,6 +57,36 @@ equivalent inside a Linux container.
 `host-mounts.js` owns this: it renders `deploy/.env` from settings, and reports
 roots that settings name but the controller cannot see.
 
+## Identity
+
+`PUID`/`PGID` are the one setting that is **not** a property of a single service,
+and are therefore managed centrally for every managed stack — imported ones
+included.
+
+The reason is that identity decides whether an app can write files a *different*
+app created. Left to each image's own default, a linuxserver app runs as 911 and
+a non-linuxserver one as 1000; the second cannot write into a library folder the
+first made at mode 755. Nothing in either container is misconfigured, and both
+compose files can be silent on the subject, because `nandyalu/trailarr` states
+`PUID=1000` in the image itself. The failure only exists between them.
+
+So `reconcileStackIdentity` in `generator.js` writes `PUID`/`PGID` into an
+adopted stack's `compose.yml` and `.env` at deploy. It is deliberately narrow:
+those two keys and nothing else. Image, ports, mounts, networks, command and
+entrypoint stay exactly as adopted — see [It adopts what you already
+have](../README.md#it-adopts-what-you-already-have). It also skips services whose
+catalog definition has no `PUID` at all, so FlareSolverr is not given an identity
+it runs as its own user and cannot honour.
+
+The default is **911**, not 1000, because nine of the twelve catalog services are
+linuxserver images whose baseimage creates its `abc` user at 911. A default of
+1000 hands every new service an identity that cannot write to a library those
+same images populated.
+
+Changing the setting is not sufficient on its own: an app whose config directory
+is owned by the old uid loses access to its own database, so the directory has to
+be re-owned alongside. Host validation reports this before it bites.
+
 ## Host adapters
 
 `host-adapters/` holds one module per host profile — currently QNAP and generic

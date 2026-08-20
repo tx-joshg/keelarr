@@ -41,6 +41,8 @@ Hosts used so far:
 | Remove everything | Live · QNAP | Bazarr and Lidarr removed with container, config, image, stack files and backups; nothing left behind |
 | Redeploy after removal | Live · QNAP | Reinstall restores the archived compose rather than generating a catalog default |
 | Adopt an existing container | Live · QNAP | Read-only scan → managed draft → cutover → revert, on Trailarr, Radarr, Sonarr, SABnzbd and Ombi |
+| Identity applied across a whole stack | Live · QNAP | Eight services moved to one `PUID`/`PGID` from settings — six of them adopted stacks that had kept each image's own default. Two had been running as **root**. Config directories re-owned alongside; `/share/Media` untouched |
+| Identity written into an adopted stack | Automated | Only `PUID`/`PGID` change: image, ports, mounts, `.env` values and entrypoint survive verbatim. A service that runs as its own user is not given a `PUID` it cannot honour |
 
 ## Wiring
 

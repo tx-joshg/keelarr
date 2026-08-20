@@ -81,6 +81,12 @@ that preserves the shape of what you already run, down to host networking, stati
 addresses on a macvlan, named volumes, and entrypoint overrides. Cutover is a
 separate, explicit step. Revert is one click.
 
+The single exception is `PUID`/`PGID`, which is managed centrally for every stack
+including adopted ones — because identity is not a property of one container. It
+decides whether an app can write files a *different* app created, and left to
+each image's own default, two apps sharing a library disagree about who they are.
+[docs/architecture.md](docs/architecture.md#identity) explains the rule.
+
 ![The adoption scan listing existing containers, what each was recognised as, and one marked unsupported](docs/images/adoption.png)
 
 Note the last row. Keelarr says when it does *not* recognise something, rather
@@ -120,6 +126,10 @@ live evidence in separate columns, because they prove different things.
   parses another app's schema, so nothing breaks on its next migration.
 - **Command output that could contain secrets is withheld from the log** — byte
   counts instead of contents.
+- **The one exception is identity, and it is deliberate.** Deploying an adopted
+  stack writes `PUID`/`PGID` into its `compose.yml` and `.env` — those two keys
+  and nothing else. A stack whose apps each pick their own uid is a stack where
+  one app silently cannot write what another one made.
 
 ### It tells you what only you can supply
 

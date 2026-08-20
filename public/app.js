@@ -2030,7 +2030,7 @@ function renderFooter() {
   const warnings = visibleWarningCount() > 0 ? "1 warning" : "no warnings";
 
   return `
-    <span>${escapeHtml(String(services.length))} apps &middot; ${escapeHtml(String(running))} running &middot; ${escapeHtml(warnings)} &middot; PUID ${escapeHtml(state.settings?.puid || "1000")} / PGID ${escapeHtml(state.settings?.pgid || "1000")}</span>
+    <span>${escapeHtml(String(services.length))} apps &middot; ${escapeHtml(String(running))} running &middot; ${escapeHtml(warnings)} &middot; PUID ${escapeHtml(state.settings?.puid || "911")} / PGID ${escapeHtml(state.settings?.pgid || "911")}</span>
     <span>
       ${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())} &middot; compose-native ARR control plane${SUPPORT_URL
         ? ` &middot; <a class="footer-support" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer">Support Keelarr</a>`
