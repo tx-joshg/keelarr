@@ -81,6 +81,7 @@ Hosts used so far:
 | Wiring that needs to change nothing | Live · macOS | Reported as a finished job, not a failure — it runs automatically after every install, and a red failure over a successful install is a lie |
 | Wiring that cannot write anything | Live · macOS | Says what stopped it — unreachable, still starting, or left alone — instead of claiming the stack is fully configured |
 | A port already held by something else | Live · macOS | Names the port. Found because an unrelated project on the machine held 8080 |
+| `PUID` checked against the library, not just the media root | Automated · Live · QNAP | The share is `0:0` mode 777 while the title folders inside it are `911:911` mode 755 — a root-only check passes and every real write still fails, so validation samples the folders apps actually write into |
 
 ## Full lifecycle · macOS
 

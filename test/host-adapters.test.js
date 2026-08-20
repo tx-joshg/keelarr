@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, chmod } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { applyDetectionSuggestions, pickBestHostDetection, pickHostDetection } from "../src/lib/host-adapters/index.js";
 import { resolveGenericDockerSuggestedPaths, validateGenericDockerHost } from "../src/lib/host-adapters/generic-docker.js";
+import { identityCanWriteInto } from "../src/lib/host-adapters/shared.js";
 
 test("selects the highest-scoring host detection", () => {
   const selected = pickBestHostDetection([
@@ -140,4 +141,65 @@ test("before the first save, placeholder settings lose to a real mount", async (
 
   assert.equal(paths.mediaRoot, "/Users/someone/keelarr/media");
   assert.equal(paths.stackRoot, "/Users/someone/keelarr/stacks");
+});
+
+test("a directory the identity does not own and cannot write is reported as blocked", () => {
+  // The exact shape a linuxserver-populated library takes: the app that made
+  // the folder owns it at 755, so a second app running as a different uid gets
+  // read and traverse but cannot create the file it came to write.
+  assert.equal(identityCanWriteInto({ uid: 911, gid: 911, mode: 0o755 }, 1000, 1000), false);
+  assert.equal(identityCanWriteInto({ uid: 911, gid: 911, mode: 0o755 }, 911, 911), true);
+
+  // A world-writable share says yes to everyone, which is why checking only
+  // the media root is not enough to trust.
+  assert.equal(identityCanWriteInto({ uid: 0, gid: 0, mode: 0o777 }, 1000, 1000), true);
+
+  // POSIX stops at the first matching class rather than falling through, so an
+  // owner match without the write bit is a denial even when group would allow.
+  assert.equal(identityCanWriteInto({ uid: 911, gid: 911, mode: 0o575 }, 911, 911), false);
+
+  // Group ownership is the other way in.
+  assert.equal(identityCanWriteInto({ uid: 0, gid: 911, mode: 0o775 }, 911, 911), true);
+
+  assert.equal(identityCanWriteInto(null, 911, 911), null);
+});
+
+test("host validation warns when the library folders reject the configured PUID", async () => {
+  // A media root that is writable by anyone, holding a library folder that is
+  // not — the arrangement that passes a surface check and then fails on every
+  // write, which is what this warning exists to catch.
+  const root = await mkdtemp(path.join(os.tmpdir(), "keelarr-identity-validation-"));
+  const stackRoot = path.join(root, "stacks");
+  const configRoot = path.join(root, "config");
+  const mediaRoot = path.join(root, "media");
+  const downloadsRoot = path.join(mediaRoot, "downloads");
+  const titleFolder = path.join(mediaRoot, "Movies", "Some Film (1971)");
+
+  await mkdir(stackRoot, { recursive: true });
+  await mkdir(configRoot, { recursive: true });
+  await mkdir(downloadsRoot, { recursive: true });
+  await mkdir(titleFolder, { recursive: true });
+  await chmod(mediaRoot, 0o777);
+  await chmod(path.join(mediaRoot, "Movies"), 0o777);
+  await chmod(titleFolder, 0o755);
+
+  const settings = {
+    dockerBin: "/definitely-not-keelarr/docker",
+    stackRoot,
+    configRoot,
+    mediaRoot,
+    downloadsRoot,
+    plexLogsRoot: "",
+    selectedServiceIds: ["trailarr"]
+  };
+
+  // A uid this process is not, so the 755 title folder denies it.
+  const foreign = await validateGenericDockerHost({ ...settings, puid: String(process.getuid() + 1), pgid: String(process.getgid() + 1) });
+  assert.match(foreign.warnings.join(" "), /cannot write into 1 of 2 sampled library folders/i);
+  assert.equal(foreign.fieldResults.identity.level, "warn");
+
+  // The owning identity is allowed, and the warning goes away.
+  const owner = await validateGenericDockerHost({ ...settings, puid: String(process.getuid()), pgid: String(process.getgid()) });
+  assert.doesNotMatch(owner.warnings.join(" "), /sampled library folders/i);
+  assert.equal(owner.fieldResults.identity.level, "info");
 });
