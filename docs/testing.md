@@ -83,6 +83,8 @@ Hosts used so far:
 | Wiring that needs to change nothing | Live · macOS | Reported as a finished job, not a failure — it runs automatically after every install, and a red failure over a successful install is a lie |
 | Wiring that cannot write anything | Live · macOS | Says what stopped it — unreachable, still starting, or left alone — instead of claiming the stack is fully configured |
 | A port already held by something else | Live · macOS | Names the port. Found because an unrelated project on the machine held 8080 |
+| Controller update discovery | Automated · Live · macOS | The newest release is compared numerically, so 0.1.10 is newer than 0.1.9; a failed check keeps the previous answer and says why rather than reading as up to date; and the footer shows the version stale with the release named |
+| A controller that cannot update itself says why | Automated | One refusal per cause — no socket, no compose project, no deploy or data mount, a locally built image, another job running — each carrying the reason the UI prints |
 | A controller that cannot be reached on first load | Live · macOS | Assets served with the API down — the shape a reverse proxy produces when the app is gone — reports what answered instead of sitting on `Loading...` forever, and `Try again` recovers in place without a reload |
 | `PUID` checked against the library, not just the media root | Automated · Live · QNAP | The share is `0:0` mode 777 while the title folders inside it are `911:911` mode 755 — a root-only check passes and every real write still fails, so validation samples the folders apps actually write into |
 

@@ -467,9 +467,37 @@ export class DemoKeelarrAppService {
         version: APP_VERSION,
         mode: "demo",
         label: "Interactive Demo",
-        note: "All dashboard actions are simulated. No Docker host is modified."
+        note: "All dashboard actions are simulated. No Docker host is modified.",
+        selfUpdate: this.describeDemoSelfUpdate()
       }
     };
+  }
+
+  /**
+   * The demo has no container behind it, so self-update is shown exactly as it
+   * would be on a host that cannot do it: the release is named, and the reason
+   * it is not on offer is stated rather than the button being silently absent.
+   */
+  describeDemoSelfUpdate() {
+    return {
+      currentVersion: APP_VERSION,
+      targetVersion: APP_VERSION,
+      updateStatus: "current",
+      checkedAt: new Date().toISOString(),
+      checkError: null,
+      supported: false,
+      available: false,
+      reason: "The demo has no container to replace.",
+      checks: [{ id: "container", label: "Keelarr can see its own container", ok: false, reason: "The demo has no container to replace." }]
+    };
+  }
+
+  async describeSelfUpdate() {
+    return { ok: true, selfUpdate: this.describeDemoSelfUpdate() };
+  }
+
+  async checkSelfUpdate() {
+    return { ok: true, selfUpdate: this.describeDemoSelfUpdate() };
   }
 
   async detectHost(input = null) {

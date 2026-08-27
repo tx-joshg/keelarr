@@ -11,6 +11,10 @@ export const settingsPath = path.join(dataDir, "settings.json");
 export const activityPath = path.join(dataDir, "activity.json");
 export const updatesPath = path.join(dataDir, "updates.json");
 export const jobsPath = path.join(dataDir, "jobs.json");
+// Deliberately not a key inside updates.json: isUpdateCheckDue() takes the
+// newest checkedAt across every value in that file, so recording a controller
+// check there would postpone the managed services' next check by a day.
+export const controllerUpdatePath = path.join(dataDir, "controller-update.json");
 // Kept apart from settings.json on purpose: settings are rendered into
 // deploy/.env and reported through the API, and the password hash belongs in
 // neither.

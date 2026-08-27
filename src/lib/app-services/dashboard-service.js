@@ -3,9 +3,10 @@ import { listServices } from "../service-catalog.js";
 import { APP_NAME, APP_VERSION } from "../app-meta.js";
 
 export class DashboardService {
-  constructor({ hostProfileService, managedStackService = null } = {}) {
+  constructor({ hostProfileService, managedStackService = null, selfUpdateService = null } = {}) {
     this.hostProfileService = hostProfileService;
     this.managedStackService = managedStackService;
+    this.selfUpdateService = selfUpdateService;
   }
 
   /**
@@ -40,7 +41,13 @@ export class DashboardService {
         version: APP_VERSION,
         mode: "live",
         label: "Live Host",
-        note: "Dashboard actions run against the configured Docker host."
+        note: "Dashboard actions run against the configured Docker host.",
+        // Swallowed on purpose, like withRollbackPoints: whether the controller
+        // can update itself is worth reporting, and never worth failing the
+        // whole dashboard over.
+        selfUpdate: this.selfUpdateService
+          ? await this.selfUpdateService.describeSelfUpdate().catch(() => null)
+          : null
       }
     };
   }

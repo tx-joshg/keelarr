@@ -353,16 +353,42 @@ export class HostProfileService {
     }
   }
 
-  /** The controller's own compose labels and mounts, read from its container. */
+  /**
+   * The controller's own compose identity and mounts, read from its container.
+   *
+   * Every field here is what it would take to run Compose against this exact
+   * project from outside the container: the project name, every config file in
+   * the order Compose recorded them, the project directory, and the one service
+   * within it that is Keelarr. A recreate driven by anything less can select a
+   * different project, drop an override, or act on services it was not asked
+   * about.
+   */
   async readControllerDefinition(settings, logger) {
     const inspects = await this.inspectContainers(settings, [hostname(), "keelarr"], { logger });
     const inspect = inspects[0] || null;
     const labels = inspect?.Config?.Labels || {};
 
     return {
+      // The lookup asks for the container id and the name, so index 0 alone
+      // does not say which one answered.
+      containerName: inspect?.Name?.replace(/^\//, "") || null,
+      image: inspect?.Config?.Image || null,
+      imageId: inspect?.Image || null,
+      projectName: labels["com.docker.compose.project"] || null,
+      serviceName: labels["com.docker.compose.service"] || null,
+      configFiles: (labels["com.docker.compose.project.config_files"] || "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
       workingDir: labels["com.docker.compose.project.working_dir"] || null,
       composeFile: (labels["com.docker.compose.project.config_files"] || "").split(",")[0] || null,
-      mounts: (inspect?.Mounts || []).map((mount) => ({ source: mount.Source, target: mount.Destination }))
+      mounts: (inspect?.Mounts || []).map((mount) => ({
+        type: mount.Type || null,
+        name: mount.Name || null,
+        source: mount.Source,
+        target: mount.Destination,
+        rw: mount.RW !== false
+      }))
     };
   }
 

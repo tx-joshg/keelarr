@@ -82,6 +82,13 @@ export const CONTROLLER_ENV_FILE = "deploy/.env";
  * deployed before that mount existed.
  */
 export const DEPLOY_MOUNT = "/app/deploy-host";
+export const DATA_MOUNT = "/app/data";
+export const DOCKER_SOCKET_MOUNT = "/var/run/docker.sock";
+
+/** The mount backing a container path, or null when nothing is mounted there. */
+export function findMount(mounts = [], target) {
+  return (mounts || []).find((mount) => mount && mount.target === target) || null;
+}
 
 export async function resolveControllerEnvPath({ workingDir, composeFile, mounts = [] }, options = {}) {
   const exists = options.pathExistsImpl || (async (target) => {
@@ -169,9 +176,13 @@ export function renderControllerEnv(settings, existing = "") {
   ].join("\n");
 }
 
-function readExisting(text, key) {
+export function readEnvValue(text, key) {
   const match = String(text || "").match(new RegExp(`^\\s*${key}\\s*=\\s*(.*)$`, "m"));
   return match ? match[1].trim() : null;
+}
+
+function readExisting(text, key) {
+  return readEnvValue(text, key);
 }
 
 export function findUnmountedRoots(settings, controllerMounts) {
