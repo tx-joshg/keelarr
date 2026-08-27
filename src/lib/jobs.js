@@ -5,6 +5,11 @@ import { readJobs, writeJobs } from "./store.js";
 export const JOB_STATUS = Object.freeze({
   PENDING: "pending",
   RUNNING: "running",
+  // Work that has passed out of this process's hands — the controller updating
+  // itself gives the last steps to a container that outlives it. Not terminal,
+  // because the outcome is not known yet, and not running, because nothing here
+  // is running it any more.
+  HANDED_OFF: "handed-off",
   SUCCEEDED: "succeeded",
   FAILED: "failed"
 });
@@ -122,6 +127,14 @@ export class JobRegistry {
 
     for (const job of stored) {
       if (!job?.id) {
+        continue;
+      }
+
+      // A handed-off job is expected to survive the restart that interrupted
+      // it: that restart is the work. Rewriting it to a failure here would
+      // destroy the record that reconciliation needs to finalise.
+      if (job.status === JOB_STATUS.HANDED_OFF) {
+        this.jobs.set(job.id, job);
         continue;
       }
 
@@ -357,6 +370,70 @@ export class JobRegistry {
   }
 
   /** Drops the oldest finished jobs once the registry is over its cap. */
+  /**
+   * Records that the rest of this job is now somebody else's, and waits.
+   *
+   * start() marks a job succeeded the moment its handler returns, so a handler
+   * that launched the updater and returned would persist a success before the
+   * container was even stopped — and hydrate() would then find a terminal job
+   * it must not touch. Handing off flushes this state to disk first, then never
+   * resolves, so the only thing that can finish this job is reconciliation on
+   * the other side of the restart.
+   */
+  async markHandedOff(job, { operationId, detail = null } = {}) {
+    job.status = JOB_STATUS.HANDED_OFF;
+    job.handedOffAt = this.now();
+    job.subject = { ...(job.subject || {}), operationId };
+
+    if (detail) {
+      job.result = { ...(job.result || {}), detail };
+    }
+
+    this.schedulePersist();
+    // Flushed rather than scheduled: the process may be killed within seconds.
+    await this.flush();
+
+    this.logger.info("job.handed_off", { jobId: job.id, kind: job.kind, operationId });
+
+    return new Promise(() => {});
+  }
+
+  /**
+   * Finishes a handed-off job once the outcome is known.
+   *
+   * Matched on the operation id rather than the job id alone, so a stale receipt
+   * can never close a different attempt, and refused for any job that is not
+   * handed off, so it can never rewrite a genuine failure.
+   */
+  async finalizeHandedOff(operationId, { status, result = null, error = null, steps = {} } = {}) {
+    const job = [...this.jobs.values()].find(
+      (entry) => entry.status === JOB_STATUS.HANDED_OFF && entry.subject?.operationId === operationId
+    );
+
+    if (!job) {
+      return null;
+    }
+
+    job.status = status;
+    job.finishedAt = this.now();
+    job.result = result ?? job.result;
+    job.error = error;
+
+    for (const [name, patch] of Object.entries(steps)) {
+      const step = (job.steps || []).find((entry) => entry.name === name);
+
+      if (step) {
+        Object.assign(step, patch, { finishedAt: step.finishedAt || job.finishedAt });
+      }
+    }
+
+    this.schedulePersist();
+    await this.flush();
+    this.logger.info("job.finalized", { jobId: job.id, operationId, status });
+
+    return buildJobSnapshot(job);
+  }
+
   prune() {
     if (this.jobs.size <= this.maxJobs) {
       return;

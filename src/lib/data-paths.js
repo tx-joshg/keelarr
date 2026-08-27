@@ -15,6 +15,12 @@ export const jobsPath = path.join(dataDir, "jobs.json");
 // newest checkedAt across every value in that file, so recording a controller
 // check there would postpone the managed services' next check by a day.
 export const controllerUpdatePath = path.join(dataDir, "controller-update.json");
+// The record of an update in flight. In the data directory because that is a
+// bind mount: it is the only thing written by the old controller that the new
+// one can still read.
+export const selfUpdateReceiptPath = path.join(dataDir, "self-update.json");
+export const selfUpdateLogPath = path.join(dataDir, "self-update.log");
+export const selfUpdateAckPath = (operationId) => path.join(dataDir, `self-update-ack-${operationId}`);
 // Kept apart from settings.json on purpose: settings are rendered into
 // deploy/.env and reported through the API, and the password hash belongs in
 // neither.

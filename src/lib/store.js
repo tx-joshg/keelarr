@@ -4,6 +4,7 @@ import {
   activityPath,
   authPath,
   controllerUpdatePath,
+  selfUpdateReceiptPath,
   dataDir,
   jobsPath,
   settingsPath,
@@ -218,6 +219,15 @@ export async function readControllerUpdateState() {
 export async function writeControllerUpdateState(nextState) {
   await writeJson(controllerUpdatePath, nextState);
   return nextState;
+}
+
+export async function readSelfUpdateReceipt() {
+  return readJson(selfUpdateReceiptPath, null);
+}
+
+export async function writeSelfUpdateReceipt(receipt) {
+  await writeJson(selfUpdateReceiptPath, receipt);
+  return receipt;
 }
 
 export async function readUpdateState() {
