@@ -383,6 +383,38 @@ test("a declared port with no host binding is reported", () => {
     { containerPort: "9696/tcp", hostIp: "0.0.0.0", hostPort: "9696" }
   ];
 
-  assert.deepEqual(findUnpublishedPorts(ports), ["8080/tcp"]);
+  assert.deepEqual(findUnpublishedPorts(ports, { managedPort: 8080 }), ["8080/tcp"]);
   assert.deepEqual(findUnpublishedPorts([]), []);
+});
+
+test("a port the image exposes but Keelarr never publishes is not a conflict", () => {
+  // FlareSolverr exactly: the upstream image carries EXPOSE 8191 and EXPOSE
+  // 8192, and the catalog publishes only 8191. Reporting 8192 told the operator
+  // to go hunting for a port conflict on every healthy install.
+  const ports = [
+    { containerPort: "8191/tcp", hostIp: "0.0.0.0", hostPort: "8191" },
+    { containerPort: "8192/tcp", hostIp: null, hostPort: null }
+  ];
+
+  assert.deepEqual(findUnpublishedPorts(ports, { managedPort: 8191 }), []);
+});
+
+test("a host-networked app does not report its own port as stolen", () => {
+  // Host networking publishes nothing by design and the app is reachable at the
+  // host address. The scanner synthesises an entry per EXPOSE for these, which
+  // read as "never published to the host" for every host-networked service.
+  const ports = [{ containerPort: "7878/tcp", hostIp: null, hostPort: null, display: "7878/tcp (host network)" }];
+
+  assert.deepEqual(findUnpublishedPorts(ports, { managedPort: 7878, networkMode: "host" }), []);
+  // Same shape without host networking is a genuine failure and still reported.
+  assert.deepEqual(findUnpublishedPorts(ports, { managedPort: 7878 }), ["7878/tcp"]);
+});
+
+test("a remapped adopted container still reports a port that never bound", () => {
+  // An adopted service records its *host* port in service.port, so matching the
+  // container port against it would miss the real failure whenever the two
+  // differ. Nothing bound at all is reported regardless of the numbers.
+  const ports = [{ containerPort: "7878/tcp", hostIp: null, hostPort: null }];
+
+  assert.deepEqual(findUnpublishedPorts(ports, { managedPort: 7879 }), ["7878/tcp"]);
 });
