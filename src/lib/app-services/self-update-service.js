@@ -278,7 +278,7 @@ export class SelfUpdateService {
             finishedAt: receipt.finishedAt || null
           }
         : null,
-      recoveryCommand: this.buildRecoveryCommand(controller)
+      recoveryCommand: this.buildRecoveryCommand(controller, settings)
     };
   }
 
@@ -350,14 +350,20 @@ export class SelfUpdateService {
    * Handed over before the risk is taken, because if Keelarr does not come back
    * neither does the page that would have shown it.
    */
-  buildRecoveryCommand(controller) {
+  buildRecoveryCommand(controller, settings = {}) {
     if (!controller?.projectName || !(controller.configFiles || []).length) {
       return null;
     }
 
     const files = controller.configFiles.map((file) => `-f ${file}`).join(" ");
+    // The operator's own binary where one is configured. Keelarr runs `docker`
+    // from inside its container, where it is on the path; the host it is typed
+    // on may be a NAS where it is not, and a safety net that does not run is
+    // worse than none.
+    const docker = settings.dockerBin || "docker";
+    const directory = controller.workingDir || ".";
 
-    return `KEELARR_VERSION=${normalizeVersion(this.appVersion)} docker compose -p ${controller.projectName} ${files} --env-file ${controller.workingDir || "."}/.env up -d ${controller.serviceName || "keelarr"}`;
+    return `cd ${directory} && KEELARR_VERSION=${normalizeVersion(this.appVersion)} ${docker} compose -p ${controller.projectName} ${files} --env-file ${directory}/.env up -d ${controller.serviceName || "keelarr"}`;
   }
 
   /** The absolute paths this update touches, resolved from the container's own mounts. */

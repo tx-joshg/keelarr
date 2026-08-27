@@ -425,3 +425,22 @@ test("an outcome that has been seen is not re-derived on every later start", asy
   assert.equal(await service.reconcile(), null);
   assert.deepEqual(calls, [], "a settled receipt must not reinterpret a later manual version change");
 });
+
+test("the recovery command names a directory and the configured docker binary", async (t) => {
+  // Printed for someone to run on the host, where Keelarr's own `docker` may
+  // not be on the path — this NAS is exactly that case. A safety net that does
+  // not run is worse than none.
+  const { service } = await createUpdater(t);
+  const command = service.buildRecoveryCommand(
+    { ...CONTROLLER, workingDir: "/deploy", configFiles: ["/deploy/a.yml", "/deploy/b.yml"] },
+    { dockerBin: "/share/CACHEDEV1_DATA/.qpkg/container-station/bin/docker" }
+  );
+
+  assert.match(command, /^cd \/deploy && /);
+  assert.match(command, /KEELARR_VERSION=0\.1\.1 /);
+  assert.match(command, /container-station\/bin\/docker compose -p keelarr/);
+  assert.match(command, /-f \/deploy\/a\.yml -f \/deploy\/b\.yml/);
+  assert.match(command, /--env-file \/deploy\/\.env up -d keelarr$/);
+  // No binary configured is still a usable command, just PATH-dependent.
+  assert.match(service.buildRecoveryCommand(CONTROLLER, {}), / docker compose /);
+});

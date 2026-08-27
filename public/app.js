@@ -2053,7 +2053,7 @@ function renderControllerUpdateModal() {
           While the new container starts, this page has nothing to talk to. It will look frozen for a few seconds.
           Leave the tab open and it reconnects on its own and says what happened.
         </div>
-        ${renderRecoveryBlock(dialog.recoveryCommand, "If it does not come back, this is what puts it back on the version you are running now. Worth copying somewhere outside this page before you start — if Keelarr does not come back, neither does this page.")}
+        ${renderRecoveryBlock(dialog.recoveryCommand, "If it does not come back, this puts it back on the version you are running now. Run it on the host, wherever docker is available. Worth copying somewhere outside this page before you start — if Keelarr does not come back, neither does this page.")}
         <div class="path-picker-actions">
           <button type="button" class="button-default" data-controller-action="close">Cancel</button>
           <button type="button" class="button-success" data-controller-action="start" ${dialog.submitting ? "disabled" : ""}>
