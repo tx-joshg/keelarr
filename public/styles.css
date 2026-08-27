@@ -1365,6 +1365,26 @@ table {
   opacity: 0.7;
 }
 
+.recovery-block {
+  margin-top: 10px;
+}
+
+.recovery-lead {
+  margin-bottom: 4px;
+}
+
+.recovery-command {
+  display: block;
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
 .job-banner-action {
   margin-left: auto;
   flex: none;
