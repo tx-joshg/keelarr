@@ -63,10 +63,19 @@ const ui = {
   // Latest cutover/revert job snapshot, polled while it runs.
   job: null,
   jobTimer: null,
+  // Set while polling cannot reach the controller. Held separately from the
+  // job so a lost connection annotates the panel rather than replacing it:
+  // the job is still running on the host whether or not this page can see it.
+  jobStale: null,
+  jobStaleFatal: false,
   authPassword: "",
   authConfirm: "",
   authError: null,
-  authBusy: false
+  authBusy: false,
+  // Why the very first load could not reach the controller. Distinct from a
+  // toast: at this point there is no dashboard to lay a toast over, so the
+  // failure has to be the page.
+  bootstrapError: null
 };
 
 const appNode = document.querySelector("#app");
@@ -1817,6 +1826,12 @@ function renderPathPicker() {
  * a new job kind that reaches only one of them silently reports itself as a
  * cutover.
  */
+// Polling survives a short outage rather than treating one failed request as
+// proof the job is gone. Five attempts at two seconds covers a controller
+// restart without leaving a dead loop claiming to still be trying.
+const JOB_POLL_RETRY_MS = 2000;
+const JOB_POLL_MAX_FAILURES = 5;
+
 const JOB_KIND_LABELS = {
   remove: "Removal",
   rollback: "Rollback",
@@ -1889,6 +1904,29 @@ function jobOutcomeBanner(job) {
   `;
 }
 
+/**
+ * Says whether this page can still see the job, which is a different question
+ * from how the job is going. Once retries are exhausted the wording has to stop
+ * claiming to be trying, because nothing is.
+ */
+function renderJobStaleBanner() {
+  if (!ui.jobStale) {
+    return "";
+  }
+
+  if (!ui.jobStaleFatal) {
+    return `<div class="job-banner job-banner-warn"><i class="fa-solid fa-plug-circle-exclamation"></i><span>${escapeHtml(ui.jobStale)}</span></div>`;
+  }
+
+  return `
+    <div class="job-banner job-banner-danger">
+      <i class="fa-solid fa-plug-circle-xmark"></i>
+      <span>Could not reconnect to Keelarr. The job may still be running on the host.</span>
+      <button type="button" class="job-banner-action" data-job-action="retry">Retry</button>
+    </div>
+  `;
+}
+
 function renderJobPanel() {
   const job = ui.job;
 
@@ -1931,6 +1969,7 @@ function renderJobPanel() {
           : ""}
       </div>
       ${jobOutcomeBanner(job)}
+      ${renderJobStaleBanner()}
       <ol class="job-steps">${steps}</ol>
     </div>
   `;
@@ -2108,6 +2147,29 @@ function renderAuthGate() {
   appNode.querySelector('input[name="authPassword"]')?.focus();
 }
 
+/**
+ * The first screen, before there is a dashboard to render.
+ *
+ * A controller that cannot be reached used to leave this on "Loading..."
+ * forever: render() returns here before any toast is painted, so the error was
+ * raised into a page that could not show it, with nothing to retry and no way
+ * back once the controller returned.
+ */
+function renderBootstrapState() {
+  if (!ui.bootstrapError) {
+    return "Loading...";
+  }
+
+  return `
+    <div class="result-panel result-panel-danger">
+      <div class="result-panel-title">Cannot reach Keelarr.</div>
+      <div class="result-panel-copy">${escapeHtml(ui.bootstrapError)}</div>
+      <div class="result-panel-copy">The page loaded, but Keelarr is not answering. If it was just restarted, give it a moment.</div>
+      <button type="button" class="button-default" data-bootstrap-action="retry">Try again</button>
+    </div>
+  `;
+}
+
 function render() {
   if (state.auth && state.auth.required && !state.auth.authenticated) {
     renderAuthGate();
@@ -2115,7 +2177,7 @@ function render() {
   }
 
   if (!state.settings) {
-    appNode.innerHTML = '<div class="app-shell"><div class="page-content">Loading...</div></div>';
+    appNode.innerHTML = `<div class="app-shell"><div class="page-content">${renderBootstrapState()}</div></div>`;
     return;
   }
 
@@ -2266,8 +2328,23 @@ function settingsPayload(options = {}) {
 }
 
 async function loadAuth() {
-  const response = await fetch("/api/auth/status");
-  const data = await response.json();
+  const response = await fetch("/api/auth/status", { cache: "no-store" });
+
+  // Parsing first and asking questions later turned "the app is not answering"
+  // into a JSON syntax error about a DOCTYPE — true, and no help at all to
+  // someone whose controller is down behind a proxy that still serves this page.
+  if (!response.ok) {
+    throw new Error(`Keelarr answered ${response.status}.`);
+  }
+
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("The reply was not JSON. Something other than Keelarr may be answering on this address.");
+  }
+
   state.auth = data;
   return data;
 }
@@ -2324,7 +2401,15 @@ async function signOut() {
 }
 
 async function loadState() {
-  const data = await request("/api/state");
+  applyState(await request("/api/state"));
+}
+
+/**
+ * Adopts a /api/state payload. Split from loadState so a caller that already
+ * holds one — having fetched it to find out whether the controller is back —
+ * can use it instead of asking again.
+ */
+function applyState(data) {
   state.configured = data.configured === true;
   state.catalog = data.catalog;
   state.settings = data.settings;
@@ -3094,18 +3179,35 @@ async function reattachJob() {
  * Polls a running job until it reaches a terminal state, then refreshes the
  * dashboard so managed state and the revert button reflect the outcome.
  */
-async function pollJob(jobId) {
+async function pollJob(jobId, failures = 0) {
   stopJobPolling();
 
   let data;
   try {
     data = await request(`/api/jobs/${jobId}`);
   } catch (error) {
-    ui.job = null;
+    // A job runs on the host, not in this page. Discarding the panel on the
+    // first failed poll threw away the only view of an operation that was
+    // still going, and stopped polling for good — so a moment of network
+    // trouble looked exactly like a failed cutover.
+    if (failures + 1 >= JOB_POLL_MAX_FAILURES) {
+      ui.jobStale = error.message || "No response.";
+      ui.jobStaleFatal = true;
+      render();
+      return;
+    }
+
+    ui.jobStale = "Lost contact with Keelarr. Still trying.";
+    ui.jobStaleFatal = false;
     render();
-    throw error;
+    ui.jobTimer = setTimeout(() => {
+      pollJob(jobId, failures + 1).catch(showError);
+    }, JOB_POLL_RETRY_MS);
+    return;
   }
 
+  ui.jobStale = null;
+  ui.jobStaleFatal = false;
   ui.job = data.job;
   render();
 
@@ -3528,14 +3630,33 @@ appNode.addEventListener("click", (event) => {
     return;
   }
 
+  const bootstrapTarget = event.target.closest("[data-bootstrap-action]");
+  if (bootstrapTarget) {
+    startSession().catch(showError);
+    return;
+  }
+
   const jobTarget = event.target.closest("[data-job-action]");
   if (jobTarget) {
+    if (jobTarget.dataset.jobAction === "retry") {
+      const jobId = ui.job?.id;
+      ui.jobStale = null;
+      ui.jobStaleFatal = false;
+      render();
+      if (jobId) {
+        pollJob(jobId).catch(showError);
+      }
+      return;
+    }
+
     stopJobPolling();
     if (ui.job) {
       // Remember the dismissal so a refresh does not resurrect the panel.
       rememberDismissedJob(ui.job.id);
     }
     ui.job = null;
+    ui.jobStale = null;
+    ui.jobStaleFatal = false;
     render();
     return;
   }
@@ -3823,8 +3944,17 @@ appNode.addEventListener("keydown", (event) => {
   }
 });
 
-loadAuth()
-  .then(async (auth) => {
+/**
+ * Opens a session and loads the dashboard, recording why it could not rather
+ * than raising into a page with nowhere to put the message. Safe to call again
+ * from the retry button.
+ */
+async function startSession() {
+  ui.bootstrapError = null;
+
+  try {
+    const auth = await loadAuth();
+
     if (auth.required && !auth.authenticated) {
       render();
       return;
@@ -3833,5 +3963,10 @@ loadAuth()
     await loadState();
     // A failed reattach must not block the dashboard from rendering.
     await reattachJob().catch((error) => console.warn("Job reattach failed.", error));
-  })
-  .catch(showError);
+  } catch (error) {
+    ui.bootstrapError = error.message || "No response.";
+    render();
+  }
+}
+
+startSession();
