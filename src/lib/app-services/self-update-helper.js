@@ -24,6 +24,26 @@ log() {
   echo "$*"
 }
 
+# Compose gives the shell environment precedence over --env-file, and this
+# helper runs the Keelarr image, whose Dockerfile exports KEELARR_PORT and
+# KEELARR_DATA_DIR. Left alone they win over the operator's file, and the
+# controller is recreated binding the *container* path /app/data as a host
+# path — which Docker creates, empty, on a Linux host. Keelarr comes back with
+# no settings and nothing says why.
+#
+# Every key the env file defines is cleared here, so that file is the only
+# thing deciding, whatever the image happens to export now or later.
+clear_env_file_keys() {
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;
+    esac
+    key=\${line%%=*}
+    key=$(printf '%s' "$key" | tr -d '[:space:]')
+    [ -n "$key" ] && unset "$key" 2>/dev/null
+  done < "$1"
+}
+
 compose_up() {
   # shellcheck disable=SC2086
   docker compose -p "$SU_PROJECT" $SU_FILE_ARGS --env-file "$SU_ENV_FILE" \\
@@ -54,11 +74,13 @@ wait_ack() {
 # Long enough for the controller to finish answering this request and for the
 # handoff to be flushed to disk before anything is stopped.
 sleep "\${SU_SETTLE:-5}"
+clear_env_file_keys "$SU_ENV_FILE"
 log "recreating $SU_CONTAINER on $SU_TARGET_IMAGE_ID"
 
 if ! compose_up; then
   log "compose up failed on the target version"
   cp -f "$SU_ENV_BACKUP" "$SU_ENV_FILE" 2>/dev/null || log "could not restore the env file"
+  clear_env_file_keys "$SU_ENV_FILE"
   KEELARR_VERSION="$SU_ROLLBACK_VERSION" compose_up || { log "rollback failed to start"; exit 1; }
   wait_ack "$SU_ACK_ROLLBACK" && { log "rolled back and acknowledged"; exit 10; }
   log "rolled back, no acknowledgement"
@@ -83,6 +105,7 @@ log "no acknowledgement on the target version; rolling back"
 # The original bytes, not a rewritten pin: leaving KEELARR_VERSION on an
 # internal rollback tag would be carried across every future settings save.
 cp -f "$SU_ENV_BACKUP" "$SU_ENV_FILE" 2>/dev/null || log "could not restore the env file"
+clear_env_file_keys "$SU_ENV_FILE"
 KEELARR_VERSION="$SU_ROLLBACK_VERSION" compose_up || { log "rollback failed to start"; exit 1; }
 
 if wait_ack "$SU_ACK_ROLLBACK"; then

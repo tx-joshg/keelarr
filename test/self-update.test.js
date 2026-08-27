@@ -444,3 +444,20 @@ test("the recovery command names a directory and the configured docker binary", 
   // No binary configured is still a usable command, just PATH-dependent.
   assert.match(service.buildRecoveryCommand(CONTROLLER, {}), / docker compose /);
 });
+
+test("the updater clears the env file's own keys before running compose", async () => {
+  // Compose gives the shell environment precedence over --env-file, and the
+  // updater runs the Keelarr image, whose Dockerfile exports KEELARR_PORT and
+  // KEELARR_DATA_DIR. Left set, they beat the operator's file and the
+  // controller is recreated binding the container path /app/data as a host
+  // path — which Docker creates, empty, on Linux. Verified live: Docker Desktop
+  // refuses it outright, a Linux host would not.
+  const { HELPER_SCRIPT } = await import("../src/lib/app-services/self-update-helper.js");
+
+  assert.match(HELPER_SCRIPT, /clear_env_file_keys\(\)/);
+  // Cleared before the first recreate, and again after the rollback restores
+  // the file, because restoring reintroduces the keys.
+  const calls = HELPER_SCRIPT.match(/^\s*clear_env_file_keys "\$SU_ENV_FILE"/gm) || [];
+  assert.equal(calls.length, 3, "cleared before the update and on both rollback paths");
+  assert.ok(HELPER_SCRIPT.indexOf("clear_env_file_keys \"$SU_ENV_FILE\"") < HELPER_SCRIPT.indexOf("if ! compose_up"));
+});
