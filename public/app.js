@@ -78,8 +78,23 @@ const ui = {
   bootstrapError: null,
   // Set while the release check is in flight, so the footer can say so without
   // taking over the screen the way runBusy would.
-  controllerCheckBusy: false
+  controllerCheckBusy: false,
+  // The update dialog, and the watch that outlives the backend it started.
+  controllerUpdate: null,
+  controllerUpdateTimer: null
 };
+
+const CONTROLLER_UPDATE_KEY = "keelarr.controllerUpdate";
+// A record older than this is a laptop that was closed mid-update, not an
+// update still in progress.
+const CONTROLLER_UPDATE_STALE_MS = 60 * 60 * 1000;
+// Shallow and bounded on purpose. A doubling backoff that reaches a minute
+// means a controller back at second twelve is reported at second sixty.
+const CONTROLLER_PROBE_STEPS = [[30_000, 2000], [120_000, 4000], [Infinity, 8000]];
+// The old container answers normally while the new image is still being pulled,
+// so a same-version answer is not proof that nothing happened until it has kept
+// saying so for a while after first contact.
+const SAME_VERSION_GRACE_MS = 45_000;
 
 const appNode = document.querySelector("#app");
 const directoryBrowseFields = new Set([
@@ -1836,6 +1851,7 @@ const JOB_POLL_RETRY_MS = 2000;
 const JOB_POLL_MAX_FAILURES = 5;
 
 const JOB_KIND_LABELS = {
+  "controller-update": "Keelarr Update",
   remove: "Removal",
   rollback: "Rollback",
   "upgrade-all": "Upgrade All",
@@ -1912,6 +1928,143 @@ function jobOutcomeBanner(job) {
  * from how the job is going. Once retries are exhausted the wording has to stop
  * claiming to be trying, because nothing is.
  */
+function renderRecoveryBlock(command, lead) {
+  if (!command) {
+    return "";
+  }
+
+  return `
+    <div class="recovery-block">
+      <div class="recovery-lead">${escapeHtml(lead)}</div>
+      <code class="recovery-command">${escapeHtml(command)}</code>
+    </div>
+  `;
+}
+
+/**
+ * The update's own progress. Deliberately not the job panel: the job's reporter
+ * is the process being replaced, so it cannot describe its own outcome, and
+ * routing it there would leave a panel stuck at "running" for ever.
+ */
+function renderControllerUpdateBanner() {
+  const watch = ui.controllerUpdate;
+
+  if (!watch || watch.phase === "confirming") {
+    return "";
+  }
+
+  const waited = watch.startedAt ? Math.round((Date.now() - watch.startedAt) / 1000) : 0;
+  const dismiss = '<button type="button" class="job-banner-action" data-controller-action="dismiss">Dismiss</button>';
+
+  if (watch.phase === "preparing") {
+    return `<div class="job-banner job-banner-info"><i class="fa-solid fa-spinner fa-spin"></i><span><strong>Updating Keelarr</strong> — downloading ${escapeHtml(watch.toVersion || "")}. Nothing has been replaced yet.</span></div>`;
+  }
+
+  if (watch.phase === "handed-off" || watch.phase === "waiting") {
+    const slow = waited > 45
+      ? renderRecoveryBlock(watch.recoveryCommand, "Taking longer than usual. This puts it back on the version you were running:")
+      : "";
+
+    return `
+      <div class="job-banner job-banner-info">
+        <i class="fa-solid fa-spinner fa-spin"></i>
+        <span>
+          <strong>Keelarr is restarting on ${escapeHtml(watch.toVersion || "")}.</strong>
+          This page has nothing to talk to until it comes back, which is expected rather than a failure.
+          Leave the tab open and it reconnects on its own. Waited ${escapeHtml(String(waited))}s.
+          ${slow}
+        </span>
+      </div>
+    `;
+  }
+
+  if (watch.phase === "done") {
+    return `<div class="job-banner job-banner-good"><i class="fa-solid fa-circle-check"></i><span><strong>Keelarr restarted on ${escapeHtml(watch.toVersion || "")}.</strong> It was on ${escapeHtml(watch.fromVersion || "")}.</span>${dismiss}</div>`;
+  }
+
+  if (watch.phase === "rolled-back") {
+    return `<div class="job-banner job-banner-warn"><i class="fa-solid fa-rotate-left"></i><span><strong>The update did not take, and Keelarr was put back on ${escapeHtml(watch.fromVersion || "")}.</strong> ${escapeHtml(watch.detail || "")}</span>${dismiss}</div>`;
+  }
+
+  if (watch.phase === "mismatch" || watch.phase === "failed") {
+    return `<div class="job-banner job-banner-warn"><i class="fa-solid fa-triangle-exclamation"></i><span>${escapeHtml(watch.detail || "The update did not finish as expected.")}</span>${dismiss}</div>`;
+  }
+
+  return `
+    <div class="job-banner job-banner-danger">
+      <i class="fa-solid fa-plug-circle-xmark"></i>
+      <span>
+        <strong>Keelarr has not answered for ${escapeHtml(String(Math.round(waited / 60)))} minutes.</strong>
+        It may still be starting, or the new version may not start at all. Nothing on this page can find out —
+        this page can only ask Keelarr, and Keelarr is what is missing.
+        ${renderRecoveryBlock(watch.recoveryCommand, "This puts it back on the version you were running:")}
+        ${renderRecoveryBlock("docker logs keelarr", "This says why the new one did not start:")}
+      </span>
+      <button type="button" class="job-banner-action" data-controller-action="retry-probe">Try again now</button>
+    </div>
+  `;
+}
+
+function renderControllerUpdateModal() {
+  const dialog = ui.controllerUpdate;
+
+  if (!dialog?.dialogOpen) {
+    return "";
+  }
+
+  if (dialog.readOnly) {
+    return `
+      <div class="modal-backdrop" data-modal-backdrop="controller-update">
+        <div class="path-picker-modal" role="dialog" aria-modal="true">
+          <div class="path-picker-header">
+            <div>
+              <div class="path-picker-title">Keelarr ${escapeHtml(dialog.toVersion || "")} is available</div>
+              <div class="path-picker-copy">${escapeHtml(dialog.fromVersion || "")} is running now</div>
+            </div>
+          </div>
+          <div class="muted-paragraph" style="margin:12px 0;">${escapeHtml(dialog.reason || "Keelarr will not replace its own container on this host.")}</div>
+          ${renderRecoveryBlock(dialog.recoveryCommand, "So this one is yours to run:")}
+          <div class="path-picker-actions">
+            <button type="button" class="button-default" data-controller-action="close">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="modal-backdrop" data-modal-backdrop="controller-update">
+      <div class="path-picker-modal" role="dialog" aria-modal="true">
+        <div class="path-picker-header">
+          <div>
+            <div class="path-picker-title">Update Keelarr to ${escapeHtml(dialog.toVersion || "")}</div>
+            <div class="path-picker-copy">${escapeHtml(dialog.fromVersion || "")} &rarr; ${escapeHtml(dialog.toVersion || "")}</div>
+          </div>
+          <button type="button" class="toast-dismiss" data-controller-action="close" aria-label="Cancel">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        ${dialog.error ? `<div class="result-list result-list-danger"><strong>Could not start</strong><ul><li>${escapeHtml(dialog.error)}</li></ul></div>` : ""}
+        <div class="muted-paragraph" style="margin:12px 0;">
+          Keelarr downloads ${escapeHtml(dialog.toVersion || "")} and then replaces its own container with it. Your settings,
+          activity, backups and the apps it manages are not touched — they live outside this container and keep running while it restarts.
+        </div>
+        <div class="muted-paragraph" style="margin:12px 0;">
+          While the new container starts, this page has nothing to talk to. It will look frozen for a few seconds.
+          Leave the tab open and it reconnects on its own and says what happened.
+        </div>
+        ${renderRecoveryBlock(dialog.recoveryCommand, "If it does not come back, this is what puts it back on the version you are running now. Worth copying somewhere outside this page before you start — if Keelarr does not come back, neither does this page.")}
+        <div class="path-picker-actions">
+          <button type="button" class="button-default" data-controller-action="close">Cancel</button>
+          <button type="button" class="button-success" data-controller-action="start" ${dialog.submitting ? "disabled" : ""}>
+            ${dialog.submitting ? "Starting..." : `Update to ${escapeHtml(dialog.toVersion || "")}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderJobStaleBanner() {
   if (!ui.jobStale) {
     return "";
@@ -2085,7 +2238,7 @@ function renderControllerVersion() {
   }
 
   if (update.updateStatus === "ready" && update.available) {
-    return `<span class="version-stale">${version}</span> &middot; <button type="button" class="footer-update-button" data-controller-action="check" title="Keelarr ${escapeHtml(update.targetVersion)} is published.">${escapeHtml(update.targetVersion)} available</button>`;
+    return `<span class="version-stale">${version}</span> &middot; <button type="button" class="footer-update-button" data-controller-action="open" title="Keelarr ${escapeHtml(update.targetVersion)} is published.">Update to ${escapeHtml(update.targetVersion)}</button>`;
   }
 
   if (update.updateStatus === "ready" && !update.available) {
@@ -2217,7 +2370,7 @@ function render() {
   }
 
   if (!state.settings) {
-    appNode.innerHTML = `<div class="app-shell"><div class="page-content">${renderBootstrapState()}</div></div>`;
+    appNode.innerHTML = `<div class="app-shell"><div class="page-content">${renderControllerUpdateBanner()}${renderBootstrapState()}</div></div>`;
     return;
   }
 
@@ -2261,7 +2414,8 @@ function render() {
         <div class="scroll-shell">
           <div class="page-content">
             ${renderWarningBanner()}
-            ${renderJobPanel()}
+            ${renderControllerUpdateBanner()}
+      ${renderJobPanel()}
             ${renderResultPanel()}
             ${renderCurrentView()}
           </div>
@@ -2273,6 +2427,7 @@ function render() {
         ${renderBusyBanner()}
         ${renderPathPicker()}
         ${renderCutoverModal()}
+  ${renderControllerUpdateModal()}
         ${renderRemovalModal()}
         ${renderWiringModal()}
       </div>
@@ -2445,6 +2600,239 @@ async function signOut() {
  * this deliberately does not take over the screen with runBusy the way an
  * install does.
  */
+function readControllerUpdateWatch() {
+  try {
+    const record = JSON.parse(window.localStorage.getItem(CONTROLLER_UPDATE_KEY) || "null");
+
+    // The code reading this record is served by the image the update installed,
+    // so a record it does not recognise has to be ignored rather than crash the
+    // bootstrap of a controller that just came up.
+    if (!record || record.v !== 1) {
+      return null;
+    }
+
+    if (Date.now() - record.startedAt > CONTROLLER_UPDATE_STALE_MS) {
+      forgetControllerUpdateWatch();
+      return null;
+    }
+
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+function rememberControllerUpdateWatch(record) {
+  try {
+    window.localStorage.setItem(CONTROLLER_UPDATE_KEY, JSON.stringify(record));
+  } catch {
+    // A private window still gets the banner; it just cannot survive a reload.
+  }
+}
+
+function forgetControllerUpdateWatch() {
+  try {
+    window.localStorage.removeItem(CONTROLLER_UPDATE_KEY);
+  } catch {
+    // Nothing to clean up.
+  }
+}
+
+function stopControllerWatch() {
+  if (ui.controllerUpdateTimer) {
+    clearTimeout(ui.controllerUpdateTimer);
+    ui.controllerUpdateTimer = null;
+  }
+}
+
+/**
+ * Asks whether the controller is back, without any of request()'s behaviour.
+ *
+ * request() parses before checking the status, so a proxy's HTML 502 arrives as
+ * a JSON syntax error rather than "not yet"; it throws on any non-200, turning
+ * an expected outage into a stream of exceptions; and its 401 branch would drop
+ * the page to the sign-in gate from inside a background timer.
+ */
+async function probeController() {
+  try {
+    const response = await fetch("/api/state", { cache: "no-store" });
+
+    if (response.status === 401) {
+      return { up: true, authed: false };
+    }
+
+    if (!response.ok) {
+      return { up: false };
+    }
+
+    return { up: true, authed: true, data: await response.json() };
+  } catch {
+    return { up: false };
+  }
+}
+
+function controllerProbeDelay(elapsed) {
+  return (CONTROLLER_PROBE_STEPS.find(([limit]) => elapsed < limit) || CONTROLLER_PROBE_STEPS.at(-1))[1];
+}
+
+async function watchControllerRestart() {
+  stopControllerWatch();
+
+  const watch = ui.controllerUpdate;
+
+  if (!watch || !["handed-off", "waiting"].includes(watch.phase)) {
+    return;
+  }
+
+  const elapsed = Date.now() - watch.startedAt;
+
+  if (elapsed > watch.deadlineMs) {
+    watch.phase = "timeout";
+    render();
+    return;
+  }
+
+  const probe = await probeController();
+
+  if (!probe.up) {
+    watch.attempts = (watch.attempts || 0) + 1;
+    render();
+    ui.controllerUpdateTimer = setTimeout(() => watchControllerRestart(), controllerProbeDelay(elapsed));
+    return;
+  }
+
+  if (!probe.authed) {
+    // Back, but the session did not survive. Verification resumes after sign-in.
+    state.auth = { ...(state.auth || {}), required: true, authenticated: false };
+    render();
+    return;
+  }
+
+  finishControllerUpdate(watch, probe.data);
+}
+
+/**
+ * Decides what actually happened, by version rather than by liveness.
+ *
+ * The old container answers perfectly well for the first seconds of the window,
+ * so treating any answer as success would report a victory on the version the
+ * update was trying to leave.
+ */
+function finishControllerUpdate(watch, data) {
+  const observed = data?.meta?.version || null;
+  const result = data?.meta?.selfUpdate?.lastResult || null;
+  const mine = result && result.operationId === watch.operationId ? result : null;
+
+  if (mine && mine.outcome === "rolled-back") {
+    watch.phase = "rolled-back";
+    watch.detail = mine.detail;
+    forgetControllerUpdateWatch();
+  } else if (observed && observed === watch.toVersion) {
+    watch.phase = "done";
+    forgetControllerUpdateWatch();
+  } else if (observed === watch.fromVersion) {
+    watch.firstContactAt = watch.firstContactAt || Date.now();
+
+    if (Date.now() - watch.firstContactAt < SAME_VERSION_GRACE_MS) {
+      applyState(data);
+      ui.controllerUpdateTimer = setTimeout(() => watchControllerRestart(), 2000);
+      return;
+    }
+
+    watch.phase = "failed";
+    watch.detail = `Keelarr answered again, but it is still on ${observed}. Nothing was replaced.`;
+    forgetControllerUpdateWatch();
+  } else {
+    watch.phase = "mismatch";
+    watch.detail = `Keelarr came back on ${observed || "an unknown version"}, not the ${watch.toVersion} this started for.`;
+    forgetControllerUpdateWatch();
+  }
+
+  stopControllerWatch();
+  applyState(data);
+}
+
+function openControllerUpdateDialog() {
+  const update = state.meta?.selfUpdate;
+
+  ui.controllerUpdate = {
+    dialogOpen: true,
+    readOnly: !update?.available,
+    submitting: false,
+    error: null,
+    phase: "confirming",
+    fromVersion: update?.currentVersion || appVersion(),
+    toVersion: update?.targetVersion || null,
+    reason: update?.reason || null,
+    recoveryCommand: update?.recoveryCommand || null
+  };
+  render();
+}
+
+function closeControllerUpdateDialog() {
+  if (ui.controllerUpdate?.phase === "confirming") {
+    ui.controllerUpdate = null;
+  } else if (ui.controllerUpdate) {
+    ui.controllerUpdate.dialogOpen = false;
+  }
+
+  render();
+}
+
+async function startControllerUpdate() {
+  const dialog = ui.controllerUpdate;
+
+  if (!dialog || dialog.submitting || dialog.readOnly) {
+    return;
+  }
+
+  dialog.submitting = true;
+  dialog.phase = "preparing";
+  render();
+
+  // Logged before anything is at risk: after the container goes, so does this
+  // page and everything printed on it.
+  if (dialog.recoveryCommand) {
+    console.info(`Keelarr update: if it does not come back, run\n${dialog.recoveryCommand}`);
+  }
+
+  try {
+    const data = await request("/api/self-update", {
+      method: "POST",
+      body: JSON.stringify({ version: dialog.toVersion })
+    });
+
+    dialog.dialogOpen = false;
+    dialog.jobId = data.job?.id || null;
+    dialog.operationId = data.job?.subject?.operationId || null;
+    dialog.startedAt = Date.now();
+    dialog.attempts = 0;
+    // Two verification windows plus the recreate, taken from what the backend
+    // said rather than a number guessed here.
+    dialog.deadlineMs = (data.job?.result?.deadlineMs) || 8 * 60 * 1000;
+    dialog.phase = "handed-off";
+
+    rememberControllerUpdateWatch({
+      v: 1,
+      operationId: dialog.operationId,
+      jobId: dialog.jobId,
+      fromVersion: dialog.fromVersion,
+      toVersion: dialog.toVersion,
+      startedAt: dialog.startedAt,
+      deadlineMs: dialog.deadlineMs,
+      recoveryCommand: dialog.recoveryCommand
+    });
+
+    render();
+    watchControllerRestart();
+  } catch (error) {
+    dialog.submitting = false;
+    dialog.phase = "confirming";
+    dialog.error = error.message;
+    render();
+  }
+}
+
 async function checkControllerUpdate() {
   if (ui.controllerCheckBusy) {
     return;
@@ -3215,6 +3603,13 @@ async function reattachJob() {
         return false;
       }
 
+      // The update banner owns this one. Reattaching it would open a second
+      // panel describing the same operation, whose reporter died with the
+      // container it was reporting on.
+      if (job.kind === "controller-update") {
+        return false;
+      }
+
       if (isJobLive(job)) {
         return true;
       }
@@ -3694,7 +4089,29 @@ appNode.addEventListener("click", (event) => {
 
   const controllerTarget = event.target.closest("[data-controller-action]");
   if (controllerTarget) {
-    checkControllerUpdate().catch(showError);
+    const action = controllerTarget.dataset.controllerAction;
+
+    if (action === "check") {
+      checkControllerUpdate().catch(showError);
+    } else if (action === "open") {
+      openControllerUpdateDialog();
+    } else if (action === "close") {
+      closeControllerUpdateDialog();
+    } else if (action === "start") {
+      startControllerUpdate().catch(showError);
+    } else if (action === "retry-probe") {
+      if (ui.controllerUpdate) {
+        ui.controllerUpdate.phase = "waiting";
+        render();
+        watchControllerRestart();
+      }
+    } else if (action === "dismiss") {
+      ui.controllerUpdate = null;
+      forgetControllerUpdateWatch();
+      request("/api/self-update/dismiss", { method: "POST" }).catch(() => {});
+      render();
+    }
+
     return;
   }
 
@@ -4017,6 +4434,22 @@ appNode.addEventListener("keydown", (event) => {
  * than raising into a page with nowhere to put the message. Safe to call again
  * from the retry button.
  */
+function bootstrap() {
+  const watch = readControllerUpdateWatch();
+
+  // Resumed before anything that can reject: this page may have been reloaded
+  // into the outage the update created, and the record is the only thing that
+  // knows an update is the reason nothing is answering.
+  if (watch) {
+    ui.controllerUpdate = { ...watch, phase: "waiting", dialogOpen: false, attempts: 0 };
+    render();
+    watchControllerRestart();
+    return;
+  }
+
+  startSession();
+}
+
 async function startSession() {
   ui.bootstrapError = null;
 
@@ -4037,4 +4470,4 @@ async function startSession() {
   }
 }
 
-startSession();
+bootstrap();

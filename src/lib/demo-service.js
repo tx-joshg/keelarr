@@ -500,6 +500,19 @@ export class DemoKeelarrAppService {
     return { ok: true, selfUpdate: this.describeDemoSelfUpdate() };
   }
 
+  async startSelfUpdate() {
+    // Refused with the reason rather than left unimplemented: an unhandled
+    // route reaches the operator as "is not a function", which reads like a
+    // fault in Keelarr rather than the point of the demo.
+    throw new KeelarrError("The demo has no container to replace, so there is nothing to update.", {
+      statusCode: 409
+    });
+  }
+
+  async dismissSelfUpdateNotice() {
+    return { ok: true };
+  }
+
   async detectHost(input = null) {
     const preferredAdapterId = input?.preferredAdapterId || input?.adapterType || null;
     const nextSettings = input
