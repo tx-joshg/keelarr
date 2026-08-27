@@ -1351,6 +1351,17 @@ table {
   background: var(--alert-warning-background);
 }
 
+.job-banner-action {
+  margin-left: auto;
+  flex: none;
+  border: 1px solid var(--danger-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
 .job-banner-danger {
   border-color: var(--danger-color);
   background: rgba(240, 80, 80, 0.1);
