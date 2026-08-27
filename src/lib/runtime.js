@@ -701,6 +701,114 @@ export async function upgradeService(settings, service, options = {}) {
   };
 }
 
+/** Pulls an image by reference, outside any compose project. */
+export async function pullImage(settings, imageRef, options = {}) {
+  return runCommand(settings.dockerBin, ["pull", imageRef], {
+    logger: options.logger,
+    idleTimeoutMs: options.idleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
+  });
+}
+
+/** The id a tag currently resolves to on this host, or null when absent. */
+export async function readImageId(settings, imageRef, options = {}) {
+  try {
+    const result = await runCommand(settings.dockerBin, ["image", "inspect", imageRef, "--format", "{{.Id}}"], {
+      logger: options.logger
+    });
+    return normalizeImageId(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** The image a running container is actually on, by container name. */
+export async function readContainerImageIdByName(settings, containerName, options = {}) {
+  try {
+    const result = await runCommand(settings.dockerBin, ["inspect", containerName, "--format", "{{.Image}}"], {
+      logger: options.logger
+    });
+    return normalizeImageId(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+/** Points a local tag at an image that already exists on this host. */
+export async function tagImage(settings, sourceRef, targetRef, options = {}) {
+  return runCommand(settings.dockerBin, ["tag", sourceRef, targetRef], { logger: options.logger });
+}
+
+/** The tail of a container's logs, for reporting what a helper did. */
+export async function readContainerLogs(settings, containerName, { tail = 40, logger = null } = {}) {
+  try {
+    const result = await runCommand(settings.dockerBin, ["logs", "--tail", String(tail), containerName], { logger });
+    return `${result.stdout}\n${result.stderr}`.trim();
+  } catch {
+    return "";
+  }
+}
+
+/** Status and exit code of a container, for deciding what a helper concluded. */
+export async function readContainerOutcome(settings, containerName, options = {}) {
+  try {
+    const result = await runCommand(
+      settings.dockerBin,
+      ["inspect", containerName, "--format", "{{.State.Status}}|{{.State.ExitCode}}"],
+      { logger: options.logger }
+    );
+    const [status, exitCode] = String(result.stdout || "").trim().split("|");
+    return { exists: true, status: status || null, exitCode: Number.parseInt(exitCode, 10) };
+  } catch {
+    return { exists: false, status: null, exitCode: null };
+  }
+}
+
+/**
+ * Starts a container and returns without waiting for it.
+ *
+ * Every other helper here runs `--rm` in the foreground, which is right when
+ * the caller outlives the work. The controller replacing its own container is
+ * the one case where it does not: the process issuing the recreate is the one
+ * being recreated, so the work has to be given to something that survives it.
+ */
+export async function runDetachedContainer(settings, spec, options = {}) {
+  const args = ["run", "-d", "--name", spec.name];
+
+  if (spec.network) {
+    args.push("--network", spec.network);
+  }
+
+  for (const [key, value] of Object.entries(spec.labels || {})) {
+    args.push("--label", `${key}=${value}`);
+  }
+
+  for (const mount of spec.mounts || []) {
+    args.push("-v", `${mount.source}:${mount.target}${mount.readOnly ? ":ro" : ""}`);
+  }
+
+  if (spec.workingDir) {
+    args.push("-w", spec.workingDir);
+  }
+
+  // Values go in as environment rather than interpolated into the script, so a
+  // path containing a quote cannot rewrite what the helper runs.
+  for (const [key, value] of Object.entries(spec.environment || {})) {
+    args.push("-e", `${key}=${value}`);
+  }
+
+  if (spec.entrypoint) {
+    args.push("--entrypoint", spec.entrypoint);
+  }
+
+  args.push(spec.image);
+
+  for (const argument of spec.command || []) {
+    args.push(argument);
+  }
+
+  return runCommand(settings.dockerBin, args, { logger: options.logger });
+}
+
 export async function checkForUpdates(settings, service, options = {}) {
   // Checking is itself a pull, so it inherits the same reasoning: a slow
   // download is not a failed one.

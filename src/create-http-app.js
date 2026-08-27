@@ -445,6 +445,22 @@ export function createHttpApp({
     }
   });
 
+  app.post("/api/self-update", async (request, response, next) => {
+    try {
+      response.status(202).json(await keelarrApp.startSelfUpdate(request.body || {}, requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/self-update/dismiss", async (request, response, next) => {
+    try {
+      response.json(await keelarrApp.dismissSelfUpdateNotice(requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/services/check-all", async (request, response, next) => {
     try {
       response.json(await keelarrApp.checkAllUpdates(requestContext(request)));

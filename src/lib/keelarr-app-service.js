@@ -1,5 +1,6 @@
 import { CutoverService } from "./app-services/cutover-service.js";
 import { SelfUpdateService } from "./app-services/self-update-service.js";
+import { MutationLease } from "./mutation-lease.js";
 import { DashboardService } from "./app-services/dashboard-service.js";
 import { HostProfileService } from "./app-services/host-profile-service.js";
 import { ImportService } from "./app-services/import-service.js";
@@ -47,9 +48,14 @@ export class KeelarrAppService {
     this.managedStackService.jobs = this.cutoverService.jobs;
     this.removalService.jobs = this.cutoverService.jobs;
     this.wiringService.jobs = this.cutoverService.jobs;
+    // One claim shared by everything that mutates the stack, so a cutover
+    // cannot start in the gap between checking that an update is safe and the
+    // controller being replaced.
+    this.mutationLease = new MutationLease();
     this.selfUpdateService = new SelfUpdateService({
       hostProfileService: this.hostProfileService,
       jobs: this.cutoverService.jobs,
+      lease: this.mutationLease,
       logger
     });
     this.dashboardService.managedStackService = this.managedStackService;
@@ -62,6 +68,10 @@ export class KeelarrAppService {
    */
   async initialize() {
     await this.cutoverService.jobs.hydrate();
+    // Before the network attach, which has taken minutes on a NAS: someone who
+    // just watched Keelarr restart is owed the answer promptly, and a failure
+    // here must not skip the attach.
+    await this.selfUpdateService.reconcile().catch(() => {});
     // Re-derived on every start, because the controller's network attachments
     // live on the container rather than in a Compose file and are lost whenever
     // it is recreated.
@@ -82,6 +92,14 @@ export class KeelarrAppService {
 
   async checkSelfUpdate(context = {}) {
     return { ok: true, selfUpdate: await this.selfUpdateService.checkSelfUpdate(context) };
+  }
+
+  async startSelfUpdate(input = {}, context = {}) {
+    return { ok: true, job: buildJobSnapshot(this.selfUpdateService.startSelfUpdate(input, context)) };
+  }
+
+  async dismissSelfUpdateNotice() {
+    return this.selfUpdateService.dismissNotice();
   }
 
   async loadSettings() {
@@ -179,6 +197,9 @@ export class KeelarrAppService {
    * connection that started it.
    */
   async startCutover(containerId, input = {}, context = {}) {
+    // Refused while the controller is replacing itself: it is about to stop
+    // the process running this, which would leave it half-finished.
+    this.mutationLease.assertAvailable("A cutover");
     return {
       ok: true,
       job: buildJobSnapshot(this.cutoverService.startCutover(containerId, input, context))
@@ -217,6 +238,9 @@ export class KeelarrAppService {
    * that is not something an install request should block on.
    */
   async installManagedService(serviceId, context = {}) {
+    // Refused while the controller is replacing itself: it is about to stop
+    // the process running this, which would leave it half-finished.
+    this.mutationLease.assertAvailable("Installing an app");
     const result = await this.managedStackService.installManagedService(serviceId, context);
 
     return {
@@ -254,6 +278,9 @@ export class KeelarrAppService {
   }
 
   async upgradeManagedService(serviceId, context = {}) {
+    // Refused while the controller is replacing itself: it is about to stop
+    // the process running this, which would leave it half-finished.
+    this.mutationLease.assertAvailable("Upgrading an app");
     return this.managedStackService.upgradeManagedService(serviceId, context);
   }
 
@@ -273,6 +300,9 @@ export class KeelarrAppService {
   }
 
   async startRemoval(serviceId, input = {}, context = {}) {
+    // Refused while the controller is replacing itself: it is about to stop
+    // the process running this, which would leave it half-finished.
+    this.mutationLease.assertAvailable("Removing an app");
     return {
       ok: true,
       job: buildJobSnapshot(this.removalService.startRemoval(serviceId, input, context))
@@ -280,6 +310,9 @@ export class KeelarrAppService {
   }
 
   async startRollback(serviceId, input = {}, context = {}) {
+    // Refused while the controller is replacing itself: it is about to stop
+    // the process running this, which would leave it half-finished.
+    this.mutationLease.assertAvailable("A rollback");
     return {
       ok: true,
       job: buildJobSnapshot(this.managedStackService.startRollback(serviceId, input, context))
@@ -291,6 +324,9 @@ export class KeelarrAppService {
   }
 
   async upgradeAll(input = {}, context = {}) {
+    // Refused while the controller is replacing itself: it is about to stop
+    // the process running this, which would leave it half-finished.
+    this.mutationLease.assertAvailable("Upgrading every app");
     const started = await this.managedStackService.startUpgradeAll(input, context).create();
 
     // Nothing to upgrade means no job was created, so there is no progress to
