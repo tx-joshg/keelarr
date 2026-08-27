@@ -75,7 +75,10 @@ const ui = {
   // Why the very first load could not reach the controller. Distinct from a
   // toast: at this point there is no dashboard to lay a toast over, so the
   // failure has to be the page.
-  bootstrapError: null
+  bootstrapError: null,
+  // Set while the release check is in flight, so the footer can say so without
+  // taking over the screen the way runBusy would.
+  controllerCheckBusy: false
 };
 
 const appNode = document.querySelector("#app");
@@ -2063,6 +2066,43 @@ function renderCutoverModal() {
   `;
 }
 
+/**
+ * Keelarr's own version currency, in the same language the stack table uses for
+ * every other app: the version string is coloured, and the reason it cannot be
+ * updated is printed as found rather than mapped to a second copy of the
+ * sentence here.
+ */
+function renderControllerVersion() {
+  const update = state.meta?.selfUpdate || null;
+  const version = `${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())}`;
+
+  if (!update) {
+    return version;
+  }
+
+  if (ui.controllerCheckBusy) {
+    return `${version} &middot; <span class="footer-update-note"><i class="fa-solid fa-spinner fa-spin"></i> checking</span>`;
+  }
+
+  if (update.updateStatus === "ready" && update.available) {
+    return `<span class="version-stale">${version}</span> &middot; <button type="button" class="footer-update-button" data-controller-action="check" title="Keelarr ${escapeHtml(update.targetVersion)} is published.">${escapeHtml(update.targetVersion)} available</button>`;
+  }
+
+  if (update.updateStatus === "ready" && !update.available) {
+    // A newer release exists but this host cannot take it. Saying only "update
+    // available" would offer something that is not on offer.
+    return `<span class="version-stale">${version}</span> &middot; <span class="footer-update-note" title="${escapeHtml(update.reason || "")}">${escapeHtml(update.targetVersion)} available, not from here</span>`;
+  }
+
+  if (update.updateStatus === "current") {
+    return `<span class="version-current">${version}</span> &middot; <span class="footer-update-note">up to date</span>`;
+  }
+
+  const note = update.checkError ? `check failed: ${update.checkError}` : "update status unknown";
+
+  return `<span class="version-unknown">${version}</span> &middot; <button type="button" class="footer-update-button" data-controller-action="check" title="${escapeHtml(note)}">Check for an update</button>`;
+}
+
 function renderFooter() {
   const services = selectedServices();
   const running = services.filter((service) => isServiceRunning(service)).length;
@@ -2071,7 +2111,7 @@ function renderFooter() {
   return `
     <span>${escapeHtml(String(services.length))} apps &middot; ${escapeHtml(String(running))} running &middot; ${escapeHtml(warnings)} &middot; PUID ${escapeHtml(state.settings?.puid || "911")} / PGID ${escapeHtml(state.settings?.pgid || "911")}</span>
     <span>
-      ${escapeHtml(appDisplayName())} ${escapeHtml(appVersion())} &middot; compose-native ARR control plane${SUPPORT_URL
+      ${renderControllerVersion()} &middot; compose-native ARR control plane${SUPPORT_URL
         ? ` &middot; <a class="footer-support" href="${escapeHtml(SUPPORT_URL)}" target="_blank" rel="noopener noreferrer">Support Keelarr</a>`
         : ""}
     </span>
@@ -2398,6 +2438,28 @@ async function signOut() {
   ui.authConfirm = "";
   ui.authError = null;
   render();
+}
+
+/**
+ * Asks the controller to look for a newer release. Nothing is downloaded, so
+ * this deliberately does not take over the screen with runBusy the way an
+ * install does.
+ */
+async function checkControllerUpdate() {
+  if (ui.controllerCheckBusy) {
+    return;
+  }
+
+  ui.controllerCheckBusy = true;
+  render();
+
+  try {
+    await request("/api/self-update/check", { method: "POST" });
+    await loadState();
+  } finally {
+    ui.controllerCheckBusy = false;
+    render();
+  }
 }
 
 async function loadState() {
@@ -3627,6 +3689,12 @@ appNode.addEventListener("click", (event) => {
   const cutoverActionTarget = event.target.closest("[data-cutover-action]");
   if (cutoverActionTarget) {
     submitCutoverDialog().catch(showError);
+    return;
+  }
+
+  const controllerTarget = event.target.closest("[data-controller-action]");
+  if (controllerTarget) {
+    checkControllerUpdate().catch(showError);
     return;
   }
 

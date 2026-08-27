@@ -1,4 +1,5 @@
 import { CutoverService } from "./app-services/cutover-service.js";
+import { SelfUpdateService } from "./app-services/self-update-service.js";
 import { DashboardService } from "./app-services/dashboard-service.js";
 import { HostProfileService } from "./app-services/host-profile-service.js";
 import { ImportService } from "./app-services/import-service.js";
@@ -46,7 +47,13 @@ export class KeelarrAppService {
     this.managedStackService.jobs = this.cutoverService.jobs;
     this.removalService.jobs = this.cutoverService.jobs;
     this.wiringService.jobs = this.cutoverService.jobs;
+    this.selfUpdateService = new SelfUpdateService({
+      hostProfileService: this.hostProfileService,
+      jobs: this.cutoverService.jobs,
+      logger
+    });
     this.dashboardService.managedStackService = this.managedStackService;
+    this.dashboardService.selfUpdateService = this.selfUpdateService;
   }
 
   /**
@@ -67,6 +74,14 @@ export class KeelarrAppService {
 
   async shutdown() {
     this.stopUpdateSchedule?.();
+  }
+
+  async describeSelfUpdate(context = {}) {
+    return { ok: true, selfUpdate: await this.selfUpdateService.describeSelfUpdate(context) };
+  }
+
+  async checkSelfUpdate(context = {}) {
+    return { ok: true, selfUpdate: await this.selfUpdateService.checkSelfUpdate(context) };
   }
 
   async loadSettings() {

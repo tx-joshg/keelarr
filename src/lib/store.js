@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import {
   activityPath,
   authPath,
+  controllerUpdatePath,
   dataDir,
   jobsPath,
   settingsPath,
@@ -208,6 +209,15 @@ export async function appendActivity(entry) {
 
   await writeJson(activityPath, next);
   return next;
+}
+
+export async function readControllerUpdateState() {
+  return readJson(controllerUpdatePath, {});
+}
+
+export async function writeControllerUpdateState(nextState) {
+  await writeJson(controllerUpdatePath, nextState);
+  return nextState;
 }
 
 export async function readUpdateState() {

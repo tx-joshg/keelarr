@@ -1351,6 +1351,20 @@ table {
   background: var(--alert-warning-background);
 }
 
+.footer-update-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--link-color);
+  font: inherit;
+  text-decoration: underline;
+}
+
+.footer-update-note {
+  color: var(--text-color);
+  opacity: 0.7;
+}
+
 .job-banner-action {
   margin-left: auto;
   flex: none;
