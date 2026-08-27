@@ -154,10 +154,49 @@ export function deriveReachable(inventoryItem, probe) {
  * the app answers inside it, and nothing on the host can reach it — including
  * the link Keelarr shows, which then belongs to whichever service did get the
  * port. Keelarr already has this in the inventory; it just never said so.
+ *
+ * "Declares" is the load-bearing word, and reading it as "every port with no
+ * host binding" produced a warning that was confidently wrong in two ways:
+ *
+ * - An image may EXPOSE ports Keelarr never publishes. FlareSolverr exposes
+ *   8191 and 8192 and the catalog publishes only 8191, so 8192 was reported as
+ *   a port conflict on every healthy install.
+ * - A host-networked container publishes nothing at all, by design, and is
+ *   reachable at the host address. `parsePorts` synthesises an entry per EXPOSE
+ *   for those, so Radarr and Sonarr reported their own ports as stolen.
+ *
+ * Neither is a conflict, and both sent the operator hunting for one while
+ * hiding the real reason the app was not green.
  */
-export function findUnpublishedPorts(publishings = []) {
-  return publishings
-    .filter((entry) => entry && entry.containerPort && !entry.hostPort)
+export function findUnpublishedPorts(publishings = [], options = {}) {
+  const { managedPort = null, networkMode = null } = options;
+
+  if (networkMode === "host") {
+    return [];
+  }
+
+  const unbound = publishings.filter((entry) => entry && entry.containerPort && !entry.hostPort);
+
+  if (!unbound.length) {
+    return [];
+  }
+
+  // Nothing bound at all is the case this warning was written for: whatever the
+  // numbers are, the host cannot reach the container. Reported without matching
+  // against the managed port, because an adopted service records its *host*
+  // port there and a remapped container would otherwise slip through.
+  if (!publishings.some((entry) => entry && entry.hostPort)) {
+    return unbound.map((entry) => entry.containerPort);
+  }
+
+  // Something is bound, so the app is reachable and only the port Keelarr
+  // manages is worth reporting. The rest are secondary EXPOSE lines.
+  if (managedPort === null) {
+    return [];
+  }
+
+  return unbound
+    .filter((entry) => Number.parseInt(entry.containerPort, 10) === Number(managedPort))
     .map((entry) => entry.containerPort);
 }
 
@@ -352,7 +391,10 @@ export async function buildDashboardState(settings, dependencies = {}) {
       publishings: inventoryItem?.ports || runtime?.Publishers || [],
       // Named separately from reachability so the dashboard can explain why an
       // app it cannot open is nonetheless running.
-      unpublishedPorts: findUnpublishedPorts(inventoryItem?.ports || runtime?.Publishers || []),
+      unpublishedPorts: findUnpublishedPorts(inventoryItem?.ports || runtime?.Publishers || [], {
+        managedPort: service.port,
+        networkMode: inventoryItem?.networkMode || null
+      }),
       networks: inventoryItem?.networks || [],
       reachable,
       healthStatus,
