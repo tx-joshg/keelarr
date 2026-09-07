@@ -36,6 +36,10 @@ export const defaultSettings = {
   // How many backups to keep per service. Every install, upgrade, and rollback
   // writes one, so without a cap they grow forever. 0 means keep all.
   backupRetention: 1,
+  // Off keeps today's behaviour: an app that does not come back after an
+  // upgrade is reported and left running. On, it is put back on the image it
+  // was on — for the Upgrade button and for scheduled installs alike.
+  autoRevert: false,
   selectedServiceIds: ["prowlarr", "radarr", "sonarr", "bazarr", "trailarr", "ombi", "tautulli", "sabnzbd"],
   serviceOverrides: {},
   services: {}
@@ -163,6 +167,7 @@ export function normalizeSettings(input = {}) {
   merged.pgid = String(merged.pgid || defaultSettings.pgid).trim();
   merged.ombiVersion = String(merged.ombiVersion || defaultSettings.ombiVersion).trim();
   merged.backupRetention = sanitizeBackupRetention(merged.backupRetention);
+  merged.autoRevert = merged.autoRevert === true;
   merged.selectedServiceIds = sanitizeSelectedServiceIds(merged.selectedServiceIds);
   merged.serviceOverrides = sanitizeServiceOverrides(merged.serviceOverrides);
 

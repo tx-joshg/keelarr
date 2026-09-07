@@ -107,6 +107,7 @@ function createService(t, stack, overrides = {}) {
       logger: silentLogger,
       jobs: new JobRegistry({ logger: silentLogger }),
       loadSettingsImpl: async () => stack.settings,
+      readContainerImageIdImpl: async () => "sha256:previous",
       backupServiceImpl: async () => {
         calls.push("backup");
         return { backupDir: "/backups/radarr/x", rollback: {} };
@@ -210,10 +211,12 @@ test("upgrading clears a rollback pin so the service can move forward again", as
   const service = new ManagedStackService({
     logger: silentLogger,
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async () => {
       upgraded.push(await readComposeImage(svc));
       return { ok: true, stdout: "", stderr: "" };
     },
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
     readUpdateStateImpl: async () => ({}),
     writeUpdateStateImpl: async () => ({}),
     appendActivityImpl: async () => {}
@@ -233,7 +236,9 @@ test("a successful upgrade clears a stale update status", async (t) => {
   const service = new ManagedStackService({
     logger: silentLogger,
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+    verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }),
     readUpdateStateImpl: async () => stored,
     writeUpdateStateImpl: async (next) => Object.assign(stored, next),
     appendActivityImpl: async () => {}
@@ -446,6 +451,7 @@ test("Upgrade All clears pins and refreshes status for every service, like the s
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async (_s, svc) => {
       pulled.push(await readComposeImage(svc));
       return { ok: true, stdout: "", stderr: "" };
@@ -479,6 +485,7 @@ test("Upgrade All keeps going when one service fails and reports the split", asy
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async (_s, svc) => {
       attempted.push(svc.id);
       return svc.id === "sonarr"
@@ -511,6 +518,7 @@ test("Upgrade All reports a service that upgrades but does not come back healthy
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
     verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." }),
     readUpdateStateImpl: async () => ({ radarr: { status: "ready" } }),
@@ -541,6 +549,7 @@ test("Upgrade All skips services that were never installed", async (t) => {
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async (_s, svc) => {
       attempted.push(svc.id);
       return { ok: true, stdout: "", stderr: "" };
@@ -565,6 +574,7 @@ test("Upgrade All only touches services that actually have an update", async (t)
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async (_s, svc) => {
       attempted.push(svc.id);
       return { ok: true, stdout: "", stderr: "" };
@@ -599,6 +609,7 @@ test("Upgrade All with force re-pulls everything regardless of status", async (t
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async (_s, svc) => {
       attempted.push(svc.id);
       return { ok: true, stdout: "", stderr: "" };
@@ -621,6 +632,7 @@ test("Upgrade All says so plainly when there is nothing to do", async (t) => {
     logger: silentLogger,
     jobs: new JobRegistry({ logger: silentLogger }),
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     upgradeServiceImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
     readUpdateStateImpl: async () => ({ radarr: { status: "current" } }),
     writeUpdateStateImpl: async () => ({}),
@@ -642,6 +654,7 @@ function createDeployService(t, stack, updateState, deployed) {
   return new ManagedStackService({
     logger: silentLogger,
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
     generateAndDeployImpl: async (_s, svc) => {
       deployed.push(svc.id);
@@ -691,6 +704,7 @@ test("a failed deploy does not claim the service is current", async (t) => {
   const service = new ManagedStackService({
     logger: silentLogger,
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
     generateAndDeployImpl: async () => ({ ok: false, stdout: "", stderr: "port in use" }),
     readUpdateStateImpl: async () => updateState,
@@ -776,6 +790,7 @@ test("a deploy that changed nothing says so instead of claiming a deployment", a
   const service = new ManagedStackService({
     logger: silentLogger,
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
     generateAndDeployImpl: async () => ({ ok: true, stdout: "", stderr: " Container radarr Running \n" }),
     readUpdateStateImpl: async () => ({}),
@@ -796,6 +811,7 @@ test("a deploy that recreated the container still reports a deployment", async (
   const service = new ManagedStackService({
     logger: silentLogger,
     loadSettingsImpl: async () => stack.settings,
+    readContainerImageIdImpl: async () => "sha256:previous",
     ensureSharedNetworkImpl: async () => ({ ok: true, created: false }),
     generateAndDeployImpl: async () => ({
       ok: true,
@@ -812,4 +828,262 @@ test("a deploy that recreated the container still reports a deployment", async (
   const deploy = entries.find((entry) => entry.kind === "deploy");
   assert.match(deploy.message, /^Deployed/);
   assert.equal(deploy.details.unchanged, false);
+});
+
+// --- revert on unhealthy -------------------------------------------------------
+
+/**
+ * The upgrade path with every collaborator stubbed and its calls recorded, so a
+ * test can assert not just the outcome but the order things happened in —
+ * which is the whole question for a revert.
+ */
+function createUpgradeService(t, stack, overrides = {}) {
+  const calls = [];
+  const writes = [];
+  const activity = [];
+  const stored = overrides.stored || {};
+  const ok = { ok: true, stdout: "", stderr: "", code: 0 };
+  const point = overrides.point === undefined
+    ? { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" }
+    : overrides.point;
+
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => ({ ...stack.settings, autoRevert: overrides.autoRevert === true }),
+    readContainerImageIdImpl: async () => overrides.previousImageId ?? "sha256:previous",
+    upgradeServiceImpl: async () => {
+      calls.push("pull+up");
+      return overrides.upgradeResult || { ...ok, phase: "up" };
+    },
+    verifyServiceHealthImpl: async () => {
+      calls.push("verify");
+      // The revert's own verification is the second call; it always comes back.
+      const first = calls.filter((call) => call === "verify").length === 1;
+      return first ? (overrides.health || { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }) : { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" };
+    },
+    generateAndDeployImpl: async () => {
+      calls.push("compose-up");
+      return overrides.deployResult || ok;
+    },
+    findRollbackPointImpl: async () => point,
+    imageExistsLocallyImpl: async () => overrides.imageMissing !== true,
+    readUpdateStateImpl: async () => stored,
+    writeUpdateStateImpl: async (next) => {
+      writes.push(JSON.parse(JSON.stringify(next)));
+      return Object.assign(stored, next);
+    },
+    appendActivityImpl: async (entry) => {
+      activity.push(entry);
+    },
+    ...overrides.impls
+  });
+
+  return { calls, writes, activity, stored, service };
+}
+
+const UNHEALTHY = { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." };
+
+test("an upgrade that comes back healthy records when it happened and never reverts", async (t) => {
+  const stack = await createStack(t);
+  const { calls, stored, service } = createUpgradeService(t, stack, { autoRevert: true });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.deepEqual(calls, ["pull+up", "verify"]);
+  assert.equal(result.ok, true);
+  assert.equal(result.reverted, false);
+  assert.equal(stored.radarr.status, "current");
+  assert.ok(stored.radarr.upgradedAt, "the upgrade time is recorded");
+  // Nothing was pinned: the compose file still names the tag.
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("with auto-revert off, an upgrade that does not come back is reported and left running", async (t) => {
+  const stack = await createStack(t);
+  const { calls, stored, activity, service } = createUpgradeService(t, stack, { autoRevert: false, health: UNHEALTHY });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Today's behaviour, exactly: no compose-up, no pin, the failure is the report.
+  assert.deepEqual(calls, ["pull+up", "verify"]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reverted, false);
+  assert.equal(result.error, "Container is exited.");
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+  assert.equal(stored.radarr.status, "current");
+  const last = activity.at(-1);
+  assert.match(last.message, /did not come back healthy/);
+  assert.doesNotMatch(last.message, /Reverted/);
+});
+
+test("with auto-revert on, an upgrade that does not come back is pinned back to the previous image", async (t) => {
+  const stack = await createStack(t);
+  const { calls, stored, activity, service } = createUpgradeService(t, stack, { autoRevert: true, health: UNHEALTHY });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Verified, found unhealthy, put back, verified again.
+  assert.deepEqual(calls, ["pull+up", "verify", "compose-up", "verify"]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reverted, true);
+  assert.equal(result.revertedTo, "linuxserver/radarr@sha256:previous");
+  assert.match(result.error, /Reverted to linuxserver\/radarr:latest/);
+  // The digest, never the tag: the tag now resolves to the image that failed.
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr@sha256:previous");
+  assert.equal(stored.radarr.status, "rolled-back");
+  assert.match(activity.at(-1).message, /Reverted to/);
+  assert.equal(activity.at(-1).details.reverted, true);
+});
+
+test("with auto-revert on, a healthy upgrade leaves the compose file alone", async (t) => {
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, { autoRevert: true });
+
+  await service.upgradeManagedService("radarr");
+
+  assert.ok(!calls.includes("compose-up"), "nothing to put back");
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("the update state is never 'current' for an upgrade that was reverted", async (t) => {
+  // recordFreshImageState used to run before the health check, so a reverted
+  // upgrade was written down as current on its way to being undone.
+  const stack = await createStack(t);
+  const { writes, service } = createUpgradeService(t, stack, { autoRevert: true, health: UNHEALTHY });
+
+  await service.upgradeManagedService("radarr");
+
+  assert.ok(writes.length > 0);
+  assert.ok(writes.every((write) => write.radarr?.status !== "current"), `wrote: ${JSON.stringify(writes)}`);
+  assert.equal(writes.at(-1).radarr.status, "rolled-back");
+});
+
+test("a revert is refused when the previous image is gone from the host", async (t) => {
+  const stack = await createStack(t);
+  const { calls, stored, service } = createUpgradeService(t, stack, { autoRevert: true, health: UNHEALTHY, imageMissing: true });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.deepEqual(calls, ["pull+up", "verify"]);
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /no longer on this host/);
+  // Nothing was put back, so the failed image is what is running.
+  assert.equal(stored.radarr.status, "current");
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("a revert is refused when the newest backup is not the image that was running", async (t) => {
+  // findRollbackPoint skips the record matching the running image. If the pull
+  // changed nothing and the container died anyway, that hands back an older
+  // backup — and going back past the previous state is the wrong thing to do
+  // silently.
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    point: { imageId: "sha256:older", imageRef: "linuxserver/radarr@sha256:older", taggedImage: "linuxserver/radarr:latest" }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.ok(!calls.includes("compose-up"));
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /does not match the image that was running/);
+});
+
+test("an upgrade whose container never starts is reverted like an unhealthy one", async (t) => {
+  // A failed `up` means the old container is gone and the new one never ran.
+  // That is "did not come up", not "the pull failed".
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    upgradeResult: { ok: false, phase: "up", stdout: "", stderr: "no such image", code: 1 }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // No first verification: there is nothing running to verify.
+  assert.deepEqual(calls, ["pull+up", "compose-up", "verify"]);
+  assert.equal(result.reverted, true);
+  assert.match(result.error, /could not start the new container/);
+});
+
+test("a failed pull neither reverts nor claims the service is current", async (t) => {
+  const stack = await createStack(t);
+  const { calls, stored, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    upgradeResult: { ok: false, phase: "pull", stdout: "", stderr: "manifest unknown", code: 1 }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.deepEqual(calls, ["pull+up"]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reverted, false);
+  assert.equal(stored.radarr, undefined, "nothing changed, so nothing is recorded");
+});
+
+test("an update check keeps the last upgrade time", async (t) => {
+  const stack = await createStack(t);
+  const stored = { radarr: { status: "current", checkedAt: "2026-09-01T00:00:00.000Z", upgradedAt: "2026-08-30T03:04:05.000Z" } };
+  const { service } = createUpgradeService(t, stack, {
+    stored,
+    impls: { checkForUpdatesImpl: async () => ({ ok: true, updateStatus: "ready", stdout: "", stderr: "" }) }
+  });
+
+  await service.checkServiceUpdate("radarr");
+
+  assert.equal(stored.radarr.status, "ready");
+  assert.equal(stored.radarr.upgradedAt, "2026-08-30T03:04:05.000Z", "a check must not erase when the app was last upgraded");
+});
+
+test("Upgrade All reverts an unhealthy service when auto-revert is on and keeps going", async (t) => {
+  const stack = await createStackWith(t, ["radarr", "sonarr"]);
+  const attempted = [];
+  const pinned = [];
+  const service = new ManagedStackService({
+    logger: silentLogger,
+    jobs: new JobRegistry({ logger: silentLogger }),
+    loadSettingsImpl: async () => ({ ...stack.settings, autoRevert: true }),
+    readContainerImageIdImpl: async () => "sha256:previous",
+    upgradeServiceImpl: async (_s, svc) => {
+      attempted.push(svc.id);
+      return { ok: true, phase: "up", stdout: "", stderr: "" };
+    },
+    // Radarr comes up broken; everything else, including the revert's own
+    // check, comes back fine.
+    verifyServiceHealthImpl: async (_s, svc) => {
+      const firstLook = svc.id === "radarr" && !pinned.includes("radarr");
+      return firstLook
+        ? { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." }
+        : { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" };
+    },
+    findRollbackPointImpl: async (_s, svc) => ({
+      imageId: "sha256:previous",
+      imageRef: `linuxserver/${svc.id}@sha256:previous`,
+      taggedImage: `linuxserver/${svc.id}:latest`
+    }),
+    imageExistsLocallyImpl: async () => true,
+    generateAndDeployImpl: async (_s, svc) => {
+      pinned.push(svc.id);
+      return { ok: true, stdout: "", stderr: "", code: 0 };
+    },
+    readUpdateStateImpl: async () => ({ radarr: { status: "ready" }, sonarr: { status: "ready" } }),
+    writeUpdateStateImpl: async () => ({}),
+    appendActivityImpl: async () => {}
+  });
+
+  const job = await settleJobById(service, (await service.startUpgradeAll().create()).id);
+
+  // Both were attempted; only the broken one was put back.
+  assert.deepEqual(attempted, ["radarr", "sonarr"]);
+  assert.deepEqual(pinned, ["radarr"]);
+  assert.equal(job.result.upgraded, 1);
+  assert.equal(job.result.failed, 1);
+  const radarr = job.steps.find((step) => step.name === "radarr");
+  assert.equal(radarr.status, STEP_STATUS.FAILED);
+  assert.match(radarr.error, /Reverted to linuxserver\/radarr:latest/);
+  assert.equal(job.steps.find((step) => step.name === "sonarr").status, STEP_STATUS.SUCCEEDED);
+  assert.equal(job.result.results.find((r) => r.serviceId === "radarr").reverted, true);
 });

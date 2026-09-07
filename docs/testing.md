@@ -74,6 +74,9 @@ Hosts used so far:
 
 | Scenario | Level | Evidence |
 | --- | --- | --- |
+| A failed upgrade is put back when asked, and reported when not | Automated | With auto-revert on, an upgrade that does not come back is pinned to the previous image's digest and the update state says `rolled-back`; off, it is reported and left running exactly as before. The four combinations are asserted on call order, not just outcome |
+| A revert refuses rather than guesses | Automated | No revert when the previous image is gone from the host, or when the newest backup is not the image that was actually running — `findRollbackPoint` skips the running image, so a pull that changed nothing would otherwise hand back an older one |
+| An upgrade is never recorded as current on its way to being reverted | Automated | Every update-state write is captured; the health check now runs before any is made |
 | Update checks on a schedule | Automated | Daily, at startup when overdue, after install, on request — and nowhere else |
 | Slow image pulls | Live · QNAP | A 175-second pull completes; judged on progress rather than a fixed deadline |
 | Stalled pulls | Automated | A command that goes silent is reported as stalled, distinctly from one that is merely slow |
