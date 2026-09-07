@@ -285,6 +285,23 @@ export class ManagedStackService {
   }
 
   async runAutoUpdateTick({ now = Date.now(), toleranceMs = AUTO_UPDATE_TOLERANCE_MS } = {}) {
+    // A tick that outlives the interval — slow state I/O — must not be joined
+    // by the next one: both would read an unclaimed window, and the second
+    // would then undo the first's claim on being refused.
+    if (this.autoUpdateTickInProgress) {
+      return { ran: false, reason: "tick-in-progress" };
+    }
+
+    this.autoUpdateTickInProgress = true;
+
+    try {
+      return await this.runAutoUpdateTickOnce({ now, toleranceMs });
+    } finally {
+      this.autoUpdateTickInProgress = false;
+    }
+  }
+
+  async runAutoUpdateTickOnce({ now, toleranceMs }) {
     const settings = await this.loadSettings();
     const state = await this.readAutoUpdateState();
     const decision = decideAutoUpdate({ now, settings, state, toleranceMs });
@@ -350,8 +367,14 @@ export class ManagedStackService {
           return current;
         }
 
-        return current.lastJobId === null && current.lastSummary === null
-          ? state
+        if (current.lastJobId === null && current.lastSummary === null) {
+          return state;
+        }
+
+        // A scheduled run for this window got in first: the claim is its,
+        // and stays. Only a manual run's record is left with the key reset.
+        return current.lastTrigger === "scheduled"
+          ? current
           : { ...current, lastWindowKey: state.lastWindowKey ?? null };
       });
 
@@ -414,6 +437,9 @@ export class ManagedStackService {
         // Never the window key: that is the tick's alone, and a Run Now that
         // happened to read a claim the tick was about to undo must not put
         // it back.
+        // Bookkeeping. If the write fails, the run still happens: the window
+        // is already claimed, and a claimed window with no run is the one
+        // outcome worse than a run with no record.
         await this.updateAutoUpdateState((current) => ({
           ...current,
           lastRunAt: new Date().toISOString(),
@@ -421,7 +447,9 @@ export class ManagedStackService {
           lastJobId: job.id,
           lastSummary: null,
           finishedAt: null
-        }));
+        })).catch((error) => {
+          this.logger.warn("auto_update.record_failed", { jobId: job.id, message: error.message });
+        });
 
         return await this.runAutoUpdate(ctx, settings, services, { ...context, trigger, leaseOperationId: operationId });
       } finally {
@@ -1481,7 +1509,9 @@ export class ManagedStackService {
         serviceId: service.id,
         ok: result.ok,
         updateStatus: result.updateStatus,
-        error: result.ok ? null : (result.stderr || result.stdout || "").split("\n").filter(Boolean).pop() || null
+        // A stalled pull is diagnosed by the command runner; its stderr is
+        // just the last progress line. The diagnosis comes first.
+        error: result.ok ? null : result.error || (result.stderr || result.stdout || "").split("\n").filter(Boolean).pop() || null
       });
     }
 

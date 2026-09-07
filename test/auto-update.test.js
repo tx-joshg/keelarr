@@ -290,6 +290,75 @@ test("the run holds the lease, so nothing else can change the stack underneath i
   assert.equal(lease.isHeld(), false, "released when the run is over");
 });
 
+test("a tick that outlives the interval is not joined by the next one", async () => {
+  // Slow state I/O: two ticks that both read an unclaimed window would start
+  // one run and then undo its claim on the second being refused.
+  const { service, state } = createService();
+  const slowRead = service.readAutoUpdateState;
+  service.readAutoUpdateState = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return slowRead();
+  };
+
+  const [first, second] = await Promise.all([
+    service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") }),
+    service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") })
+  ]);
+
+  assert.equal(first.ran, true);
+  assert.equal(second.reason, "tick-in-progress");
+  await settle(service, first.jobId);
+  assert.equal(state.auto.lastWindowKey, "2026-09-07", "the claim stands");
+  assert.equal(service.jobs.list().filter((job) => job.kind === "auto-update").length, 1);
+});
+
+test("a failed bookkeeping write does not stop the run", async () => {
+  // The window is already claimed at that point; a claimed window with no
+  // run is the one outcome worse than a run with no record.
+  let writes = 0;
+  const { service, state, calls } = createService({
+    impls: {
+      writeAutoUpdateStateImpl: async (next) => {
+        writes += 1;
+        if (writes === 2) {
+          throw new Error("EIO: disk hiccup");
+        }
+        calls.push(`auto-state:${next.lastWindowKey || "-"}`);
+        Object.assign(state.auto, next);
+        return next;
+      }
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  const job = await settle(service, tick.jobId);
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED);
+  assert.ok(calls.includes("upgrade:radarr"), "the upgrade still happened");
+  assert.equal(state.auto.lastSummary.upgraded, 1, "the summary was still recorded");
+});
+
+test("a stalled pull is reported as stalled, not as its last progress line", async () => {
+  const services = { sonarr: { id: "sonarr", name: "Sonarr", containerName: "sonarr", autoUpdate: true } };
+  const { service } = createService({
+    services,
+    impls: {
+      checkForUpdatesImpl: async () => ({
+        ok: false,
+        updateStatus: "unknown",
+        error: "The pull stalled: no progress for 120s.",
+        stdout: "",
+        stderr: "layer 3/7 downloading 41.2MB/300MB"
+      })
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  const job = await settle(service, tick.jobId);
+
+  assert.match(job.steps.find((step) => step.name === "sonarr").error, /pull stalled/);
+});
+
 test("Run Now is refused while another job is still working", async () => {
   // A cutover answers its request as soon as the job is registered and keeps
   // going. The manual action that started it has settled; the job has not.
