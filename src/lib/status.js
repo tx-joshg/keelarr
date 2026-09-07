@@ -410,7 +410,12 @@ export async function buildDashboardState(settings, dependencies = {}) {
       resourceUsage: inventoryItem?.resourceUsage || null,
       lastError: probe.error || composeStatus.error || null,
       updateStatus: deriveUpdateStatus(service, generated, runtimeSource, updateState[service.id]?.status || null),
-      updateCheckedAt: updateState[service.id]?.checkedAt || null
+      updateCheckedAt: updateState[service.id]?.checkedAt || null,
+      // Uptime is derived from this on the client, so it is not stale between
+      // polls the way a server-computed number of seconds would be.
+      startedAt: inventoryItem?.startedAt || null,
+      restartCount: inventoryItem?.restartCount ?? null,
+      lastUpgradedAt: updateState[service.id]?.upgradedAt || null
     };
   }));
 

@@ -117,6 +117,18 @@ export function diffEnvironment(containerEnvironment = {}, imageEnvironment = {}
   return entries;
 }
 
+/**
+ * A Docker timestamp, or null. Docker reports 0001-01-01 for a container that
+ * has never started, and that is not a start time.
+ */
+function readDockerTimestamp(value) {
+  if (!value || /^0001-/.test(String(value))) {
+    return null;
+  }
+
+  return String(value);
+}
+
 function parsePorts(inspect) {
   const networkMode = inspect.HostConfig?.NetworkMode || "default";
   const published = inspect.NetworkSettings?.Ports || {};
@@ -310,6 +322,10 @@ async function buildInventoryItem(inspect, options = {}) {
     matchedBy: serviceMatch?.matchedBy || null,
     status: inspect.State?.Status || "unknown",
     healthStatus: inspect.State?.Health?.Status || null,
+    // When it last (re)started, and how many times Docker has restarted it —
+    // both already in the inspect payload, both previously thrown away.
+    startedAt: readDockerTimestamp(inspect.State?.StartedAt),
+    restartCount: Number.isFinite(Number(inspect.RestartCount)) ? Number(inspect.RestartCount) : 0,
     restartPolicy: inspect.HostConfig?.RestartPolicy?.Name || "no",
     networkMode: inspect.HostConfig?.NetworkMode || "default",
     networks: parseNetworks(inspect),

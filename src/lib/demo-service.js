@@ -449,7 +449,11 @@ export class DemoKeelarrAppService {
         latencyMs: runtime.latencyMs,
         lastError: runtime.lastError || null,
         updateStatus: runtime.updateStatus,
-        updateCheckedAt: runtime.updateCheckedAt || null
+        updateCheckedAt: runtime.updateCheckedAt || null,
+        startedAt: runtime.startedAt || null,
+        restartCount: runtime.restartCount ?? null,
+        lastUpgradedAt: runtime.lastUpgradedAt || null,
+        autoUpdate: this.demo.settings?.serviceOverrides?.[serviceId]?.autoUpdate === true
       };
     });
 
@@ -462,6 +466,7 @@ export class DemoKeelarrAppService {
       activity: clone(this.demo.activity),
       catalog: listServices(),
       hostDetection: clone(this.demo.detection),
+      autoUpdate: this.describeDemoAutoUpdate(),
       meta: {
         appName: APP_NAME,
         version: APP_VERSION,
@@ -498,6 +503,42 @@ export class DemoKeelarrAppService {
 
   async checkSelfUpdate() {
     return { ok: true, selfUpdate: this.describeDemoSelfUpdate() };
+  }
+
+  describeDemoAutoUpdate() {
+    const settings = this.demo.settings || {};
+    return {
+      enabled: settings.autoUpdateEnabled === true,
+      time: settings.autoUpdateTime || "03:00",
+      tz: settings.tz || "UTC",
+      tzValid: true,
+      toleranceMinutes: 30,
+      nextRunAt: null,
+      lastRunAt: null,
+      lastWindowKey: null,
+      lastJobId: null,
+      lastSummary: null,
+      optedIn: Object.entries(settings.serviceOverrides || {})
+        .filter(([, override]) => override?.autoUpdate === true)
+        .map(([serviceId]) => serviceId)
+    };
+  }
+
+  async describeAutoUpdate() {
+    return { ok: true, autoUpdate: this.describeDemoAutoUpdate() };
+  }
+
+  async setServiceAutoUpdate(serviceId, input = {}) {
+    const enabled = input?.enabled === true;
+    this.demo.settings.serviceOverrides = {
+      ...(this.demo.settings.serviceOverrides || {}),
+      [serviceId]: { ...(this.demo.settings.serviceOverrides?.[serviceId] || {}), autoUpdate: enabled }
+    };
+    return { ok: true, serviceId, autoUpdate: enabled };
+  }
+
+  async runAutoUpdateNow() {
+    throw new KeelarrError("The demo has no scheduler, so there is nothing to run.", { statusCode: 409 });
   }
 
   async startSelfUpdate() {

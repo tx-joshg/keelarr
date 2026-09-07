@@ -271,7 +271,9 @@ export function buildServiceFromCatalog(baseSettings, id, override = {}) {
     rollbackContainerName: override.rollbackContainerName || null,
     // Where a previous removal archived this service's stack files, so a
     // reinstall can restore the service it was rather than a catalog default.
-    restoreFrom: override.restoreFrom || null
+    restoreFrom: override.restoreFrom || null,
+    // Opted in to scheduled installs. Off unless said otherwise.
+    autoUpdate: override.autoUpdate === true
   };
 
   return service;

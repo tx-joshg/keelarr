@@ -4,7 +4,7 @@ import path from "node:path";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import { normalizeSettings, sanitizeBackupRetention, writeJson } from "../src/lib/store.js";
+import { normalizeSettings, sanitizeBackupRetention, sanitizeClockTime, writeJson } from "../src/lib/store.js";
 
 test("normalizes settings and builds selected services", () => {
   const settings = normalizeSettings({
@@ -112,4 +112,39 @@ test("auto-revert is off by default and is a strict boolean", () => {
   assert.equal(normalizeSettings({ autoRevert: true }).autoRevert, true);
   assert.equal(normalizeSettings({ autoRevert: "true" }).autoRevert, false);
   assert.equal(normalizeSettings({ autoRevert: 1 }).autoRevert, false);
+});
+
+test("scheduled installs are off by default, at 03:00, and both switches are strict booleans", () => {
+  const defaults = normalizeSettings({});
+  assert.equal(defaults.autoUpdateEnabled, false);
+  assert.equal(defaults.autoUpdateTime, "03:00");
+  assert.equal(normalizeSettings({ autoUpdateEnabled: true }).autoUpdateEnabled, true);
+  // A hand-edited "true" must not read as on.
+  assert.equal(normalizeSettings({ autoUpdateEnabled: "true" }).autoUpdateEnabled, false);
+  assert.equal(normalizeSettings({ autoUpdateEnabled: 1 }).autoUpdateEnabled, false);
+});
+
+test("the install window is a 24-hour clock time, and nonsense falls back to the default", () => {
+  assert.equal(sanitizeClockTime("3:05"), "03:05");
+  assert.equal(sanitizeClockTime("23:59"), "23:59");
+  for (const bad of ["24:00", "3pm", "", undefined, 7, "03:60"]) {
+    assert.equal(sanitizeClockTime(bad), "03:00", `${JSON.stringify(bad)} should fall back`);
+  }
+  assert.equal(normalizeSettings({ autoUpdateTime: "4:30" }).autoUpdateTime, "04:30");
+});
+
+test("a per-app auto-update opt-in survives a settings round-trip", () => {
+  // sanitizeServiceOverrides is an allow-list: a key left off it is dropped on
+  // the next save. This is the test that notices.
+  const settings = normalizeSettings({
+    initialized: true,
+    selectedServiceIds: ["radarr", "sonarr"],
+    serviceOverrides: { radarr: { autoUpdate: true }, sonarr: {} }
+  });
+
+  assert.equal(settings.serviceOverrides.radarr.autoUpdate, true);
+  assert.equal(settings.services.radarr.autoUpdate, true);
+  assert.equal(settings.services.sonarr.autoUpdate, false);
+  // And it is strict too.
+  assert.equal(normalizeSettings({ serviceOverrides: { radarr: { autoUpdate: "true" } } }).serviceOverrides.radarr.autoUpdate, false);
 });

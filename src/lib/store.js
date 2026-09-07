@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import {
   activityPath,
   authPath,
+  autoUpdatePath,
   controllerUpdatePath,
   selfUpdateReceiptPath,
   dataDir,
@@ -11,6 +12,7 @@ import {
   updatesPath
 } from "./data-paths.js";
 import { SERVICE_ORDER, buildServicesFromSelection } from "./service-catalog.js";
+import { formatClockTime, parseClockTime } from "./clock.js";
 
 export const defaultSettings = {
   initialized: false,
@@ -40,6 +42,13 @@ export const defaultSettings = {
   // upgrade is reported and left running. On, it is put back on the image it
   // was on — for the Upgrade button and for scheduled installs alike.
   autoRevert: false,
+  // Scheduled installs, for the apps that opt in. One time of day for the
+  // whole stack rather than a schedule per app: staggering upgrades of apps
+  // that talk to each other is worse than doing them together.
+  autoUpdateEnabled: false,
+  // Local time in `tz`, 24-hour. 03:00 sits clear of the US spring-forward
+  // gap, when 02:00-02:59 does not exist.
+  autoUpdateTime: "03:00",
   selectedServiceIds: ["prowlarr", "radarr", "sonarr", "bazarr", "trailarr", "ombi", "tautulli", "sabnzbd"],
   serviceOverrides: {},
   services: {}
@@ -84,6 +93,12 @@ export async function writeJson(filePath, value) {
  * one is treated as "keep all" rather than "keep none" — the safe reading of
  * an out-of-range value.
  */
+/** A 24-hour "HH:MM", or the default when the value is not one. */
+export function sanitizeClockTime(value) {
+  const parsed = parseClockTime(value);
+  return parsed ? formatClockTime(parsed) : defaultSettings.autoUpdateTime;
+}
+
 export function sanitizeBackupRetention(value) {
   const numeric = Number(value);
 
@@ -138,7 +153,10 @@ function sanitizeServiceOverrides(value) {
       // Set when a service was removed with its configuration kept: the backup
       // directory holding the stack files needed to bring it back as the same
       // service rather than as a fresh catalog one.
-      restoreFrom: typeof item.restoreFrom === "string" ? item.restoreFrom : null
+      restoreFrom: typeof item.restoreFrom === "string" ? item.restoreFrom : null,
+      // Strict: this list is an allow-list, and a key left off it is dropped
+      // silently on the next save.
+      autoUpdate: item.autoUpdate === true
     };
   }
 
@@ -168,6 +186,8 @@ export function normalizeSettings(input = {}) {
   merged.ombiVersion = String(merged.ombiVersion || defaultSettings.ombiVersion).trim();
   merged.backupRetention = sanitizeBackupRetention(merged.backupRetention);
   merged.autoRevert = merged.autoRevert === true;
+  merged.autoUpdateEnabled = merged.autoUpdateEnabled === true;
+  merged.autoUpdateTime = sanitizeClockTime(merged.autoUpdateTime);
   merged.selectedServiceIds = sanitizeSelectedServiceIds(merged.selectedServiceIds);
   merged.serviceOverrides = sanitizeServiceOverrides(merged.serviceOverrides);
 
@@ -215,6 +235,15 @@ export async function appendActivity(entry) {
 
   await writeJson(activityPath, next);
   return next;
+}
+
+export async function readAutoUpdateState() {
+  return readJson(autoUpdatePath, {});
+}
+
+export async function writeAutoUpdateState(nextState) {
+  await writeJson(autoUpdatePath, nextState);
+  return nextState;
 }
 
 export async function readControllerUpdateState() {

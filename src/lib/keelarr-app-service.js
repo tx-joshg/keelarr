@@ -52,6 +52,8 @@ export class KeelarrAppService {
     // cannot start in the gap between checking that an update is safe and the
     // controller being replaced.
     this.mutationLease = new MutationLease();
+    // The scheduler stands aside while the controller is replacing itself.
+    this.managedStackService.lease = this.mutationLease;
     this.selfUpdateService = new SelfUpdateService({
       hostProfileService: this.hostProfileService,
       jobs: this.cutoverService.jobs,
@@ -80,10 +82,12 @@ export class KeelarrAppService {
     // is the only thing that checks on its own: an upgrade uses what the last
     // check recorded rather than pulling every image again to find out.
     this.stopUpdateSchedule = this.managedStackService.startUpdateSchedule();
+    this.stopAutoUpdateSchedule = this.managedStackService.startAutoUpdateSchedule();
   }
 
   async shutdown() {
     this.stopUpdateSchedule?.();
+    this.stopAutoUpdateSchedule?.();
   }
 
   async describeSelfUpdate(context = {}) {
@@ -321,6 +325,44 @@ export class KeelarrAppService {
 
   async checkAllUpdates(context = {}) {
     return this.managedStackService.checkAllUpdates(context);
+  }
+
+  async describeAutoUpdate() {
+    return { ok: true, autoUpdate: await this.managedStackService.describeAutoUpdate() };
+  }
+
+  async setServiceAutoUpdate(serviceId, input = {}, context = {}) {
+    const settings = await this.loadSettings();
+    const service = this.managedStackService.requireService(settings, serviceId);
+    const enabled = input?.enabled === true;
+
+    await this.hostProfileService.patchServiceOverride(serviceId, { autoUpdate: enabled });
+    await this.managedStackService.appendActivity({
+      kind: "settings-save",
+      level: "info",
+      message: `Auto-update ${enabled ? "on" : "off"} for ${service.name}.`,
+      details: { serviceId, autoUpdate: enabled }
+    });
+
+    return { ok: true, serviceId, autoUpdate: enabled };
+  }
+
+  /** Runs the scheduled job now. Does not claim tonight's window. */
+  async runAutoUpdateNow(context = {}) {
+    this.mutationLease.assertAvailable("A scheduled update");
+    const settings = await this.loadSettings();
+    const optedIn = settings.selectedServiceIds
+      .map((serviceId) => settings.services[serviceId])
+      .filter((service) => service && service.autoUpdate === true);
+
+    if (optedIn.length === 0) {
+      return { ok: true, job: null, message: "No app has auto-update turned on." };
+    }
+
+    return {
+      ok: true,
+      job: buildJobSnapshot(this.managedStackService.startAutoUpdate(settings, optedIn, { ...context, trigger: "manual" }))
+    };
   }
 
   async upgradeAll(input = {}, context = {}) {

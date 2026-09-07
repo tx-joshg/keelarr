@@ -26,9 +26,13 @@ import {
 import {
   appendActivity,
   loadSettings,
+  readAutoUpdateState,
   readUpdateState,
+  writeAutoUpdateState,
   writeUpdateState
 } from "../store.js";
+import { AUTO_UPDATE_TOLERANCE_MS, decideAutoUpdate, describeNextRun } from "../auto-update-window.js";
+import { isValidTimeZone, parseClockTime } from "../clock.js";
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
@@ -72,6 +76,9 @@ export class ManagedStackService {
     readComposeImageImpl = readComposeImage,
     readContainerImageIdImpl = readContainerImageIdByName,
     readUpdateStateImpl = readUpdateState,
+    readAutoUpdateStateImpl = readAutoUpdateState,
+    writeAutoUpdateStateImpl = writeAutoUpdateState,
+    lease = null,
     setComposeImageImpl = setComposeImage,
     upgradeAllServicesImpl = upgradeAllServices,
     upgradeServiceImpl = upgradeService,
@@ -104,6 +111,9 @@ export class ManagedStackService {
       component: "managed-stack-service"
     });
     this.readUpdateState = readUpdateStateImpl;
+    this.readAutoUpdateState = readAutoUpdateStateImpl;
+    this.writeAutoUpdateState = writeAutoUpdateStateImpl;
+    this.lease = lease;
     this.upgradeAllServices = upgradeAllServicesImpl;
     this.upgradeService = upgradeServiceImpl;
     this.writeStacks = writeStacksImpl;
@@ -219,6 +229,199 @@ export class ManagedStackService {
    * registry about nine services to act on three. It happens here, right after
    * an install, or when the operator asks. Nothing else triggers one.
    */
+  /**
+   * Once a minute, asks whether the install window is open. A missed window is
+   * not caught up at boot, by decision — see decideAutoUpdate.
+   */
+  startAutoUpdateSchedule({
+    tickMs = 60_000,
+    toleranceMs = AUTO_UPDATE_TOLERANCE_MS,
+    nowImpl = Date.now,
+    setIntervalImpl = setInterval
+  } = {}) {
+    const tick = async () => {
+      try {
+        await this.runAutoUpdateTick({ now: nowImpl(), toleranceMs });
+      } catch (error) {
+        this.logger.warn("auto_update.tick_failed", { message: error.message });
+      }
+    };
+
+    const timer = setIntervalImpl(tick, tickMs);
+    timer.unref?.();
+
+    return () => clearInterval(timer);
+  }
+
+  async runAutoUpdateTick({ now = Date.now(), toleranceMs = AUTO_UPDATE_TOLERANCE_MS } = {}) {
+    const settings = await this.loadSettings();
+    const state = await this.readAutoUpdateState();
+    const decision = decideAutoUpdate({ now, settings, state, toleranceMs });
+
+    if (!decision.run) {
+      return { ran: false, reason: decision.reason, windowKey: decision.windowKey || null };
+    }
+
+    if (decision.tzFallback) {
+      this.logger.warn("auto_update.invalid_tz", { tz: settings.tz });
+    }
+
+    // Stand aside and leave the window unclaimed, so the next tick tries again
+    // while it is still open. A cutover or a controller update in progress is
+    // not something to start an upgrade underneath.
+    if (this.jobs?.list().some((job) => job.status === "running")) {
+      return { ran: false, reason: "job-running", windowKey: decision.windowKey };
+    }
+
+    if (this.lease?.isHeld()) {
+      return { ran: false, reason: "lease-held", windowKey: decision.windowKey };
+    }
+
+    const optedIn = settings.selectedServiceIds
+      .map((serviceId) => settings.services[serviceId])
+      .filter((service) => service && service.autoUpdate === true);
+
+    // Claimed before any work starts: a ten-minute job must not be started a
+    // second time by the ticks that fire while it runs, and a crash mid-run
+    // must not re-run at the next tick.
+    const claimed = {
+      ...state,
+      lastWindowKey: decision.windowKey,
+      lastRunAt: new Date(now).toISOString(),
+      lastJobId: null,
+      lastSummary: null
+    };
+    await this.writeAutoUpdateState(claimed);
+
+    if (optedIn.length === 0) {
+      await this.writeAutoUpdateState({ ...claimed, lastSummary: { reason: "nothing-opted-in" } });
+      return { ran: false, reason: "nothing-opted-in", windowKey: decision.windowKey };
+    }
+
+    const job = this.startAutoUpdate(settings, optedIn, { trigger: "scheduled" });
+    await this.writeAutoUpdateState({ ...claimed, lastJobId: job.id });
+
+    return { ran: true, jobId: job.id, windowKey: decision.windowKey };
+  }
+
+  /**
+   * One step per opted-in service, including the ones it then leaves alone.
+   * Upgrade All hides non-work because someone is watching; this run is read
+   * the next morning, and "looked at Sonarr, already current" is the record
+   * they want.
+   */
+  startAutoUpdate(settings, services, context = {}) {
+    const job = this.requireJobs().create({
+      kind: "auto-update",
+      subject: { serviceId: "*" },
+      steps: [
+        { name: "check", label: "Check for updates" },
+        ...services.map((service) => ({ name: service.id, label: `Upgrade ${service.name}` }))
+      ]
+    });
+
+    return this.jobs.start(job, (ctx) => this.runAutoUpdate(ctx, settings, services, context));
+  }
+
+  async runAutoUpdate(ctx, settings, services, context = {}) {
+    const logger = this.scopedLogger(context);
+
+    await ctx.step("check", async () => {
+      const checked = await this.checkAllUpdates(
+        { ...context, trigger: "auto-update" },
+        { serviceIds: services.map((service) => service.id) }
+      );
+      const ready = checked.results.filter((result) => result.updateStatus === "ready").length;
+
+      return { detail: `${ready} of ${services.length} ${ready === 1 ? "has" : "have"} an update.` };
+    });
+
+    const updateState = await this.readUpdateState();
+    const plan = this.planUpgradeAll(services, updateState);
+    const inPlan = (bucket, service) => bucket.some((entry) => entry.id === service.id);
+    const upgradable = [];
+    let skipped = 0;
+
+    for (const service of services) {
+      // A reverted service reports "ready" at every check — the check above
+      // just overwrote its status — because its compose file is pinned to a
+      // digest and the tag has moved on. Without this it would be upgraded,
+      // fail and be reverted again every night. The pin is the durable signal:
+      // a revert or a rollback leaves it, and only a person pressing Upgrade
+      // clears it. That is the answer this waits for.
+      if (await this.isPinnedToPreviousImage(service)) {
+        ctx.skip(service.id, "Reverted after its last upgrade. Upgrade it manually to move forward.");
+        skipped += 1;
+      } else if (inPlan(plan.upgradable, service)) {
+        upgradable.push(service);
+      } else if (inPlan(plan.current, service)) {
+        ctx.skip(service.id, "Already current.");
+        skipped += 1;
+      } else {
+        ctx.skip(service.id, "Update state unknown, not touched.");
+        skipped += 1;
+      }
+    }
+
+    const results = await this.upgradeAsSteps(ctx, settings, upgradable, logger);
+    const upgraded = results.filter((result) => result.ok && !result.skipped).length;
+    const reverted = results.filter((result) => result.reverted === true).length;
+    const failedOutright = results.filter((result) => !result.ok && result.reverted !== true).length;
+    const summary = { upgraded, reverted, failed: failedOutright, skipped };
+    const message = `Scheduled update: ${upgraded} upgraded${reverted ? `, ${reverted} reverted` : ""}${
+      failedOutright ? `, ${failedOutright} failed` : ""
+    }, ${skipped} left alone.`;
+
+    await this.appendActivity({
+      kind: "auto-update",
+      level: reverted || failedOutright ? "error" : "info",
+      message,
+      details: results
+    });
+
+    const state = await this.readAutoUpdateState();
+    await this.writeAutoUpdateState({ ...state, finishedAt: new Date().toISOString(), lastSummary: summary });
+    logger[reverted || failedOutright ? "error" : "info"]("service.auto_update", summary);
+
+    return { ...summary, results, summary: message };
+  }
+
+  /**
+   * Whether the compose file still points at a digest rather than the tag —
+   * the state a revert or a rollback leaves behind, and the same test
+   * clearRollbackPin applies before moving forward.
+   */
+  async isPinnedToPreviousImage(service) {
+    try {
+      const image = await this.readComposeImage(service);
+      return /@sha256:|^sha256:/.test(String(image || "")) && image !== service.image;
+    } catch {
+      return false;
+    }
+  }
+
+  /** What the dashboard needs to say about scheduled installs. Cheap; no Docker. */
+  async describeAutoUpdate() {
+    const settings = await this.loadSettings();
+    const state = await this.readAutoUpdateState();
+    const enabled = settings.autoUpdateEnabled === true;
+    const target = parseClockTime(settings.autoUpdateTime);
+
+    return {
+      enabled,
+      time: settings.autoUpdateTime,
+      tz: settings.tz,
+      tzValid: isValidTimeZone(settings.tz),
+      toleranceMinutes: AUTO_UPDATE_TOLERANCE_MS / 60_000,
+      nextRunAt: enabled && target ? describeNextRun({ now: Date.now(), settings }) : null,
+      lastRunAt: state.lastRunAt || null,
+      lastWindowKey: state.lastWindowKey || null,
+      lastJobId: state.lastJobId || null,
+      lastSummary: state.lastSummary || null,
+      optedIn: settings.selectedServiceIds.filter((serviceId) => settings.services[serviceId]?.autoUpdate === true)
+    };
+  }
+
   startUpdateSchedule({
     intervalMs = UPDATE_CHECK_INTERVAL_MS,
     startupDelayMs = 60_000,
@@ -1011,13 +1214,20 @@ export class ManagedStackService {
     };
   }
 
-  async checkAllUpdates(context = {}) {
+  async checkAllUpdates(context = {}, { serviceIds = null } = {}) {
     const settings = await this.loadSettings();
     const nextState = await this.readUpdateState();
     const results = [];
     const logger = this.scopedLogger(context);
+    // A scheduled install checks only the apps that opted in, so the window
+    // pulls their images and not the whole stack's.
+    const wanted = Array.isArray(serviceIds) ? new Set(serviceIds) : null;
 
     for (const serviceId of settings.selectedServiceIds) {
+      if (wanted && !wanted.has(serviceId)) {
+        continue;
+      }
+
       const service = this.requireService(settings, serviceId);
 
       // A service that was never deployed has no compose file to pull against.

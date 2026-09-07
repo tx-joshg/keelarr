@@ -21,6 +21,10 @@ export const controllerUpdatePath = path.join(dataDir, "controller-update.json")
 export const selfUpdateReceiptPath = path.join(dataDir, "self-update.json");
 export const selfUpdateLogPath = path.join(dataDir, "self-update.log");
 export const selfUpdateAckPath = (operationId) => path.join(dataDir, `self-update-ack-${operationId}`);
+// When the last install window ran and what it did. Its own file, for the same
+// reason as controller-update.json: isUpdateCheckDue() walks every value in
+// updates.json, and a key here would be mistaken for a service entry.
+export const autoUpdatePath = path.join(dataDir, "auto-update.json");
 // Kept apart from settings.json on purpose: settings are rendered into
 // deploy/.env and reported through the API, and the password hash belongs in
 // neither.

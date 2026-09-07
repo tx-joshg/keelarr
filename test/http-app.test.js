@@ -256,3 +256,32 @@ test("the health endpoint answers before the controller has finished starting", 
     await stopServer(server);
   }
 });
+
+test("auto-update can be turned on per app and read back, and the demo declines to run it", async () => {
+  const app = createHttpApp({ publicDir, keelarrApp: new DemoKeelarrAppService(), logger: createTestLogger(), requireAuth: false });
+  const server = await startServer(app);
+
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const post = (url, body) => fetch(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+
+    const toggled = await post("/api/services/radarr/auto-update", { enabled: true });
+    assert.equal(toggled.status, 200);
+    assert.deepEqual(await toggled.json(), { ok: true, serviceId: "radarr", autoUpdate: true });
+
+    const described = await (await fetch(`${base}/api/auto-update`)).json();
+    assert.equal(described.ok, true);
+    assert.deepEqual(described.autoUpdate.optedIn, ["radarr"]);
+
+    const state = await (await fetch(`${base}/api/state`)).json();
+    assert.equal(state.services.find((service) => service.id === "radarr").autoUpdate, true);
+    assert.equal(state.autoUpdate.enabled, false);
+
+    // A scheduler needs a host. The demo says so rather than answering 500.
+    const run = await post("/api/auto-update/run");
+    assert.equal(run.status, 409);
+    assert.match((await run.json()).error, /demo has no scheduler/);
+  } finally {
+    await stopServer(server);
+  }
+});

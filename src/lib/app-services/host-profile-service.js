@@ -363,6 +363,25 @@ export class HostProfileService {
    * different project, drop an override, or act on services it was not asked
    * about.
    */
+  /**
+   * Changes one service's overrides and nothing else. Read-modify-write on the
+   * saved settings, never on a copy the client sent: the settings form's
+   * shallow merge would replace the whole overrides object, and it never
+   * carries the keys that cutover and removal write behind its back.
+   */
+  async patchServiceOverride(serviceId, patch) {
+    const settings = await this.loadSettings();
+    const existing = settings.serviceOverrides?.[serviceId] || {};
+
+    return this.saveSettings({
+      ...settings,
+      serviceOverrides: {
+        ...(settings.serviceOverrides || {}),
+        [serviceId]: { ...existing, ...patch }
+      }
+    });
+  }
+
   async readControllerDefinition(settings, logger) {
     const inspects = await this.inspectContainers(settings, [hostname(), "keelarr"], { logger });
     const inspect = inspects[0] || null;
