@@ -290,6 +290,81 @@ test("the run holds the lease, so nothing else can change the stack underneath i
   assert.equal(lease.isHeld(), false, "released when the run is over");
 });
 
+test("the tick stands aside while a manual action is mid-work", async () => {
+  const lease = new MutationLease();
+  const { service, calls } = createService({ impls: { lease } });
+  let finish;
+  const restart = lease.track("Restarting an app", () => new Promise((resolve) => { finish = resolve; }));
+
+  const result = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+
+  assert.equal(result.reason, "action-in-progress");
+  assert.ok(!calls.some((call) => call.startsWith("auto-state:")), "the window is left unclaimed");
+  finish();
+  await restart;
+});
+
+test("the heartbeat renews the lease through a single phase longer than its term", async () => {
+  // A pull is judged on progress and has no deadline, so one phase can
+  // outlive the term by itself. The per-phase renewals cannot help there.
+  let clock = Date.parse("2026-09-07T08:00:00Z");
+  const lease = new MutationLease({ nowImpl: () => clock, ttlMs: 60_000 });
+  let beat = null;
+  let cleared = false;
+  const heldDuring = [];
+  const { service } = createService({
+    impls: {
+      lease,
+      setIntervalImpl: (fn) => { beat = fn; return { unref() {} }; },
+      clearIntervalImpl: () => { cleared = true; },
+      upgradeServiceImpl: async () => {
+        // One long pull: the clock moves three times, the heartbeat fires each time.
+        for (let i = 0; i < 3; i += 1) {
+          clock += 50_000;
+          beat();
+          heldDuring.push(lease.isHeld());
+        }
+        return { ok: true, phase: "up", stdout: "", stderr: "" };
+      }
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: clock });
+  await settle(service, tick.jobId);
+
+  assert.deepEqual(heldDuring, [true, true, true]);
+  assert.equal(cleared, true, "the heartbeat stops with the run");
+  assert.equal(lease.isHeld(), false);
+});
+
+test("undoing a refused claim does not erase a Run Now that got in first", async () => {
+  let taken = true;
+  let stateRef = null;
+  const lease = {
+    isHeld: () => false,
+    isBusy: () => false,
+    acquire: () => {
+      if (taken) {
+        // What a manual run writes in the gap between the claim and this refusal.
+        Object.assign(stateRef.auto, { lastJobId: "manual-1", lastTrigger: "manual", lastRunAt: "2026-09-07T08:00:20.000Z" });
+        throw new Error("A scheduled update is already running.");
+      }
+    },
+    renew: () => true,
+    release: () => true
+  };
+  const { service, state } = createService({ impls: { lease } });
+  stateRef = state;
+
+  const refused = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+
+  assert.equal(refused.reason, "lease-held");
+  assert.equal(state.auto.lastWindowKey, null, "the claim is undone");
+  assert.equal(state.auto.lastJobId, "manual-1", "the manual run's record survives");
+  assert.equal(state.auto.lastTrigger, "manual");
+  taken = false;
+});
+
 test("the lease outlives a run longer than its term", async () => {
   // Two apps, each taking most of the term: without renewal the second
   // upgrade would run with the lease expired and a removal would be let in.

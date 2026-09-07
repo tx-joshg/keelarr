@@ -361,6 +361,29 @@ test("a lease outlives neither its term nor a release from a superseded attempt"
   assert.equal(lease.isHeld(), false, "a crashed update must not wedge the stack for ever");
 });
 
+test("a manual action in flight keeps the lease from being taken, and lets go when it settles", async () => {
+  const lease = new MutationLease();
+  let finish;
+  const work = new Promise((resolve) => { finish = resolve; });
+  const running = lease.track("Restarting an app", () => work);
+
+  assert.equal(lease.isBusy(), true, "counted before the first await");
+  assert.throws(() => lease.acquire({ reason: "A scheduled update" }), /cannot start while an action is in progress/);
+
+  finish("done");
+  assert.equal(await running, "done");
+  assert.equal(lease.isBusy(), false);
+  lease.acquire({ reason: "A scheduled update", operationId: "run" });
+  await assert.rejects(() => lease.track("A cutover", async () => {}), /cannot start while a scheduled update is running/i);
+  lease.release("run");
+});
+
+test("an action that throws is no longer in flight", async () => {
+  const lease = new MutationLease();
+  await assert.rejects(() => lease.track("Removing an app", async () => { throw new Error("boom"); }), /boom/);
+  assert.equal(lease.isBusy(), false);
+});
+
 test("a holder that is still working can renew its term; nobody else can", () => {
   let clock = 0;
   const lease = new MutationLease({ nowImpl: () => clock, ttlMs: 1000 });

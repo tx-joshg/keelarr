@@ -80,6 +80,9 @@ export class ManagedStackService {
     readAutoUpdateStateImpl = readAutoUpdateState,
     writeAutoUpdateStateImpl = writeAutoUpdateState,
     lease = null,
+    leaseHeartbeatMs = 60_000,
+    setIntervalImpl = setInterval,
+    clearIntervalImpl = clearInterval,
     setComposeImageImpl = setComposeImage,
     upgradeAllServicesImpl = upgradeAllServices,
     upgradeServiceImpl = upgradeService,
@@ -115,6 +118,9 @@ export class ManagedStackService {
     this.readAutoUpdateState = readAutoUpdateStateImpl;
     this.writeAutoUpdateState = writeAutoUpdateStateImpl;
     this.lease = lease;
+    this.leaseHeartbeatMs = leaseHeartbeatMs;
+    this.setIntervalImpl = setIntervalImpl;
+    this.clearIntervalImpl = clearIntervalImpl;
     this.upgradeAllServices = upgradeAllServicesImpl;
     this.upgradeService = upgradeServiceImpl;
     this.writeStacks = writeStacksImpl;
@@ -278,6 +284,10 @@ export class ManagedStackService {
       return { ran: false, reason: "lease-held", windowKey: decision.windowKey };
     }
 
+    if (this.lease?.isBusy?.()) {
+      return { ran: false, reason: "action-in-progress", windowKey: decision.windowKey };
+    }
+
     const optedIn = settings.selectedServiceIds
       .map((serviceId) => settings.services[serviceId])
       .filter((service) => service && service.autoUpdate === true);
@@ -309,8 +319,19 @@ export class ManagedStackService {
       // The lease was taken between the check above and this — a controller
       // update pressed at 03:00 sharp. The claim is undone so the next tick
       // tries again while the window is open, instead of every tick that
-      // night answering "already ran" for a run that never started.
-      await this.writeAutoUpdateState(state);
+      // night answering "already ran" for a run that never started. Only the
+      // claim: a Run Now that got in meanwhile has written its own job id and
+      // must not be erased by putting the earlier snapshot back.
+      const current = await this.readAutoUpdateState();
+
+      if (current.lastWindowKey === decision.windowKey) {
+        await this.writeAutoUpdateState(
+          current.lastJobId === null && current.lastSummary === null
+            ? state
+            : { ...current, lastWindowKey: state.lastWindowKey ?? null }
+        );
+      }
+
       this.logger.warn("auto_update.start_refused", { message: error.message });
       return { ran: false, reason: "lease-held", windowKey: decision.windowKey };
     }
@@ -346,6 +367,11 @@ export class ManagedStackService {
       ]
     });
     const trigger = context.trigger || "scheduled";
+    // A single pull has no deadline — it is judged on progress — so one
+    // phase can outlive the lease's term on its own. The heartbeat renews
+    // for as long as the run is alive, whatever it is doing.
+    const heartbeat = this.setIntervalImpl(() => this.lease?.renew(operationId), this.leaseHeartbeatMs);
+    heartbeat.unref?.();
 
     return this.jobs.start(job, async (ctx) => {
       try {
@@ -364,6 +390,7 @@ export class ManagedStackService {
 
         return await this.runAutoUpdate(ctx, settings, services, { ...context, trigger, leaseOperationId: operationId });
       } finally {
+        this.clearIntervalImpl(heartbeat);
         this.lease?.release(operationId);
       }
     });

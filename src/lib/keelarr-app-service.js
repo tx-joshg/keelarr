@@ -146,10 +146,16 @@ export class KeelarrAppService {
   }
 
   async setup(input = {}, context = {}) {
+    // Save And Deploy recreates containers, so it is in flight like any other
+    // manual action; a plain save is not.
     if (input?.deploy === true) {
-      this.mutationLease.assertAvailable("Deploying the stack");
+      return this.mutationLease.track("Deploying the stack", () => this.runSetup(input, context));
     }
 
+    return this.runSetup(input, context);
+  }
+
+  async runSetup(input, context) {
     const {
       settings,
       generated,
@@ -205,24 +211,25 @@ export class KeelarrAppService {
    * connection that started it.
    */
   async startCutover(containerId, input = {}, context = {}) {
-    // Refused while the controller is replacing itself: it is about to stop
-    // the process running this, which would leave it half-finished.
-    this.mutationLease.assertAvailable("A cutover");
-    return {
+    // Every manual mutation goes through the lease's track: refused while a
+    // controller update or a scheduled run holds it, and counted as in flight
+    // until it settles so the scheduler cannot start underneath it. Checking
+    // alone was not enough — the check passed, the method awaited, and the
+    // tick took the lease in between.
+    return this.mutationLease.track("A cutover", async () => ({
       ok: true,
       job: buildJobSnapshot(this.cutoverService.startCutover(containerId, input, context))
-    };
+    }));
   }
 
   async startCutoverRevert(serviceId, input = {}, context = {}) {
     // Takes the managed container down and renames the original back. Never
     // checked the lease before: it was reachable underneath a controller
     // update, and underneath a scheduled upgrade of the same app.
-    this.mutationLease.assertAvailable("A cutover revert");
-    return {
+    return this.mutationLease.track("A cutover revert", async () => ({
       ok: true,
       job: buildJobSnapshot(this.cutoverService.startRevert(serviceId, input, context))
-    };
+    }));
   }
 
   async getJob(jobId) {
@@ -250,15 +257,14 @@ export class KeelarrAppService {
    * that is not something an install request should block on.
    */
   async installManagedService(serviceId, context = {}) {
-    // Refused while the controller is replacing itself: it is about to stop
-    // the process running this, which would leave it half-finished.
-    this.mutationLease.assertAvailable("Installing an app");
-    const result = await this.managedStackService.installManagedService(serviceId, context);
+    return this.mutationLease.track("Installing an app", async () => {
+      const result = await this.managedStackService.installManagedService(serviceId, context);
 
-    return {
-      ...result,
-      wiringJob: result.ok ? await this.startPostDeployWiring(context) : null
-    };
+      return {
+        ...result,
+        wiringJob: result.ok ? await this.startPostDeployWiring(context) : null
+      };
+    });
   }
 
   /**
@@ -282,8 +288,7 @@ export class KeelarrAppService {
   }
 
   async restartManagedService(serviceId, context = {}) {
-    this.mutationLease.assertAvailable("Restarting an app");
-    return this.managedStackService.restartManagedService(serviceId, context);
+    return this.mutationLease.track("Restarting an app", () => this.managedStackService.restartManagedService(serviceId, context));
   }
 
   async checkServiceUpdate(serviceId, context = {}) {
@@ -291,10 +296,7 @@ export class KeelarrAppService {
   }
 
   async upgradeManagedService(serviceId, context = {}) {
-    // Refused while the controller is replacing itself: it is about to stop
-    // the process running this, which would leave it half-finished.
-    this.mutationLease.assertAvailable("Upgrading an app");
-    return this.managedStackService.upgradeManagedService(serviceId, context);
+    return this.mutationLease.track("Upgrading an app", () => this.managedStackService.upgradeManagedService(serviceId, context));
   }
 
   async describeWiring(context = {}) {
@@ -313,23 +315,17 @@ export class KeelarrAppService {
   }
 
   async startRemoval(serviceId, input = {}, context = {}) {
-    // Refused while the controller is replacing itself: it is about to stop
-    // the process running this, which would leave it half-finished.
-    this.mutationLease.assertAvailable("Removing an app");
-    return {
+    return this.mutationLease.track("Removing an app", async () => ({
       ok: true,
       job: buildJobSnapshot(this.removalService.startRemoval(serviceId, input, context))
-    };
+    }));
   }
 
   async startRollback(serviceId, input = {}, context = {}) {
-    // Refused while the controller is replacing itself: it is about to stop
-    // the process running this, which would leave it half-finished.
-    this.mutationLease.assertAvailable("A rollback");
-    return {
+    return this.mutationLease.track("A rollback", async () => ({
       ok: true,
       job: buildJobSnapshot(this.managedStackService.startRollback(serviceId, input, context))
-    };
+    }));
   }
 
   async checkAllUpdates(context = {}) {
@@ -375,20 +371,19 @@ export class KeelarrAppService {
   }
 
   async upgradeAll(input = {}, context = {}) {
-    // Refused while the controller is replacing itself: it is about to stop
-    // the process running this, which would leave it half-finished.
-    this.mutationLease.assertAvailable("Upgrading every app");
-    const started = await this.managedStackService.startUpgradeAll(input, context).create();
+    return this.mutationLease.track("Upgrading every app", async () => {
+      const started = await this.managedStackService.startUpgradeAll(input, context).create();
 
-    // Nothing to upgrade means no job was created, so there is no progress to
-    // follow — just the answer.
-    if (started && started.job === null) {
-      return started;
-    }
+      // Nothing to upgrade means no job was created, so there is no progress to
+      // follow — just the answer.
+      if (started && started.job === null) {
+        return started;
+      }
 
-    return {
-      ok: true,
-      job: buildJobSnapshot(started)
-    };
+      return {
+        ok: true,
+        job: buildJobSnapshot(started)
+      };
+    });
   }
 }
