@@ -234,6 +234,28 @@ test("apps that are current are skipped as steps, not hidden", async () => {
   assert.equal(job.steps.find((step) => step.name === "radarr").status, STEP_STATUS.SUCCEEDED);
 });
 
+test("an app opted in but not deployed by Keelarr is skipped as such, not as current", async () => {
+  // Detected rows cannot opt in from the UI, but a stack removed since it
+  // opted in, or a hand-edited settings.json, gets here. "Already current"
+  // about a compose file that does not exist would be a lie.
+  const services = {
+    radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },
+    ombi: { id: "ombi", name: "Ombi", containerName: "ombi", autoUpdate: true }
+  };
+  const { service, calls } = createService({ services });
+  service.serviceIsDeployed = async (svc) => svc.id !== "ombi";
+
+  const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  const job = await settle(service, tick.jobId);
+
+  const ombi = job.steps.find((step) => step.name === "ombi");
+  assert.equal(ombi.status, STEP_STATUS.SKIPPED);
+  assert.equal(ombi.detail, "Not deployed by Keelarr, not touched.");
+  assert.ok(!calls.includes("check:ombi"), "an undeployed app is not pulled");
+  assert.ok(!calls.includes("upgrade:ombi"));
+  assert.equal(job.steps.find((step) => step.name === "radarr").status, STEP_STATUS.SUCCEEDED);
+});
+
 test("a scheduled revert leaves the rest of the run going", async () => {
   const services = {
     radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },

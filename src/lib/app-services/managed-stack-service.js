@@ -354,6 +354,12 @@ export class ManagedStackService {
         skipped += 1;
       } else if (inPlan(plan.upgradable, service)) {
         upgradable.push(service);
+      } else if (!(await this.serviceIsDeployed(service))) {
+        // Opted in and removed since, or a hand-edited settings file. The
+        // check above skipped it without writing a status, and "unknown"
+        // is not the reason — there is no stack.
+        ctx.skip(service.id, "Not deployed by Keelarr, not touched.");
+        skipped += 1;
       } else if (inPlan(plan.current, service)) {
         ctx.skip(service.id, "Already current.");
         skipped += 1;

@@ -46,6 +46,8 @@ It runs as one container, reads your Docker socket, and gives you:
   using the app's own test endpoint, and only then writes it.
 - **Upgrades and rollbacks**, including a config snapshot so a rollback restores
   the app's database, not just its image.
+- **Scheduled updates**, per app, at one time of day you choose — and, if you
+  ask for it, an upgrade that does not come back is put back on its own.
 - **Removal that is reversible** — keep the config, reinstall later, and the app
   comes back as itself rather than as a fresh install.
 

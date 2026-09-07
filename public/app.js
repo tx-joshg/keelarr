@@ -159,6 +159,86 @@ function formatDate(value) {
   return parsed.toLocaleString();
 }
 
+/** "3d 4h", "12m", "30s". Two units at most: more is noise at a glance. */
+function formatDuration(ms) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+
+  return minutes > 0 ? `${minutes}m` : `${seconds}s`;
+}
+
+/** "up 3d 4h", or null when the start is unknown. */
+function formatUptime(startedAt, now = Date.now()) {
+  const started = Date.parse(startedAt || "");
+  return Number.isNaN(started) ? null : `up ${formatDuration(now - started)}`;
+}
+
+/** "just now", "12 minutes ago", "3 hours ago", "2 days ago"; null when unknown. */
+function formatRelative(value, now = Date.now()) {
+  const then = Date.parse(value || "");
+
+  if (Number.isNaN(then)) {
+    return null;
+  }
+
+  const seconds = Math.floor((now - then) / 1000);
+  // Small negatives are clock skew between browser and host, not the future.
+  if (seconds < 45) {
+    return "just now";
+  }
+
+  const unit = (count, word) => `${count} ${word}${count === 1 ? "" : "s"} ago`;
+  if (seconds < 3600) {
+    return unit(Math.floor(seconds / 60), "minute");
+  }
+  if (seconds < 86400) {
+    return unit(Math.floor(seconds / 3600), "hour");
+  }
+  return unit(Math.floor(seconds / 86400), "day");
+}
+
+function formatClock(hour, minute) {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+/** The install schedule as one shape, with defaults, so no renderer null-checks it. */
+function autoUpdateSchedule() {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(state.settings?.autoUpdateTime || ""));
+  const hour = match ? Number(match[1]) : 3;
+  const minute = match ? Number(match[2]) : 0;
+
+  return {
+    enabled: state.settings?.autoUpdateEnabled === true,
+    hour,
+    minute,
+    clock: formatClock(hour, minute),
+    nextRunAt: state.autoUpdate?.nextRunAt || null
+  };
+}
+
+function autoUpdateServices() {
+  return selectedServices().filter((service) => service.autoUpdate);
+}
+
+/** "Radarr", "Radarr and Sonarr", "Radarr, Sonarr and Bazarr". */
+function joinNames(names) {
+  if (names.length <= 1) {
+    return names.join("");
+  }
+
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 function stripTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
@@ -235,7 +315,11 @@ function buildRenderService(id) {
     cutoverAt: live?.cutoverAt || null,
     rollbackContainerName: live?.rollbackContainerName || null,
     rollbackPoint: live?.rollbackPoint || null,
-    lastError: live?.lastError || null
+    lastError: live?.lastError || null,
+    autoUpdate: live?.autoUpdate === true,
+    startedAt: live?.startedAt || null,
+    restartCount: live?.restartCount ?? null,
+    lastUpgradedAt: live?.lastUpgradedAt || null
   };
 }
 
@@ -417,6 +501,86 @@ function runtimeIconMeta(service) {
  * "healthy" described how we learned it rather than what the user needs to
  * know. The tooltip carries the detail.
  */
+/** The row-menu item for the per-app opt-in: what it says, and why it might be off. */
+function autoUpdateItemMeta(service) {
+  const schedule = autoUpdateSchedule();
+  const off = { icon: "fa-solid fa-toggle-off", label: "Turn auto-update on", enabled: false };
+
+  // A scheduled install is an Upgrade run without anyone watching, and Upgrade
+  // only works on a stack Keelarr owns. Detected and draft rows still belong
+  // to whatever started them.
+  if (service.managementState === "catalog" || service.managementState === "generated") {
+    return { ...off, title: "Install it first." };
+  }
+
+  if (service.managementState !== "managed") {
+    return { ...off, title: "Only apps managed by Keelarr can be auto-updated. Cut over first." };
+  }
+
+  if (service.autoUpdate) {
+    return {
+      icon: "fa-solid fa-toggle-on",
+      label: "Turn auto-update off",
+      enabled: true,
+      title: schedule.enabled
+        ? `Auto-update is on. An update for this app is installed in the ${schedule.clock} window. Turn it off to go back to upgrading by hand.`
+        : "Auto-update is on for this app, but the schedule is off in Settings, so nothing is installed yet."
+    };
+  }
+
+  return {
+    icon: "fa-solid fa-toggle-off",
+    label: "Turn auto-update on",
+    enabled: true,
+    title: `Off. Updates for this app wait for you to click Upgrade. Turn it on to install them in the ${schedule.clock} window.`
+  };
+}
+
+/** The "auto" tag beside the version, or null when the app is not opted in. */
+function autoUpdateTagMeta(service) {
+  if (!service.autoUpdate) {
+    return null;
+  }
+
+  const schedule = autoUpdateSchedule();
+
+  if (!schedule.enabled) {
+    return { tone: "idle", title: "Auto-update is on for this app, but the schedule is off in Settings, so nothing is installed." };
+  }
+
+  return {
+    tone: "info",
+    title: service.updateStatus === "ready"
+      ? `Auto-update is on. The update that is ready will be installed in the ${schedule.clock} window.`
+      : `Auto-update is on. Installs in the ${schedule.clock} window.`
+  };
+}
+
+/**
+ * When the app last started and was last upgraded, as one muted line. Nothing
+ * at all for an app that has neither, so catalog-only rows stay two lines.
+ */
+function renderServiceTimes(service) {
+  if (service.managementState === "catalog") {
+    return "";
+  }
+
+  const parts = [];
+  const uptime = isServiceRunning(service) ? formatUptime(service.startedAt) : null;
+
+  if (uptime) {
+    parts.push(`<span title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
+  }
+
+  const upgraded = formatRelative(service.lastUpgradedAt);
+
+  if (upgraded) {
+    parts.push(`<span title="Last upgraded ${escapeHtml(formatDate(service.lastUpgradedAt))}.">upgraded ${escapeHtml(upgraded)}</span>`);
+  }
+
+  return parts.length ? `<div class="secondary-copy row-times">${parts.join(" &middot; ")}</div>` : "";
+}
+
 function healthIconMeta(service) {
   const detail = [
     service.httpStatus ? `HTTP ${service.httpStatus}` : null,
@@ -1079,6 +1243,10 @@ function renderRowMenu(service) {
             : "Pulls the latest image.")}
       ${item("rollback", "fa-solid fa-clock-rotate-left", "Downgrade", canRollbackImage(service),
         canRollbackImage(service) ? `Roll back to ${service.rollbackPoint?.taggedImage || "the previous image"}.` : "No previous image recorded yet.")}
+      ${(() => {
+        const auto = autoUpdateItemMeta(service);
+        return item("auto-update", auto.icon, auto.label, auto.enabled, auto.title);
+      })()}
       ${item("restart", "fa-solid fa-arrows-rotate", "Restart", running, running ? "" : "Not running.")}
       <div class="row-menu-divider"></div>
       ${item("remove", "fa-solid fa-trash-can", "Remove", installed, installed ? "" : "Nothing installed to remove.")}
@@ -1105,11 +1273,16 @@ function renderStackView() {
       const current = service.updateStatus === "current";
       const outOfDate = service.updateStatus === "ready";
       const versionClass = current ? "version-current" : outOfDate ? "version-stale" : "version-unknown";
-      const versionTitle = current
+      const checked = formatRelative(service.updateCheckedAt);
+      const versionTitle = (current
         ? "Up to date."
         : outOfDate
           ? "An update is available. Use the row menu to upgrade."
-          : "Update status unknown. Run Check Updates.";
+          : "Update status unknown. Run Check Updates.") + (checked ? ` Checked ${checked}.` : "");
+      const auto = autoUpdateTagMeta(service);
+      const autoTag = auto
+        ? `<span class="row-tag row-tag-${escapeHtml(auto.tone)}" title="${escapeHtml(auto.title)}" aria-label="${escapeHtml(auto.title)}">auto</span>`
+        : "";
       const version = service.appVersion
         ? `v${String(service.appVersion).replace(/^v/, "")}`
         : imageTagFromRef(service.observedImage);
@@ -1122,10 +1295,11 @@ function renderStackView() {
           <td class="cell-truncate">
             <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)}">${escapeHtml(service.name)}</a>
             <div class="secondary-copy">${escapeHtml(service.observedContainerName)}</div>
+            ${renderServiceTimes(service)}
           </td>
           <td class="cell-truncate">
             <div>${escapeHtml(service.observedImage)}</div>
-            <div class="secondary-copy ${versionClass}" title="${escapeHtml(versionTitle)}">${escapeHtml(version)}</div>
+            <div class="secondary-copy ${versionClass}" title="${escapeHtml(versionTitle)}">${escapeHtml(version)}${autoTag}</div>
           </td>
           <td>${escapeHtml(String(service.port))}</td>
           <td class="chip-cell col-center">${icon(compose)}</td>
@@ -1147,9 +1321,17 @@ function renderStackView() {
 
   const runningCount = services.filter((service) => isServiceRunning(service)).length;
   const updateReadyCount = services.filter((service) => service.updateStatus === "ready").length;
-  const summary = runningCount === 0
+  const autoCount = services.filter((service) => service.autoUpdate).length;
+  const schedule = autoUpdateSchedule();
+  // Nothing added when no app has opted in, so the line stays short by default.
+  const autoSummary = autoCount === 0
+    ? ""
+    : schedule.enabled
+      ? ` &middot; auto-update on for ${escapeHtml(String(autoCount))} app${autoCount === 1 ? "" : "s"} &middot; <span title="${escapeHtml(schedule.nextRunAt ? `Next ${formatDate(schedule.nextRunAt)}` : "")}">installs at ${escapeHtml(schedule.clock)}</span>`
+      : ` &middot; auto-update on for ${escapeHtml(String(autoCount))} app${autoCount === 1 ? "" : "s"}, schedule off`;
+  const summary = (runningCount === 0
     ? `${escapeHtml(String(services.length))} apps selected, none currently running under Keelarr monitoring.`
-    : `${escapeHtml(String(runningCount))} of ${escapeHtml(String(services.length))} live ${updateReadyCount > 0 ? `· ${escapeHtml(String(updateReadyCount))} update${updateReadyCount === 1 ? "" : "s"} ready` : "· no managed updates pending"}`;
+    : `${escapeHtml(String(runningCount))} of ${escapeHtml(String(services.length))} live ${updateReadyCount > 0 ? `· ${escapeHtml(String(updateReadyCount))} update${updateReadyCount === 1 ? "" : "s"} ready` : "· no managed updates pending"}`) + autoSummary;
 
   return `
     <div data-screen-label="Stack">
@@ -1412,6 +1594,87 @@ function renderActivityView() {
   `;
 }
 
+/**
+ * A settings checkbox. The form had no checkbox type: every field was text or
+ * a select, and the generic listeners read `.value`, which for a checkbox is
+ * the string "on". So these carry no `name` and are picked up by data attribute.
+ */
+function renderCheckboxRow(field) {
+  return `
+    <div class="form-row">
+      <label class="form-label" for="${escapeHtml(field.id)}">${escapeHtml(field.label)}</label>
+      <div class="form-input-wrap">
+        <label class="setting-check">
+          <input type="checkbox" id="${escapeHtml(field.id)}" ${field.attr} ${field.checked ? "checked" : ""}>
+          <span>
+            <strong>${escapeHtml(field.summary)}</strong>
+            <span class="setting-check-note">${escapeHtml(field.help)}</span>
+          </span>
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+/** Hour and minute as two selects: there is no time input in this UI to reuse. */
+function renderInstallWindowRow(schedule) {
+  const hours = Array.from({ length: 24 }, (_, hour) => hour);
+  const quarters = [0, 15, 30, 45];
+  // A minute hand-edited into settings.json is shown as it is, so Save does not
+  // silently round it to a quarter.
+  const minutes = quarters.includes(schedule.minute) ? quarters : [...quarters, schedule.minute].sort((a, b) => a - b);
+  const options = (values, current) => values
+    .map((value) => `<option value="${value}" ${value === current ? "selected" : ""}>${String(value).padStart(2, "0")}</option>`)
+    .join("");
+  const disabled = schedule.enabled ? "" : "disabled";
+
+  return `
+    <div class="form-row">
+      <label class="form-label" for="autoUpdateHour">Install Window</label>
+      <div class="form-input-wrap">
+        <div class="text-input-shell time-shell">
+          <select id="autoUpdateHour" class="text-input time-select" data-auto-update-field="hour" aria-label="Hour" ${disabled}>${options(hours, schedule.hour)}</select>
+          <span class="time-separator" aria-hidden="true">:</span>
+          <select id="autoUpdateMinute" class="text-input time-select" data-auto-update-field="minute" aria-label="Minute" ${disabled}>${options(minutes, schedule.minute)}</select>
+        </div>
+        <div class="help-text">Updates wait for this time rather than installing the moment they are found, so an upgrade does not restart an app while you are using it. Host time, in the Timezone above. The window stays open for thirty minutes if something else is running at that moment.</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderUpdatesFieldset() {
+  const schedule = autoUpdateSchedule();
+  const names = autoUpdateServices().map((service) => service.name);
+  const intro = names.length
+    ? `Auto-update is on for ${joinNames(names)}. Turn it on or off per app from the row menu on the Stack page.`
+    : "No app has auto-update turned on. Turn it on per app from the row menu on the Stack page.";
+
+  return `
+    <fieldset class="fieldset">
+      <legend class="legend legend-secondary">Updates</legend>
+      <div class="manage-intro">${escapeHtml(intro)}</div>
+      ${renderCheckboxRow({
+        id: "autoUpdateEnabled",
+        label: "Automatic Updates",
+        summary: "Install updates on a schedule",
+        help: "Applies only to apps with auto-update turned on. Each install is the same as Upgrade from the row menu, backup included, and is recorded in Activity.",
+        checked: schedule.enabled,
+        attr: 'data-auto-update-field="enabled"'
+      })}
+      ${renderInstallWindowRow(schedule)}
+      ${renderCheckboxRow({
+        id: "autoRevert",
+        label: "Auto-revert",
+        summary: "Put a failed upgrade back",
+        help: "When on, an upgrade that does not come back healthy is put back on the previous image — from the Upgrade button and from the schedule alike. When off, it is left as it is and reported. Healthy means the container stays up; an app that is running but broken inside counts as up.",
+        checked: state.settings?.autoRevert === true,
+        attr: 'data-setting-checkbox="autoRevert"'
+      })}
+    </fieldset>
+  `;
+}
+
 function renderSelectRow(field) {
   const value = String(state.settings?.[field.key] ?? "");
 
@@ -1433,6 +1696,10 @@ function renderSelectRow(field) {
 }
 
 function renderInputRow(field) {
+  if (field.type === "checkbox") {
+    return renderCheckboxRow(field);
+  }
+
   if (field.options) {
     return renderSelectRow(field);
   }
@@ -1774,6 +2041,7 @@ function renderSettingsView() {
         <legend class="legend legend-secondary">Backups</legend>
         ${backupFields.map((field) => renderInputRow(field)).join("")}
       </fieldset>
+      ${renderUpdatesFieldset()}
       ${ui.advOpen && advancedFields.length
         ? `
           <fieldset class="fieldset">
@@ -2516,6 +2784,11 @@ function settingsPayload(options = {}) {
     pgid: state.settings.pgid,
     ombiVersion: state.settings.ombiVersion,
     backupRetention: state.settings.backupRetention,
+    autoRevert: state.settings.autoRevert === true,
+    autoUpdateEnabled: state.settings.autoUpdateEnabled === true,
+    autoUpdateTime: autoUpdateSchedule().clock,
+    // Deliberately no serviceOverrides: the server shallow-merges this body over
+    // what it has, and a client copy would wipe the keys cutover writes.
     selectedServiceIds: selectedServiceIds(),
     ...(preferredAdapterId ? { preferredAdapterId } : {}),
     deploy
@@ -2868,6 +3141,7 @@ function applyState(data) {
   state.activity = data.activity;
   state.hostDetection = data.hostDetection || null;
   state.meta = data.meta || null;
+  state.autoUpdate = data.autoUpdate || null;
   if (!state.configured && ui.view === "stack") {
     ui.view = "settings";
   }
@@ -3744,6 +4018,38 @@ async function reviewServiceAdoption(containerId) {
   }
 }
 
+/**
+ * Turns scheduled installs on or off for one app. Saved at once through its own
+ * endpoint rather than waiting for the Settings form, because the switch and
+ * the evidence for it both live on the Stack page.
+ */
+async function setServiceAutoUpdate(serviceId, enabled) {
+  const service = selectedServices().find((candidate) => candidate.id === serviceId);
+  const name = service?.name || serviceId;
+  ui.pendingServices.add(serviceId);
+  render();
+
+  try {
+    await request(`/api/services/${serviceId}/auto-update`, {
+      method: "POST",
+      body: JSON.stringify({ enabled })
+    });
+    await loadState();
+    const schedule = autoUpdateSchedule();
+
+    if (!enabled) {
+      showToast(`Auto-update off for ${name}.`, "success");
+    } else if (schedule.enabled) {
+      showToast(`Auto-update on for ${name}. Installs in the ${schedule.clock} window.`, "success");
+    } else {
+      showToast(`Auto-update on for ${name}. The schedule is off, so turn it on in Settings.`, "info");
+    }
+  } finally {
+    ui.pendingServices.delete(serviceId);
+    render();
+  }
+}
+
 async function serviceAction(serviceId, action) {
   ui.pendingServices.add(serviceId);
   render();
@@ -4181,6 +4487,11 @@ appNode.addEventListener("click", (event) => {
       return;
     }
 
+    if (action === "auto-update" && service) {
+      setServiceAutoUpdate(serviceId, !service.autoUpdate).catch(showError);
+      return;
+    }
+
     if (action === "install" || action === "upgrade" || action === "restart") {
       const verb = { install: "Installing", upgrade: "Upgrading", restart: "Restarting" }[action];
 
@@ -4366,6 +4677,19 @@ appNode.addEventListener("input", (event) => {
     return;
   }
 
+  if (target.dataset.settingCheckbox) {
+    updateSettingValue(target.dataset.settingCheckbox, target.checked);
+    render();
+    return;
+  }
+
+  if (target.dataset.autoUpdateField === "enabled") {
+    updateSettingValue("autoUpdateEnabled", target.checked);
+    // Re-render so the hour and minute selects enable or disable with it.
+    render();
+    return;
+  }
+
   if (target.dataset.cutoverInput && ui.cutover) {
     ui.cutover.confirmText = target.value;
     // Re-render so the confirm button enables the moment the name matches.
@@ -4392,6 +4716,16 @@ appNode.addEventListener("change", (event) => {
 
   // Selects fire `change` rather than `input`, so they are handled here too.
   if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
+    return;
+  }
+
+  const timeField = target.dataset.autoUpdateField;
+  if ((timeField === "hour" || timeField === "minute") && target instanceof HTMLSelectElement) {
+    const schedule = autoUpdateSchedule();
+    const hour = timeField === "hour" ? Number(target.value) : schedule.hour;
+    const minute = timeField === "minute" ? Number(target.value) : schedule.minute;
+    updateSettingValue("autoUpdateTime", formatClock(hour, minute));
+    // No render: nothing else on the page depends on the value until Save.
     return;
   }
 
