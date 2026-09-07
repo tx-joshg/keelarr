@@ -117,6 +117,12 @@ export class ManagedStackService {
     this.readUpdateState = readUpdateStateImpl;
     this.readAutoUpdateState = readAutoUpdateStateImpl;
     this.writeAutoUpdateState = writeAutoUpdateStateImpl;
+    // Every change to auto-update.json goes through updateAutoUpdateState,
+    // one at a time, as a function of what is on disk at that moment. Two
+    // writers that each read, spread and write — the tick undoing a claim
+    // and a Run Now recording itself — would otherwise put each other's
+    // fields back.
+    this.autoUpdateStateQueue = Promise.resolve();
     this.lease = lease;
     this.leaseHeartbeatMs = leaseHeartbeatMs;
     this.setIntervalImpl = setIntervalImpl;
@@ -260,6 +266,24 @@ export class ManagedStackService {
     return () => clearInterval(timer);
   }
 
+  updateAutoUpdateState(change) {
+    const next = this.autoUpdateStateQueue.then(async () => {
+      const current = await this.readAutoUpdateState();
+      const updated = change(current);
+
+      if (updated !== current) {
+        await this.writeAutoUpdateState(updated);
+      }
+
+      return updated;
+    });
+
+    // A failed write must not wedge every later one behind it.
+    this.autoUpdateStateQueue = next.catch(() => {});
+
+    return next;
+  }
+
   async runAutoUpdateTick({ now = Date.now(), toleranceMs = AUTO_UPDATE_TOLERANCE_MS } = {}) {
     const settings = await this.loadSettings();
     const state = await this.readAutoUpdateState();
@@ -295,8 +319,7 @@ export class ManagedStackService {
     // Claimed before any work starts: a ten-minute job must not be started a
     // second time by the ticks that fire while it runs, and a crash mid-run
     // must not re-run at the next tick.
-    const claimed = {
-      ...state,
+    const claim = {
       lastWindowKey: decision.windowKey,
       lastRunAt: new Date(now).toISOString(),
       lastTrigger: "scheduled",
@@ -304,10 +327,10 @@ export class ManagedStackService {
       lastSummary: null,
       finishedAt: null
     };
-    await this.writeAutoUpdateState(claimed);
+    await this.updateAutoUpdateState((current) => ({ ...current, ...claim }));
 
     if (optedIn.length === 0) {
-      await this.writeAutoUpdateState({ ...claimed, lastSummary: { reason: "nothing-opted-in" } });
+      await this.updateAutoUpdateState((current) => ({ ...current, lastSummary: { reason: "nothing-opted-in" } }));
       return { ran: false, reason: "nothing-opted-in", windowKey: decision.windowKey };
     }
 
@@ -322,15 +345,15 @@ export class ManagedStackService {
       // night answering "already ran" for a run that never started. Only the
       // claim: a Run Now that got in meanwhile has written its own job id and
       // must not be erased by putting the earlier snapshot back.
-      const current = await this.readAutoUpdateState();
+      await this.updateAutoUpdateState((current) => {
+        if (current.lastWindowKey !== decision.windowKey) {
+          return current;
+        }
 
-      if (current.lastWindowKey === decision.windowKey) {
-        await this.writeAutoUpdateState(
-          current.lastJobId === null && current.lastSummary === null
-            ? state
-            : { ...current, lastWindowKey: state.lastWindowKey ?? null }
-        );
-      }
+        return current.lastJobId === null && current.lastSummary === null
+          ? state
+          : { ...current, lastWindowKey: state.lastWindowKey ?? null };
+      });
 
       this.logger.warn("auto_update.start_refused", { message: error.message });
       return { ran: false, reason: "lease-held", windowKey: decision.windowKey };
@@ -351,6 +374,16 @@ export class ManagedStackService {
     // an operator could start a removal or a cutover underneath an upgrade
     // that nobody is watching. Taken before the job exists so a refusal
     // leaves nothing behind.
+    // The tick stands aside for a running job; Run Now must too. A cutover
+    // or removal answers its request as soon as its job is registered, and
+    // the job keeps working — taking a container down, renaming — long after
+    // the manual action that started it has settled.
+    if (this.jobs?.list().some((job) => job.status === "running")) {
+      throw new KeelarrError("A scheduled update cannot start while another job is running. Wait for it to finish.", {
+        statusCode: 409
+      });
+    }
+
     const operationId = `auto-update-${randomUUID()}`;
     this.lease?.acquire({
       reason: "A scheduled update",
@@ -378,15 +411,17 @@ export class ManagedStackService {
         // The tick records a scheduled run when it claims the window. A run
         // started by hand has no window to claim, but it is still the last
         // run, and its summary must not be filed under the previous one's id.
-        const state = await this.readAutoUpdateState();
-        await this.writeAutoUpdateState({
-          ...state,
+        // Never the window key: that is the tick's alone, and a Run Now that
+        // happened to read a claim the tick was about to undo must not put
+        // it back.
+        await this.updateAutoUpdateState((current) => ({
+          ...current,
           lastRunAt: new Date().toISOString(),
           lastTrigger: trigger,
           lastJobId: job.id,
           lastSummary: null,
           finishedAt: null
-        });
+        }));
 
         return await this.runAutoUpdate(ctx, settings, services, { ...context, trigger, leaseOperationId: operationId });
       } finally {
@@ -496,13 +531,12 @@ export class ManagedStackService {
       details: results
     });
 
-    const state = await this.readAutoUpdateState();
-    await this.writeAutoUpdateState({
-      ...state,
-      lastTrigger: context.trigger || state.lastTrigger || "scheduled",
+    await this.updateAutoUpdateState((current) => ({
+      ...current,
+      lastTrigger: context.trigger || current.lastTrigger || "scheduled",
       finishedAt: new Date().toISOString(),
       lastSummary: summary
-    });
+    }));
     logger[level === "info" ? "info" : level]("service.auto_update", summary);
 
     return { ...summary, results, summary: message };

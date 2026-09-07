@@ -146,13 +146,14 @@ export class KeelarrAppService {
   }
 
   async setup(input = {}, context = {}) {
-    // Save And Deploy recreates containers, so it is in flight like any other
-    // manual action; a plain save is not.
-    if (input?.deploy === true) {
-      return this.mutationLease.track("Deploying the stack", () => this.runSetup(input, context));
-    }
-
-    return this.runSetup(input, context);
+    // Save And Generate rewrites every selected stack's compose file, deploy
+    // or not. Under a running upgrade that is the file between its pull and
+    // its up; under a revert it is the digest pin. So both forms are in
+    // flight like any other manual action.
+    return this.mutationLease.track(
+      input?.deploy === true ? "Deploying the stack" : "Writing the stack files",
+      () => this.runSetup(input, context)
+    );
   }
 
   async runSetup(input, context) {

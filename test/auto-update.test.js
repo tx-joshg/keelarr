@@ -290,6 +290,44 @@ test("the run holds the lease, so nothing else can change the stack underneath i
   assert.equal(lease.isHeld(), false, "released when the run is over");
 });
 
+test("Run Now is refused while another job is still working", async () => {
+  // A cutover answers its request as soon as the job is registered and keeps
+  // going. The manual action that started it has settled; the job has not.
+  const { service } = createService();
+  let finish;
+  const work = new Promise((resolve) => { finish = resolve; });
+  const job = service.jobs.create({ kind: "cutover", subject: { serviceId: "sonarr" }, steps: ["work"] });
+  service.jobs.start(job, (ctx) => ctx.step("work", () => work));
+
+  assert.throws(
+    () => service.startAutoUpdate({ ...SETTINGS, tz: "UTC" }, [{ id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true }], { trigger: "manual" }),
+    /cannot start while another job is running/
+  );
+  assert.equal(service.lease?.isHeld?.() ?? false, false, "nothing was left held");
+
+  finish({ detail: "done" });
+  await settle(service, job.id);
+});
+
+test("state changes are applied one at a time, as functions of what is on disk", async () => {
+  // Two writers that each read, spread and write would put each other's
+  // fields back. The queue makes the second see the first.
+  const { service, state } = createService({ autoState: { lastWindowKey: "2026-09-06" } });
+  const slowRead = service.readAutoUpdateState;
+  service.readAutoUpdateState = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return slowRead();
+  };
+
+  await Promise.all([
+    service.updateAutoUpdateState((current) => ({ ...current, lastJobId: "manual-1" })),
+    service.updateAutoUpdateState((current) => ({ ...current, lastWindowKey: null }))
+  ]);
+
+  assert.equal(state.auto.lastJobId, "manual-1");
+  assert.equal(state.auto.lastWindowKey, null);
+});
+
 test("the tick stands aside while a manual action is mid-work", async () => {
   const lease = new MutationLease();
   const { service, calls } = createService({ impls: { lease } });
