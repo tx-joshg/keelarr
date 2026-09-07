@@ -469,6 +469,32 @@ export function createHttpApp({
     }
   });
 
+  app.post("/api/services/:serviceId/auto-update", async (request, response, next) => {
+    try {
+      response.json(
+        await keelarrApp.setServiceAutoUpdate(request.params.serviceId, request.body || {}, requestContext(request))
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/auto-update", async (request, response, next) => {
+    try {
+      response.json(await keelarrApp.describeAutoUpdate(requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auto-update/run", async (request, response, next) => {
+    try {
+      response.status(202).json(await keelarrApp.runAutoUpdateNow(requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/services/upgrade-all", async (request, response, next) => {
     try {
       response.status(202).json(await keelarrApp.upgradeAll(request.body || {}, requestContext(request)));

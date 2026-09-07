@@ -36,6 +36,11 @@ export class DashboardService {
       ...state,
       catalog: listServices(),
       hostDetection,
+      // Same rule as withRollbackPoints: worth reporting, never worth failing
+      // the dashboard over.
+      autoUpdate: this.managedStackService
+        ? await this.managedStackService.describeAutoUpdate().catch(() => null)
+        : null,
       meta: {
         appName: APP_NAME,
         version: APP_VERSION,

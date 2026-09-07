@@ -136,3 +136,31 @@ test("a failed sample leaves the inventory usable rather than failing the refres
   assert.equal(result.items[0].resourceUsage, null);
   assert.equal(result.items[0].containerName, "radarr");
 });
+
+test("the inventory keeps the container's start time and restart count", async (t) => {
+  clearContainerStatsCache();
+  t.after(clearContainerStatsCache);
+
+  const inspectWith = (State, RestartCount) => async (_bin, args) => {
+    if (args[0] === "ps") return { ok: true, stdout: CONTAINER.Id, stderr: "", code: 0 };
+    // `docker inspect <container>` and `docker image inspect <ref>` both start
+    // with "inspect" after the subcommand; only the container one carries State.
+    if (args[0] === "inspect") return { ok: true, stdout: JSON.stringify([{ ...CONTAINER, State, RestartCount }]), stderr: "", code: 0 };
+    if (args[0] === "stats") return { ok: true, stdout: STATS_LINE, stderr: "", code: 0 };
+    return { ok: true, stdout: "[]", stderr: "", code: 0 };
+  };
+
+  const started = await scanDockerInventory({ dockerBin: "docker" }, {
+    runCommandImpl: inspectWith({ Running: true, Status: "running", StartedAt: "2026-08-01T00:00:00.000Z" }, 3)
+  });
+  assert.equal(started.items[0].startedAt, "2026-08-01T00:00:00.000Z");
+  assert.equal(started.items[0].restartCount, 3);
+
+  // Docker's "never started" sentinel is not a start time.
+  const never = await scanDockerInventory({ dockerBin: "docker" }, {
+    runCommandImpl: inspectWith({ Running: true, Status: "running", StartedAt: "0001-01-01T00:00:00Z" }, undefined)
+  });
+  assert.equal(never.items[0].startedAt, null);
+  assert.equal(never.items[0].restartCount, 0);
+  await settleContainerStats();
+});

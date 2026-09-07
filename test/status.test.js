@@ -418,3 +418,45 @@ test("a remapped adopted container still reports a port that never bound", () =>
 
   assert.deepEqual(findUnpublishedPorts(ports, { managedPort: 7879 }), ["7878/tcp"]);
 });
+
+test("buildDashboardState reports when a container started and when it was last upgraded", async () => {
+  const settings = {
+    initialized: true,
+    selectedServiceIds: ["radarr"],
+    services: {
+      radarr: {
+        id: "radarr", name: "Radarr", image: "lscr.io/linuxserver/radarr:latest",
+        sourceImage: null, sourceContainerId: null, sourceContainerName: null,
+        containerName: "radarr", composePath: "/tmp/keelarr-missing/compose.yml", envPath: "/tmp/keelarr-missing/.env",
+        appUrl: "http://localhost:7878", port: 7878, managedMode: "catalog", restartPolicy: "unless-stopped", networkMode: "bridge",
+        autoUpdate: true
+      }
+    },
+    downloadsRoot: "/share/Media/Downloads", mediaRoot: "/share/Media", plexLogsRoot: "", hostUrl: "http://localhost"
+  };
+  const item = {
+    recognized: true, serviceId: "radarr", containerId: "radarr123", containerName: "radarr",
+    image: "lscr.io/linuxserver/radarr:latest", imageId: "sha256:radarr", status: "running", healthStatus: "healthy",
+    startedAt: "2026-09-06T08:12:33.000Z", restartCount: 2,
+    ports: [], networks: [{ name: "bridge", address: "203.0.113.8" }], restartPolicy: "unless-stopped", networkMode: "bridge"
+  };
+  const updateState = { radarr: { status: "current", checkedAt: "2026-09-07T00:00:00.000Z", upgradedAt: "2026-09-01T03:04:05.000Z" } };
+  const dependencies = {
+    readActivityImpl: async () => [],
+    readUpdateStateImpl: async () => updateState,
+    composePsImpl: async () => { throw new Error("not compose-managed"); },
+    probeServiceImpl: async () => { throw new Error("no probe"); }
+  };
+
+  const running = await buildDashboardState(settings, { ...dependencies, scanDockerInventoryImpl: async () => ({ items: [item] }) });
+  const [service] = running.services;
+  assert.equal(service.startedAt, "2026-09-06T08:12:33.000Z");
+  assert.equal(service.restartCount, 2);
+  assert.equal(service.lastUpgradedAt, "2026-09-01T03:04:05.000Z");
+  assert.equal(service.autoUpdate, true);
+
+  // Stopped: no start time, but the last upgrade is still a fact.
+  const stopped = await buildDashboardState(settings, { ...dependencies, scanDockerInventoryImpl: async () => ({ items: [] }) });
+  assert.equal(stopped.services[0].startedAt, null);
+  assert.equal(stopped.services[0].lastUpgradedAt, "2026-09-01T03:04:05.000Z");
+});
