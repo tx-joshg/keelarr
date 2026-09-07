@@ -616,6 +616,8 @@ export class DemoKeelarrAppService {
       runtime.generated = true;
       if (deploy) {
         runtime.runtimeStatus = "running";
+        runtime.startedAt = nowIso();
+    runtime.startedAt = nowIso();
         runtime.reachable = true;
         runtime.httpStatus = 200;
         runtime.latencyMs = runtime.latencyMs || 60;
@@ -760,6 +762,8 @@ export class DemoKeelarrAppService {
         runtime.generated = true;
         runtime.managed = true;
         runtime.runtimeStatus = "running";
+        runtime.startedAt = nowIso();
+    runtime.startedAt = nowIso();
         runtime.reachable = true;
         runtime.updateStatus = "unchecked";
         runtime.rollbackContainerName = rollbackName;
@@ -1132,6 +1136,7 @@ export class DemoKeelarrAppService {
 
     runtime.generated = true;
     runtime.runtimeStatus = "running";
+    runtime.startedAt = nowIso();
     runtime.reachable = true;
     runtime.httpStatus = 200;
     runtime.latencyMs = runtime.latencyMs || 60;
@@ -1182,11 +1187,13 @@ export class DemoKeelarrAppService {
 
     runtime.generated = true;
     runtime.runtimeStatus = "running";
+    runtime.startedAt = nowIso();
     runtime.reachable = true;
     runtime.httpStatus = 200;
     runtime.latencyMs = runtime.latencyMs || 55;
     runtime.updateStatus = "current";
     runtime.updateCheckedAt = nowIso();
+    runtime.lastUpgradedAt = nowIso();
     runtime.lastError = null;
     this.demo.services[serviceId] = runtime;
 
