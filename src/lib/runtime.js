@@ -686,16 +686,22 @@ export async function upgradeService(settings, service, options = {}) {
     idleTimeoutMs: options.pullIdleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
   });
   if (!pullResult.ok) {
-    return pullResult;
+    // Nothing has changed yet: the old container is still running. A caller
+    // can report this without reverting anything.
+    return { ...pullResult, phase: "pull" };
   }
 
   const upResult = await runCommand(settings.dockerBin, composeArgs(service, "up", "-d"), {
     logger: options.logger,
     idleTimeoutMs: options.pullIdleTimeoutMs || DEFAULT_IDLE_TIMEOUT_MS
   });
+  // A failed `up` is a different situation from a failed pull: the old
+  // container is already gone and the new one never started. That is "did not
+  // come up", and a caller with auto-revert on treats it as such.
   return {
     ok: upResult.ok,
     code: upResult.code,
+    phase: "up",
     stdout: `${pullResult.stdout}\n${upResult.stdout}`.trim(),
     stderr: `${pullResult.stderr}\n${upResult.stderr}`.trim()
   };

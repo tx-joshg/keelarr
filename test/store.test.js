@@ -104,3 +104,12 @@ test("a stack that has never been set up still gets the default selection", () =
 
   assert.ok(settings.selectedServiceIds.length > 0);
 });
+
+test("auto-revert is off by default and is a strict boolean", () => {
+  // Off keeps today's behaviour, so an existing settings.json with no key
+  // changes nothing. And a string "true" from a hand-edit must not read as on.
+  assert.equal(normalizeSettings({}).autoRevert, false);
+  assert.equal(normalizeSettings({ autoRevert: true }).autoRevert, true);
+  assert.equal(normalizeSettings({ autoRevert: "true" }).autoRevert, false);
+  assert.equal(normalizeSettings({ autoRevert: 1 }).autoRevert, false);
+});
