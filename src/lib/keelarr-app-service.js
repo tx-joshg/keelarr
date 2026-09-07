@@ -146,6 +146,10 @@ export class KeelarrAppService {
   }
 
   async setup(input = {}, context = {}) {
+    if (input?.deploy === true) {
+      this.mutationLease.assertAvailable("Deploying the stack");
+    }
+
     const {
       settings,
       generated,
@@ -211,6 +215,10 @@ export class KeelarrAppService {
   }
 
   async startCutoverRevert(serviceId, input = {}, context = {}) {
+    // Takes the managed container down and renames the original back. Never
+    // checked the lease before: it was reachable underneath a controller
+    // update, and underneath a scheduled upgrade of the same app.
+    this.mutationLease.assertAvailable("A cutover revert");
     return {
       ok: true,
       job: buildJobSnapshot(this.cutoverService.startRevert(serviceId, input, context))
@@ -274,6 +282,7 @@ export class KeelarrAppService {
   }
 
   async restartManagedService(serviceId, context = {}) {
+    this.mutationLease.assertAvailable("Restarting an app");
     return this.managedStackService.restartManagedService(serviceId, context);
   }
 

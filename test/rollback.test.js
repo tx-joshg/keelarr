@@ -933,6 +933,33 @@ test("a compose-up that never started the new image is left retryable, not recor
   }
 });
 
+test("a revert whose deploy fails and whose pin cannot be cleared says the pin is still there", async (t) => {
+  // Claiming "not pinned" when the compose file still names the digest
+  // would send the next ordinary deploy at a revert that never ran.
+  const stack = await createStack(t);
+  let composeWrites = 0;
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    deployResult: { ok: false, stdout: "", stderr: "port is already allocated", code: 1 },
+    impls: {
+      setComposeImageImpl: async (service, imageRef) => {
+        composeWrites += 1;
+        // The pin goes in for real; putting the tag back is what fails.
+        if (composeWrites > 1) {
+          throw new Error("EROFS: read-only file system");
+        }
+        await setComposeImage(service, imageRef);
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /Revert was not possible: port is already allocated\. The compose file is still pinned to linuxserver\/radarr@sha256:previous/);
+});
+
 test("a revert whose deploy fails puts the compose file back on the tag", async (t) => {
   // restoreImage pins the digest before it deploys. If the deploy fails the
   // pin must not outlive it, or the next ordinary deploy targets a revert

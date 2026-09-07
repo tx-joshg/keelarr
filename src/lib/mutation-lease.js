@@ -57,6 +57,23 @@ export class MutationLease {
     return this.held;
   }
 
+  /**
+   * Restarts the term for the holder. A scheduled run that upgrades several
+   * apps in turn can outlive the fixed term; it renews as it goes, so the
+   * term only ever expires a claim whose owner has actually gone quiet.
+   */
+  renew(operationId) {
+    const existing = this.current();
+
+    if (!existing || !operationId || existing.operationId !== operationId) {
+      return false;
+    }
+
+    existing.takenAt = this.now();
+
+    return true;
+  }
+
   release(operationId = null) {
     if (!this.held) {
       return false;

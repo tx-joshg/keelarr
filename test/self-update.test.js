@@ -361,6 +361,21 @@ test("a lease outlives neither its term nor a release from a superseded attempt"
   assert.equal(lease.isHeld(), false, "a crashed update must not wedge the stack for ever");
 });
 
+test("a holder that is still working can renew its term; nobody else can", () => {
+  let clock = 0;
+  const lease = new MutationLease({ nowImpl: () => clock, ttlMs: 1000 });
+  lease.acquire({ reason: "A scheduled update", operationId: "run-1" });
+
+  clock = 900;
+  assert.equal(lease.renew("run-2"), false, "a different operation must not extend it");
+  assert.equal(lease.renew("run-1"), true);
+  clock = 1800;
+  assert.equal(lease.isHeld(), true, "renewed at 900, so good until 1900");
+  clock = 1901;
+  assert.equal(lease.isHeld(), false);
+  assert.equal(lease.renew("run-1"), false, "an expired claim cannot be revived");
+});
+
 test("reconciliation reports success from the running image, not from the helper", async (t) => {
   const { service, receipts } = await createUpdater(t, {
     runningImageId: "sha256:new",

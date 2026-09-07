@@ -301,7 +301,19 @@ export class ManagedStackService {
       return { ran: false, reason: "nothing-opted-in", windowKey: decision.windowKey };
     }
 
-    const job = this.startAutoUpdate(settings, optedIn, { trigger: "scheduled" });
+    let job;
+
+    try {
+      job = this.startAutoUpdate(settings, optedIn, { trigger: "scheduled" });
+    } catch (error) {
+      // The lease was taken between the check above and this — a controller
+      // update pressed at 03:00 sharp. The claim is undone so the next tick
+      // tries again while the window is open, instead of every tick that
+      // night answering "already ran" for a run that never started.
+      await this.writeAutoUpdateState(state);
+      this.logger.warn("auto_update.start_refused", { message: error.message });
+      return { ran: false, reason: "lease-held", windowKey: decision.windowKey };
+    }
 
     return { ran: true, jobId: job.id, windowKey: decision.windowKey };
   }
@@ -350,7 +362,7 @@ export class ManagedStackService {
           finishedAt: null
         });
 
-        return await this.runAutoUpdate(ctx, settings, services, { ...context, trigger });
+        return await this.runAutoUpdate(ctx, settings, services, { ...context, trigger, leaseOperationId: operationId });
       } finally {
         this.lease?.release(operationId);
       }
@@ -364,7 +376,11 @@ export class ManagedStackService {
     // as ok:false for that service while the check as a whole still succeeds.
     // Left unread, an outage would file as a clean unattended run.
     const checkErrors = new Map();
+    // The lease has a fixed term so a controller killed mid-run cannot wedge
+    // the stack. A run that is still working renews it as it goes.
+    const keepAlive = () => this.lease?.renew(context.leaseOperationId);
 
+    keepAlive();
     await ctx.step("check", async () => {
       const checked = await this.checkAllUpdates(
         { ...context, trigger: "auto-update" },
@@ -391,6 +407,8 @@ export class ManagedStackService {
     let skipped = 0;
 
     for (const service of services) {
+      keepAlive();
+
       // First, because a stale "ready" from before the stack was removed
       // would otherwise put it in the plan. The check above skipped it
       // without writing a status, so the run asks the same question.
@@ -431,11 +449,13 @@ export class ManagedStackService {
       }
     }
 
-    const upgradeResults = await this.upgradeAsSteps(ctx, settings, upgradable, logger);
+    const upgradeResults = await this.upgradeAsSteps(ctx, settings, upgradable, logger, { keepAlive });
     const results = [...upgradeResults, ...unchecked];
     const upgraded = upgradeResults.filter((result) => result.ok && !result.skipped).length;
-    const reverted = upgradeResults.filter((result) => result.reverted === true).length;
-    const failedOutright = upgradeResults.filter((result) => !result.ok && result.reverted !== true).length;
+    // "Reverted" is a recovery. An app put back on its previous image that
+    // did not come up either is down, and is counted with the failures.
+    const reverted = upgradeResults.filter((result) => result.reverted === true && result.revertedDown !== true).length;
+    const failedOutright = upgradeResults.filter((result) => !result.ok && (result.reverted !== true || result.revertedDown === true)).length;
     const summary = { upgraded, reverted, failed: failedOutright, unchecked: unchecked.length, skipped };
     const message = `Scheduled update: ${upgraded} upgraded${reverted ? `, ${reverted} reverted` : ""}${
       failedOutright ? `, ${failedOutright} failed` : ""
@@ -1187,7 +1207,12 @@ export class ManagedStackService {
     return {
       serviceId: service.id,
       ok: false,
-      reverted: revert.pinned === true,
+      // Restored means the container was recreated on the previous image.
+      // Pinned means the compose file names it, which a failed restore can
+      // also leave behind. Only the first is a revert in any useful sense.
+      reverted: revert.restored === true,
+      revertedDown: revert.restored === true && revert.ok !== true,
+      pinned: revert.pinned === true,
       revertedTo: revert.imageRef || null,
       revertHealth: revert.health || null,
       health,
@@ -1195,7 +1220,7 @@ export class ManagedStackService {
       stderr: result.stderr,
       error: revert.ok
         ? `${health.reason} Reverted to ${revertedTo}.`
-        : revert.pinned
+        : revert.restored
           ? `${health.reason} Reverted to ${revertedTo}, but that did not come back either: ${revert.reason}`
           : `${health.reason} Revert was not possible: ${revert.reason}`
     };
@@ -1223,7 +1248,7 @@ export class ManagedStackService {
       if (newImageStarted) {
         await this.recordFreshImageState(service.id, { upgradedAt: new Date().toISOString() });
       }
-      return { ok: false, pinned: false, reason };
+      return { ok: false, pinned: false, restored: false, reason };
     };
 
     // Written by upgradeService before the pull; its imageId is the old one,
@@ -1251,21 +1276,30 @@ export class ManagedStackService {
 
     if (!restore.ok) {
       // The compose file was already pinned to the digest. Left like that, the
-      // next ordinary deploy would target a revert that never happened.
-      await this.clearRollbackPin(service, logger).catch((error) => {
+      // next ordinary deploy would target a revert that never happened. If
+      // the pin cannot be cleared either, say so rather than claim it was.
+      let stillPinned = false;
+
+      try {
+        await this.clearRollbackPin(service, logger);
+      } catch (error) {
+        stillPinned = true;
         logger.error("service.revert_unpin_failed", { serviceId: service.id, message: error.message });
-      });
+      }
+
+      const deployReason = (restore.stderr || restore.stdout || "Compose could not start the previous image.").split("\n").filter(Boolean).pop();
+      const reason = stillPinned
+        ? `${deployReason.replace(/\.?$/, ".")} The compose file is still pinned to ${point.imageRef}.`
+        : deployReason;
+
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
-        message: `Upgraded ${service.name}, but it did not come back healthy, and the revert failed too.`,
-        details: { serviceId: service.id, reason: health.reason, reverted: false, stderr: restore.stderr }
+        message: `Upgraded ${service.name}, but it did not come back healthy, and the revert failed too: ${reason}`,
+        details: { serviceId: service.id, reason: health.reason, reverted: false, stillPinned, stderr: restore.stderr }
       });
-      return {
-        ok: false,
-        pinned: false,
-        reason: (restore.stderr || restore.stdout || "Compose could not start the previous image.").split("\n").filter(Boolean).pop()
-      };
+
+      return { ok: false, pinned: stillPinned, restored: false, imageRef: point.imageRef, taggedImage: point.taggedImage, reason };
     }
 
     const revertHealth = await this.verifyServiceHealth(settings, service, { ...this.verifyOptions, logger });
@@ -1296,6 +1330,7 @@ export class ManagedStackService {
       return {
         ok: false,
         pinned: true,
+        restored: true,
         imageRef: point.imageRef,
         taggedImage: point.taggedImage,
         health: revertHealth,
@@ -1322,7 +1357,7 @@ export class ManagedStackService {
       revertHealth: revertHealth.outcome
     });
 
-    return { ok: true, pinned: true, imageRef: point.imageRef, taggedImage: point.taggedImage, health: revertHealth };
+    return { ok: true, pinned: true, restored: true, imageRef: point.imageRef, taggedImage: point.taggedImage, health: revertHealth };
   }
 
   async upgradeManagedService(serviceId, context = {}) {
@@ -1482,20 +1517,29 @@ export class ManagedStackService {
    * the rest half-upgraded, so a failure is recorded and the loop goes on.
    * Shared by Upgrade All and by scheduled installs.
    */
-  async upgradeAsSteps(ctx, settings, services, logger) {
+  async upgradeAsSteps(ctx, settings, services, logger, { keepAlive = null } = {}) {
     const results = [];
 
     for (const service of services) {
+      keepAlive?.();
+
       try {
         const result = await ctx.step(service.id, async () => {
           const outcome = await this.upgradeOne(settings, service, logger, {
-            onPhase: (label) => ctx.note(service.id, label)
+            onPhase: (label) => {
+              keepAlive?.();
+              ctx.note(service.id, label);
+            }
           });
 
           if (!outcome.ok) {
             throw new KeelarrError(outcome.error || `Upgrade failed for ${service.name}.`, {
               statusCode: 500,
-              details: { reverted: outcome.reverted === true, revertedTo: outcome.revertedTo || null }
+              details: {
+                reverted: outcome.reverted === true,
+                revertedDown: outcome.revertedDown === true,
+                revertedTo: outcome.revertedTo || null
+              }
             });
           }
 
@@ -1514,7 +1558,8 @@ export class ManagedStackService {
           serviceId: service.id,
           ok: false,
           error: error.message,
-          reverted: error.details?.reverted === true
+          reverted: error.details?.reverted === true,
+          revertedDown: error.details?.revertedDown === true
         });
       }
     }

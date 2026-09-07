@@ -290,6 +290,87 @@ test("the run holds the lease, so nothing else can change the stack underneath i
   assert.equal(lease.isHeld(), false, "released when the run is over");
 });
 
+test("the lease outlives a run longer than its term", async () => {
+  // Two apps, each taking most of the term: without renewal the second
+  // upgrade would run with the lease expired and a removal would be let in.
+  let clock = Date.parse("2026-09-07T08:00:00Z");
+  const lease = new MutationLease({ nowImpl: () => clock, ttlMs: 60_000 });
+  const heldDuring = [];
+  const services = {
+    radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },
+    sonarr: { id: "sonarr", name: "Sonarr", containerName: "sonarr", autoUpdate: true }
+  };
+  const { service } = createService({
+    services,
+    impls: {
+      lease,
+      upgradeServiceImpl: async (_s, svc) => {
+        heldDuring.push(`${svc.id}:${lease.isHeld()}`);
+        clock += 50_000;
+        return { ok: true, phase: "up", stdout: "", stderr: "" };
+      }
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: clock });
+  await settle(service, tick.jobId);
+
+  assert.deepEqual(heldDuring, ["radarr:true", "sonarr:true"]);
+  assert.equal(lease.isHeld(), false);
+});
+
+test("a reverted app that stays down is counted with the failures, not the recoveries", async () => {
+  const services = {
+    radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },
+    sonarr: { id: "sonarr", name: "Sonarr", containerName: "sonarr", autoUpdate: true }
+  };
+  const activity = [];
+  const { service, state } = createService({
+    services,
+    autoRevert: true,
+    impls: {
+      verifyServiceHealthImpl: async (_s, svc) => svc.id === "radarr"
+        ? { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." }
+        : { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" },
+      appendActivityImpl: async (entry) => {
+        activity.push(entry);
+      }
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  const job = await settle(service, tick.jobId);
+
+  assert.match(job.steps.find((step) => step.name === "radarr").error, /did not come back either/);
+  assert.deepEqual(state.auto.lastSummary, { upgraded: 1, reverted: 0, failed: 1, unchecked: 0, skipped: 0 });
+  assert.match(activity.find((entry) => entry.kind === "auto-update").message, /1 failed/);
+});
+
+test("a lease taken between the stand-aside check and the start does not burn the window", async () => {
+  let taken = true;
+  const lease = {
+    isHeld: () => false,
+    acquire: () => {
+      if (taken) {
+        throw new Error("A Keelarr update is already running.");
+      }
+    },
+    renew: () => true,
+    release: () => true
+  };
+  const { service, state } = createService({ impls: { lease } });
+
+  const refused = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  assert.equal(refused.ran, false);
+  assert.equal(refused.reason, "lease-held");
+  assert.equal(state.auto.lastWindowKey, undefined, "the claim was undone");
+
+  taken = false;
+  const ran = await service.runAutoUpdateTick({ now: at("2026-09-07T08:01:00Z") });
+  assert.equal(ran.ran, true, "the next tick inside the window still runs");
+  await settle(service, ran.jobId);
+});
+
 test("a failed image check is part of the outcome, not swallowed", async () => {
   const services = {
     radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },
