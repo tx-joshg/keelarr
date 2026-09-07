@@ -4,6 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 
 import { AUTO_UPDATE_TOLERANCE_MS, decideAutoUpdate, describeNextRun } from "../src/lib/auto-update-window.js";
+import { MutationLease } from "../src/lib/mutation-lease.js";
 import { ManagedStackService } from "../src/lib/app-services/managed-stack-service.js";
 import { JOB_STATUS, JobRegistry, STEP_STATUS } from "../src/lib/jobs.js";
 import { HEALTH_OUTCOME } from "../src/lib/health.js";
@@ -72,6 +73,15 @@ test("the next run is the next occurrence of the time, today or tomorrow", () =>
   // 04:00 local: tomorrow's.
   assert.equal(describeNextRun({ now: at("2026-09-07T09:00:00Z"), settings: SETTINGS }), "2026-09-08T08:00:00.000Z");
   assert.equal(describeNextRun({ now: at("2026-09-07T09:00:00Z"), settings: { ...SETTINGS, autoUpdateTime: "nope" } }), null);
+});
+
+test("an open window that has not run yet is the next run, not tomorrow's", () => {
+  // At 03:10 with the window unclaimed — the tick stood aside behind a job —
+  // the scheduler may start on the next minute.
+  assert.equal(describeNextRun({ now: at("2026-09-07T08:10:00Z"), settings: SETTINGS, state: {} }), "2026-09-07T08:00:00.000Z");
+  assert.equal(describeNextRun({ now: at("2026-09-07T08:10:00Z"), settings: SETTINGS, state: { lastWindowKey: "2026-09-07" } }), "2026-09-08T08:00:00.000Z");
+  // Exactly on the minute, already run: tomorrow, not "now".
+  assert.equal(describeNextRun({ now: at("2026-09-07T08:00:00Z"), settings: SETTINGS, state: { lastWindowKey: "2026-09-07" } }), "2026-09-08T08:00:00.000Z");
 });
 
 // --- the tick and the job ------------------------------------------------------
@@ -163,7 +173,7 @@ test("a tick inside the window checks the opted-in apps and upgrades the ones th
   assert.ok(!calls.includes("upgrade:sonarr"));
   assert.equal(state.auto.lastWindowKey, "2026-09-07");
   assert.equal(state.auto.lastJobId, tick.jobId);
-  assert.deepEqual(state.auto.lastSummary, { upgraded: 1, reverted: 0, failed: 0, skipped: 0 });
+  assert.deepEqual(state.auto.lastSummary, { upgraded: 1, reverted: 0, failed: 0, unchecked: 0, skipped: 0 });
   assert.ok(calls.includes("activity:auto-update"));
 });
 
@@ -242,7 +252,9 @@ test("an app opted in but not deployed by Keelarr is skipped as such, not as cur
     radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },
     ombi: { id: "ombi", name: "Ombi", containerName: "ombi", autoUpdate: true }
   };
-  const { service, calls } = createService({ services });
+  // A "ready" left over from before the stack was removed: the check skips
+  // an undeployed app without touching its status, so the stale one stays.
+  const { service, calls } = createService({ services, updateState: { ombi: { status: "ready" } } });
   service.serviceIsDeployed = async (svc) => svc.id !== "ombi";
 
   const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
@@ -254,6 +266,80 @@ test("an app opted in but not deployed by Keelarr is skipped as such, not as cur
   assert.ok(!calls.includes("check:ombi"), "an undeployed app is not pulled");
   assert.ok(!calls.includes("upgrade:ombi"));
   assert.equal(job.steps.find((step) => step.name === "radarr").status, STEP_STATUS.SUCCEEDED);
+});
+
+test("the run holds the lease, so nothing else can change the stack underneath it", async () => {
+  const lease = new MutationLease();
+  const heldDuring = [];
+  const { service, calls } = createService({
+    impls: {
+      lease,
+      upgradeServiceImpl: async (_s, svc) => {
+        calls.push(`upgrade:${svc.id}`);
+        heldDuring.push(lease.isHeld());
+        assert.throws(() => lease.assertAvailable("Removing an app"), /cannot start while a scheduled update is running/i);
+        return { ok: true, phase: "up", stdout: "", stderr: "" };
+      }
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  await settle(service, tick.jobId);
+
+  assert.deepEqual(heldDuring, [true]);
+  assert.equal(lease.isHeld(), false, "released when the run is over");
+});
+
+test("a failed image check is part of the outcome, not swallowed", async () => {
+  const services = {
+    radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true },
+    sonarr: { id: "sonarr", name: "Sonarr", containerName: "sonarr", autoUpdate: true }
+  };
+  const activity = [];
+  const { service, calls, state } = createService({
+    services,
+    impls: {
+      checkForUpdatesImpl: async (_s, svc) => {
+        calls.push(`check:${svc.id}`);
+        return svc.id === "sonarr"
+          ? { ok: false, updateStatus: "unknown", stdout: "", stderr: "Error response from daemon: pull access denied" }
+          : { ok: true, updateStatus: "ready", stdout: "", stderr: "" };
+      },
+      appendActivityImpl: async (entry) => {
+        activity.push(entry);
+      }
+    }
+  });
+
+  const tick = await service.runAutoUpdateTick({ now: at("2026-09-07T08:00:00Z") });
+  const job = await settle(service, tick.jobId);
+
+  const sonarr = job.steps.find((step) => step.name === "sonarr");
+  assert.equal(sonarr.status, STEP_STATUS.FAILED);
+  assert.match(sonarr.error, /update check failed.*pull access denied/);
+  assert.match(job.steps.find((step) => step.name === "check").detail, /1 could not be checked/);
+  assert.ok(!calls.includes("upgrade:sonarr"));
+  assert.equal(job.steps.find((step) => step.name === "radarr").status, STEP_STATUS.SUCCEEDED);
+  assert.deepEqual(state.auto.lastSummary, { upgraded: 1, reverted: 0, failed: 0, unchecked: 1, skipped: 0 });
+  const summary = activity.find((entry) => entry.kind === "auto-update");
+  assert.equal(summary.level, "warn");
+  assert.match(summary.message, /1 could not be checked/);
+});
+
+test("a run started by hand records itself without claiming the window", async () => {
+  const { service, state } = createService({ autoState: { lastWindowKey: "2026-09-06", lastJobId: "job-old", lastSummary: { upgraded: 3 } } });
+
+  const job = service.startAutoUpdate(
+    { ...SETTINGS, tz: "America/Chicago", selectedServiceIds: ["radarr"], services: { radarr: { id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true } } },
+    [{ id: "radarr", name: "Radarr", containerName: "radarr", autoUpdate: true }],
+    { trigger: "manual" }
+  );
+  await settle(service, job.id);
+
+  assert.equal(state.auto.lastWindowKey, "2026-09-06", "tonight's window is still tonight's");
+  assert.equal(state.auto.lastJobId, job.id);
+  assert.equal(state.auto.lastTrigger, "manual");
+  assert.equal(state.auto.lastSummary.upgraded, 1);
 });
 
 test("a scheduled revert leaves the rest of the run going", async () => {
@@ -271,7 +357,7 @@ test("a scheduled revert leaves the rest of the run going", async () => {
   assert.match(radarr.error, /Reverted to/);
   assert.ok(calls.includes("restore:radarr"));
   assert.equal(job.steps.find((step) => step.name === "sonarr").status, STEP_STATUS.SUCCEEDED);
-  assert.deepEqual(state.auto.lastSummary, { upgraded: 1, reverted: 1, failed: 0, skipped: 0 });
+  assert.deepEqual(state.auto.lastSummary, { upgraded: 1, reverted: 1, failed: 0, unchecked: 0, skipped: 0 });
 });
 
 test("nothing opted in claims the window and creates no job", async () => {

@@ -506,6 +506,22 @@ function autoUpdateItemMeta(service) {
   const schedule = autoUpdateSchedule();
   const off = { icon: "fa-solid fa-toggle-off", label: "Turn auto-update on", enabled: false };
 
+  // Turning it off is always allowed. An app that opted in and has since
+  // been removed, or handed back to its original container, must not be left
+  // wearing an AUTO tag nobody can take off.
+  if (service.autoUpdate) {
+    return {
+      icon: "fa-solid fa-toggle-on",
+      label: "Turn auto-update off",
+      enabled: true,
+      title: service.managementState !== "managed"
+        ? "Auto-update is on, but this app is not managed by Keelarr any more, so nothing is installed. Turn it off."
+        : schedule.enabled
+          ? `Auto-update is on. An update for this app is installed in the ${schedule.clock} window. Turn it off to go back to upgrading by hand.`
+          : "Auto-update is on for this app, but the schedule is off in Settings, so nothing is installed yet."
+    };
+  }
+
   // A scheduled install is an Upgrade run without anyone watching, and Upgrade
   // only works on a stack Keelarr owns. Detected and draft rows still belong
   // to whatever started them.
@@ -515,17 +531,6 @@ function autoUpdateItemMeta(service) {
 
   if (service.managementState !== "managed") {
     return { ...off, title: "Only apps managed by Keelarr can be auto-updated. Cut over first." };
-  }
-
-  if (service.autoUpdate) {
-    return {
-      icon: "fa-solid fa-toggle-on",
-      label: "Turn auto-update off",
-      enabled: true,
-      title: schedule.enabled
-        ? `Auto-update is on. An update for this app is installed in the ${schedule.clock} window. Turn it off to go back to upgrading by hand.`
-        : "Auto-update is on for this app, but the schedule is off in Settings, so nothing is installed yet."
-    };
   }
 
   return {
@@ -560,6 +565,25 @@ function autoUpdateTagMeta(service) {
  * When the app last started and was last upgraded, as one muted line. Nothing
  * at all for an app that has neither, so catalog-only rows stay two lines.
  */
+/**
+ * Moves the "up 30s" and "upgraded just now" copy along without a re-render.
+ * A full render would close an open row menu and drop a half-edited form, so
+ * only the text of the time spans is touched. Thirty seconds is fine: the
+ * copy is never more precise than that past the first minute.
+ */
+function refreshServiceTimes() {
+  const now = Date.now();
+
+  for (const span of document.querySelectorAll("[data-uptime-since]")) {
+    span.textContent = formatUptime(span.getAttribute("data-uptime-since"), now) || "";
+  }
+
+  for (const span of document.querySelectorAll("[data-upgraded-at]")) {
+    const relative = formatRelative(span.getAttribute("data-upgraded-at"), now);
+    span.textContent = relative ? `upgraded ${relative}` : "";
+  }
+}
+
 function renderServiceTimes(service) {
   if (service.managementState === "catalog") {
     return "";
@@ -569,13 +593,13 @@ function renderServiceTimes(service) {
   const uptime = isServiceRunning(service) ? formatUptime(service.startedAt) : null;
 
   if (uptime) {
-    parts.push(`<span title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
+    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
   }
 
   const upgraded = formatRelative(service.lastUpgradedAt);
 
   if (upgraded) {
-    parts.push(`<span title="Last upgraded ${escapeHtml(formatDate(service.lastUpgradedAt))}.">upgraded ${escapeHtml(upgraded)}</span>`);
+    parts.push(`<span data-upgraded-at="${escapeHtml(service.lastUpgradedAt)}" title="Last upgraded ${escapeHtml(formatDate(service.lastUpgradedAt))}.">upgraded ${escapeHtml(upgraded)}</span>`);
   }
 
   return parts.length ? `<div class="secondary-copy row-times">${parts.join(" &middot; ")}</div>` : "";
@@ -1667,7 +1691,7 @@ function renderUpdatesFieldset() {
         id: "autoRevert",
         label: "Auto-revert",
         summary: "Put a failed upgrade back",
-        help: "When on, an upgrade that does not come back healthy is put back on the previous image — from the Upgrade button and from the schedule alike. When off, it is left as it is and reported. Healthy means the container stays up; an app that is running but broken inside counts as up.",
+        help: "When on, an upgrade that does not come back healthy is put back on the previous image — from the Upgrade button and from the schedule alike. When off, it is left as it is and reported. Healthy means the container stays running and, if it has a healthcheck, passes it. An app with no healthcheck that runs but is broken inside counts as up.",
         checked: state.settings?.autoRevert === true,
         attr: 'data-setting-checkbox="autoRevert"'
       })}
@@ -4769,6 +4793,7 @@ appNode.addEventListener("keydown", (event) => {
  * from the retry button.
  */
 function bootstrap() {
+  window.setInterval(refreshServiceTimes, 30_000);
   const watch = readControllerUpdateWatch();
 
   // Resumed before anything that can reject: this page may have been reloaded

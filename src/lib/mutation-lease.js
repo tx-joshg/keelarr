@@ -42,7 +42,7 @@ export class MutationLease {
     return this.current() !== null;
   }
 
-  acquire({ reason, operationId = null }) {
+  acquire({ reason, operationId = null, detail = "" }) {
     const existing = this.current();
 
     if (existing) {
@@ -52,7 +52,7 @@ export class MutationLease {
       });
     }
 
-    this.held = { reason, operationId, takenAt: this.now() };
+    this.held = { reason, operationId, detail, takenAt: this.now() };
 
     return this.held;
   }
@@ -84,7 +84,7 @@ export class MutationLease {
     }
 
     throw new KeelarrError(
-      `${action} cannot start while ${existing.reason.toLowerCase()} is running. Keelarr is about to restart, and this would be left half-finished.`,
+      `${action} cannot start while ${existing.reason.toLowerCase()} is running.${existing.detail ? ` ${existing.detail}` : ""}`,
       { statusCode: 409, details: { operationId: existing.operationId } }
     );
   }
