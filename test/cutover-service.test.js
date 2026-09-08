@@ -277,6 +277,9 @@ test("revert takes compose down, restores the original container, and clears cut
   ]);
   assert.equal(saved.at(-1).serviceOverrides.trailarr.mode, "imported-draft");
   assert.equal(saved.at(-1).serviceOverrides.trailarr.rollbackContainerName, null);
+  // Back on its original container there is no stack for a scheduled
+  // install to act on, so the opt-in goes with the cutover.
+  assert.equal(saved.at(-1).serviceOverrides.trailarr.autoUpdate, false);
 });
 
 test("revert refuses when there is no rollback container to restore", async () => {

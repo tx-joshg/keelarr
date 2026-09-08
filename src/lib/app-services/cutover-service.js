@@ -448,10 +448,14 @@ export class CutoverService {
     });
 
     await ctx.step("finalize", async () => {
+      // Auto-update was opted into as a managed app. Back on the original
+      // container there is no stack for a scheduled install to act on, and
+      // an AUTO tag on a row Keelarr no longer owns would be a lie.
       await this.persistMode(settings, service.id, {
         mode: "imported-draft",
         cutoverAt: null,
-        rollbackContainerName: null
+        rollbackContainerName: null,
+        autoUpdate: false
       });
 
       await this.appendActivity({

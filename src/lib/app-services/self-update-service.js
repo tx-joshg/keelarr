@@ -439,7 +439,11 @@ export class SelfUpdateService {
     await ctx.step("preflight", async () => {
       // Re-checked inside the lease: eligibility can move between the GET that
       // drew the button and the POST that pressed it.
-      this.lease?.acquire({ reason: "A Keelarr update", operationId });
+      this.lease?.acquire({
+        reason: "A Keelarr update",
+        operationId,
+        detail: "Keelarr is about to restart, and this would be left half-finished."
+      });
 
       controller = await this.hostProfileService.readControllerDefinition(settings, logger);
       const described = await this.describeSelfUpdate(context);

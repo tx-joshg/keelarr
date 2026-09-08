@@ -22,6 +22,31 @@ export class MutationLease {
     this.now = nowImpl;
     this.ttlMs = ttlMs;
     this.held = null;
+    // Manual actions in flight. They do not take the lease — two apps can be
+    // upgraded at once, and should be — but while one is mid-work nothing
+    // may take it either.
+    this.busy = 0;
+  }
+
+  isBusy() {
+    return this.busy > 0;
+  }
+
+  /**
+   * Runs a manual action: refused while the lease is held, and counted as in
+   * flight from before its first await until it settles. The count goes up
+   * synchronously, so between checking the lease and starting the work there
+   * is no gap for the scheduler to slip through.
+   */
+  async track(action, fn) {
+    this.assertAvailable(action);
+    this.busy += 1;
+
+    try {
+      return await fn();
+    } finally {
+      this.busy -= 1;
+    }
   }
 
   /** The live claim, forgetting one that has outlived its term. */
@@ -42,7 +67,7 @@ export class MutationLease {
     return this.current() !== null;
   }
 
-  acquire({ reason, operationId = null }) {
+  acquire({ reason, operationId = null, detail = "" }) {
     const existing = this.current();
 
     if (existing) {
@@ -52,9 +77,32 @@ export class MutationLease {
       });
     }
 
-    this.held = { reason, operationId, takenAt: this.now() };
+    if (this.busy > 0) {
+      throw new KeelarrError(`${reason} cannot start while an action is in progress. Try again in a moment.`, {
+        statusCode: 409
+      });
+    }
+
+    this.held = { reason, operationId, detail, takenAt: this.now() };
 
     return this.held;
+  }
+
+  /**
+   * Restarts the term for the holder. A scheduled run that upgrades several
+   * apps in turn can outlive the fixed term; it renews as it goes, so the
+   * term only ever expires a claim whose owner has actually gone quiet.
+   */
+  renew(operationId) {
+    const existing = this.current();
+
+    if (!existing || !operationId || existing.operationId !== operationId) {
+      return false;
+    }
+
+    existing.takenAt = this.now();
+
+    return true;
   }
 
   release(operationId = null) {
@@ -84,7 +132,7 @@ export class MutationLease {
     }
 
     throw new KeelarrError(
-      `${action} cannot start while ${existing.reason.toLowerCase()} is running. Keelarr is about to restart, and this would be left half-finished.`,
+      `${action} cannot start while ${existing.reason.toLowerCase()} is running.${existing.detail ? ` ${existing.detail}` : ""}`,
       { statusCode: 409, details: { operationId: existing.operationId } }
     );
   }

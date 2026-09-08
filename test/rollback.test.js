@@ -884,6 +884,101 @@ function createUpgradeService(t, stack, overrides = {}) {
 
 const UNHEALTHY = { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." };
 
+test("a revert whose previous image does not come back either is reported as down, not as recovered", async (t) => {
+  // A migration the new image ran on the database, say: going back does not
+  // bring it back. The pin is right — it keeps the nightly run away — but
+  // "reverted, ok" would report a service that is down as recovered.
+  const stack = await createStack(t);
+  const { calls, stored, activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    impls: {
+      verifyServiceHealthImpl: async () => {
+        calls.push("verify");
+        return { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." };
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.deepEqual(calls, ["pull+up", "verify", "compose-up", "verify"]);
+  assert.equal(result.ok, false);
+  assert.equal(result.reverted, true, "the pin is in place");
+  assert.match(result.error, /Reverted to linuxserver\/radarr:latest, but that did not come back either/);
+  assert.equal(stored.radarr.status, "rolled-back");
+  assert.match(activity.at(-1).message, /did not come back either/);
+});
+
+test("a compose-up that never started the new image is left retryable, not recorded as current", async (t) => {
+  // Two ways to get here — revert off, and revert on but refused — and both
+  // used to write "current" for a container that does not exist, which
+  // Upgrade All then skips forever.
+  for (const overrides of [
+    { autoRevert: false },
+    { autoRevert: true, imageMissing: true }
+  ]) {
+    const stack = await createStack(t);
+    const { stored, writes, service } = createUpgradeService(t, stack, {
+      ...overrides,
+      stored: { radarr: { status: "ready", checkedAt: "2026-09-07T00:00:00.000Z" } },
+      upgradeResult: { ok: false, phase: "up", stdout: "", stderr: "no such image", code: 1 }
+    });
+
+    const result = await service.upgradeManagedService("radarr");
+
+    assert.equal(result.ok, false);
+    assert.equal(result.reverted, false);
+    assert.equal(stored.radarr.status, "ready", JSON.stringify(overrides));
+    assert.equal(writes.length, 0, "nothing was written down as current");
+  }
+});
+
+test("a revert whose deploy fails and whose pin cannot be cleared says the pin is still there", async (t) => {
+  // Claiming "not pinned" when the compose file still names the digest
+  // would send the next ordinary deploy at a revert that never ran.
+  const stack = await createStack(t);
+  let composeWrites = 0;
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    deployResult: { ok: false, stdout: "", stderr: "port is already allocated", code: 1 },
+    impls: {
+      setComposeImageImpl: async (service, imageRef) => {
+        composeWrites += 1;
+        // The pin goes in for real; putting the tag back is what fails.
+        if (composeWrites > 1) {
+          throw new Error("EROFS: read-only file system");
+        }
+        await setComposeImage(service, imageRef);
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /Revert was not possible: port is already allocated\. The compose file is still pinned to linuxserver\/radarr@sha256:previous/);
+});
+
+test("a revert whose deploy fails puts the compose file back on the tag", async (t) => {
+  // restoreImage pins the digest before it deploys. If the deploy fails the
+  // pin must not outlive it, or the next ordinary deploy targets a revert
+  // that never happened.
+  const stack = await createStack(t);
+  const { stored, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    deployResult: { ok: false, stdout: "", stderr: "port is already allocated", code: 1 }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /Revert was not possible: port is already allocated/);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+  assert.notEqual(stored.radarr?.status, "rolled-back");
+});
+
 test("an upgrade that comes back healthy records when it happened and never reverts", async (t) => {
   const stack = await createStack(t);
   const { calls, stored, service } = createUpgradeService(t, stack, { autoRevert: true });
