@@ -177,11 +177,20 @@ function formatDuration(ms) {
   return minutes > 0 ? `${minutes}m` : `${seconds}s`;
 }
 
-/** "3d 4h" since the container started, or null when the start is unknown. */
+/**
+ * "3d 4h" since the container started, or null when the start is unknown.
+ *
+ * Bare, because the column is the app and a label on every row is noise to
+ * a reader who can see the shape of it. What is dropped visually is put
+ * back for a screen reader with uptimeLabel, since there it is the only
+ * thing saying what the number counts.
+ */
 function formatUptime(startedAt, now = Date.now()) {
   const started = Date.parse(startedAt || "");
   return Number.isNaN(started) ? null : formatDuration(now - started);
 }
+
+const uptimeLabel = (uptime) => `Up ${uptime}`;
 
 /** "just now", "12 minutes ago", "3 hours ago", "2 days ago"; null when unknown. */
 function formatRelative(value, now = Date.now()) {
@@ -575,7 +584,9 @@ function refreshServiceTimes() {
   const now = Date.now();
 
   for (const span of document.querySelectorAll("[data-uptime-since]")) {
-    span.textContent = formatUptime(span.getAttribute("data-uptime-since"), now) || "";
+    const uptime = formatUptime(span.getAttribute("data-uptime-since"), now);
+    span.textContent = uptime || "";
+    span.setAttribute("aria-label", uptime ? uptimeLabel(uptime) : "");
   }
 
   for (const span of document.querySelectorAll("[data-upgraded-at]")) {
@@ -591,15 +602,15 @@ function refreshServiceTimes() {
  * that name is what docker commands need. A tooltip would not do: there is
  * no hover on a phone, and a title attribute is not reliably read out.
  *
- * Case is the only difference a catalog name has from its container's —
- * "SABnzbd" against "sabnzbd" — so case is all that is set aside. Anything
- * else, "rad-arr" against "Radarr", is a name someone has to be able to type.
+ * The one name that says nothing is the one Keelarr would have chosen
+ * itself, which is the service id. Anything else — "rad-arr", "RADARR",
+ * "sonarr-4k-vpn" — is a name someone has to be able to type, and an
+ * adopted stack keeps whatever casing its container had.
  */
 function renderContainerName(service) {
   const name = service.observedContainerName;
-  const same = (value) => String(value || "").trim().toLowerCase();
 
-  if (!name || same(name) === same(service.name)) {
+  if (!name || name === service.id) {
     return "";
   }
 
@@ -615,7 +626,7 @@ function renderServiceTimes(service) {
   const uptime = isServiceRunning(service) ? formatUptime(service.startedAt) : null;
 
   if (uptime) {
-    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
+    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" aria-label="${escapeHtml(uptimeLabel(uptime))}" title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
   }
 
   const upgraded = formatRelative(service.lastUpgradedAt);
