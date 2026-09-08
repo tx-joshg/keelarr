@@ -584,6 +584,24 @@ function refreshServiceTimes() {
   }
 }
 
+/**
+ * The container name, but only when it is not the app's name again. Every
+ * catalog app names its container after itself, so the line was the same
+ * word twice on every row; an adopted container can be called anything, and
+ * that name is what docker commands need. A tooltip would not do: there is
+ * no hover on a phone, and a title attribute is not reliably read out.
+ */
+function renderContainerName(service) {
+  const name = service.observedContainerName;
+  const same = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  if (!name || same(name) === same(service.name)) {
+    return "";
+  }
+
+  return `<div class="secondary-copy">${escapeHtml(name)}</div>`;
+}
+
 function renderServiceTimes(service) {
   if (service.managementState === "catalog") {
     return "";
@@ -1317,7 +1335,8 @@ function renderStackView() {
         <tr>
           <td class="status-cell">${pending ? '<i class="fa-solid fa-spinner fa-spin secondary-copy"></i>' : icon(runtime)}</td>
           <td class="cell-truncate">
-            <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)} (${escapeHtml(service.observedContainerName)})">${escapeHtml(service.name)}</a>
+            <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)}">${escapeHtml(service.name)}</a>
+            ${renderContainerName(service)}
             ${renderServiceTimes(service)}
           </td>
           <td class="cell-truncate">
