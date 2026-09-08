@@ -182,15 +182,15 @@ function formatDuration(ms) {
  *
  * Bare, because the column is the app and a label on every row is noise to
  * a reader who can see the shape of it. What is dropped visually is put
- * back for a screen reader with uptimeLabel, since there it is the only
- * thing saying what the number counts.
+ * back for a screen reader as text it can actually read: aria-label is
+ * prohibited on a plain span, whose role is generic, so the word is drawn
+ * off-screen instead.
  */
 function formatUptime(startedAt, now = Date.now()) {
   const started = Date.parse(startedAt || "");
   return Number.isNaN(started) ? null : formatDuration(now - started);
 }
 
-const uptimeLabel = (uptime) => `Up ${uptime}`;
 
 /** "just now", "12 minutes ago", "3 hours ago", "2 days ago"; null when unknown. */
 function formatRelative(value, now = Date.now()) {
@@ -584,9 +584,13 @@ function refreshServiceTimes() {
   const now = Date.now();
 
   for (const span of document.querySelectorAll("[data-uptime-since]")) {
-    const uptime = formatUptime(span.getAttribute("data-uptime-since"), now);
-    span.textContent = uptime || "";
-    span.setAttribute("aria-label", uptime ? uptimeLabel(uptime) : "");
+    // Only the number: the "Up" beside it is for a screen reader and does
+    // not change.
+    const value = span.querySelector("[data-uptime-value]");
+
+    if (value) {
+      value.textContent = formatUptime(span.getAttribute("data-uptime-since"), now) || "";
+    }
   }
 
   for (const span of document.querySelectorAll("[data-upgraded-at]")) {
@@ -626,7 +630,7 @@ function renderServiceTimes(service) {
   const uptime = isServiceRunning(service) ? formatUptime(service.startedAt) : null;
 
   if (uptime) {
-    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" aria-label="${escapeHtml(uptimeLabel(uptime))}" title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
+    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" title="Running since ${escapeHtml(formatDate(service.startedAt))}."><span class="screen-reader-only">Up </span><span data-uptime-value>${escapeHtml(uptime)}</span></span>`);
   }
 
   const upgraded = formatRelative(service.lastUpgradedAt);
