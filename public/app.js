@@ -177,11 +177,20 @@ function formatDuration(ms) {
   return minutes > 0 ? `${minutes}m` : `${seconds}s`;
 }
 
-/** "up 3d 4h", or null when the start is unknown. */
+/**
+ * "3d 4h" since the container started, or null when the start is unknown.
+ *
+ * Bare, because the column is the app and a label on every row is noise to
+ * a reader who can see the shape of it. What is dropped visually is put
+ * back for a screen reader as text it can actually read: aria-label is
+ * prohibited on a plain span, whose role is generic, so the word is drawn
+ * off-screen instead.
+ */
 function formatUptime(startedAt, now = Date.now()) {
   const started = Date.parse(startedAt || "");
-  return Number.isNaN(started) ? null : `up ${formatDuration(now - started)}`;
+  return Number.isNaN(started) ? null : formatDuration(now - started);
 }
+
 
 /** "just now", "12 minutes ago", "3 hours ago", "2 days ago"; null when unknown. */
 function formatRelative(value, now = Date.now()) {
@@ -566,7 +575,7 @@ function autoUpdateTagMeta(service) {
  * at all for an app that has neither, so catalog-only rows stay two lines.
  */
 /**
- * Moves the "up 30s" and "upgraded just now" copy along without a re-render.
+ * Moves the "30s" and "upgraded just now" copy along without a re-render.
  * A full render would close an open row menu and drop a half-edited form, so
  * only the text of the time spans is touched. Thirty seconds is fine: the
  * copy is never more precise than that past the first minute.
@@ -575,13 +584,41 @@ function refreshServiceTimes() {
   const now = Date.now();
 
   for (const span of document.querySelectorAll("[data-uptime-since]")) {
-    span.textContent = formatUptime(span.getAttribute("data-uptime-since"), now) || "";
+    // Only the number: the "Up" beside it is for a screen reader and does
+    // not change.
+    const value = span.querySelector("[data-uptime-value]");
+
+    if (value) {
+      value.textContent = formatUptime(span.getAttribute("data-uptime-since"), now) || "";
+    }
   }
 
   for (const span of document.querySelectorAll("[data-upgraded-at]")) {
     const relative = formatRelative(span.getAttribute("data-upgraded-at"), now);
     span.textContent = relative ? `upgraded ${relative}` : "";
   }
+}
+
+/**
+ * The container name, but only when it is not the app's name again. Every
+ * catalog app names its container after itself, so the line was the same
+ * word twice on every row; an adopted container can be called anything, and
+ * that name is what docker commands need. A tooltip would not do: there is
+ * no hover on a phone, and a title attribute is not reliably read out.
+ *
+ * The one name that says nothing is the one Keelarr would have chosen
+ * itself, which is the service id. Anything else — "rad-arr", "RADARR",
+ * "sonarr-4k-vpn" — is a name someone has to be able to type, and an
+ * adopted stack keeps whatever casing its container had.
+ */
+function renderContainerName(service) {
+  const name = service.observedContainerName;
+
+  if (!name || name === service.id) {
+    return "";
+  }
+
+  return `<div class="secondary-copy">${escapeHtml(name)}</div>`;
 }
 
 function renderServiceTimes(service) {
@@ -593,7 +630,7 @@ function renderServiceTimes(service) {
   const uptime = isServiceRunning(service) ? formatUptime(service.startedAt) : null;
 
   if (uptime) {
-    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" title="Running since ${escapeHtml(formatDate(service.startedAt))}.">${escapeHtml(uptime)}</span>`);
+    parts.push(`<span data-uptime-since="${escapeHtml(service.startedAt)}" title="Running since ${escapeHtml(formatDate(service.startedAt))}."><span class="screen-reader-only">Up </span><span data-uptime-value>${escapeHtml(uptime)}</span></span>`);
   }
 
   const upgraded = formatRelative(service.lastUpgradedAt);
@@ -1318,7 +1355,7 @@ function renderStackView() {
           <td class="status-cell">${pending ? '<i class="fa-solid fa-spinner fa-spin secondary-copy"></i>' : icon(runtime)}</td>
           <td class="cell-truncate">
             <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)}">${escapeHtml(service.name)}</a>
-            <div class="secondary-copy">${escapeHtml(service.observedContainerName)}</div>
+            ${renderContainerName(service)}
             ${renderServiceTimes(service)}
           </td>
           <td class="cell-truncate">

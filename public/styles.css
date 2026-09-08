@@ -1573,6 +1573,21 @@ table {
   font-size: 12px;
 }
 
+/* Read out, never drawn. The uptime is a bare duration on screen because
+   the column says what it is; a screen reader has no column to look at. */
+.screen-reader-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .row-menu-item .fa-toggle-on {
   color: var(--theme-blue);
 }
