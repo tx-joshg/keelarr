@@ -177,10 +177,10 @@ function formatDuration(ms) {
   return minutes > 0 ? `${minutes}m` : `${seconds}s`;
 }
 
-/** "up 3d 4h", or null when the start is unknown. */
+/** "3d 4h" since the container started, or null when the start is unknown. */
 function formatUptime(startedAt, now = Date.now()) {
   const started = Date.parse(startedAt || "");
-  return Number.isNaN(started) ? null : `up ${formatDuration(now - started)}`;
+  return Number.isNaN(started) ? null : formatDuration(now - started);
 }
 
 /** "just now", "12 minutes ago", "3 hours ago", "2 days ago"; null when unknown. */
@@ -566,7 +566,7 @@ function autoUpdateTagMeta(service) {
  * at all for an app that has neither, so catalog-only rows stay two lines.
  */
 /**
- * Moves the "up 30s" and "upgraded just now" copy along without a re-render.
+ * Moves the "30s" and "upgraded just now" copy along without a re-render.
  * A full render would close an open row menu and drop a half-edited form, so
  * only the text of the time spans is touched. Thirty seconds is fine: the
  * copy is never more precise than that past the first minute.
@@ -1317,8 +1317,7 @@ function renderStackView() {
         <tr>
           <td class="status-cell">${pending ? '<i class="fa-solid fa-spinner fa-spin secondary-copy"></i>' : icon(runtime)}</td>
           <td class="cell-truncate">
-            <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)}">${escapeHtml(service.name)}</a>
-            <div class="secondary-copy">${escapeHtml(service.observedContainerName)}</div>
+            <a href="${escapeHtml(openUrl)}" target="_blank" rel="noreferrer noopener" title="Open ${escapeHtml(service.name)} (${escapeHtml(service.observedContainerName)})">${escapeHtml(service.name)}</a>
             ${renderServiceTimes(service)}
           </td>
           <td class="cell-truncate">
