@@ -590,10 +590,14 @@ function refreshServiceTimes() {
  * word twice on every row; an adopted container can be called anything, and
  * that name is what docker commands need. A tooltip would not do: there is
  * no hover on a phone, and a title attribute is not reliably read out.
+ *
+ * Case is the only difference a catalog name has from its container's —
+ * "SABnzbd" against "sabnzbd" — so case is all that is set aside. Anything
+ * else, "rad-arr" against "Radarr", is a name someone has to be able to type.
  */
 function renderContainerName(service) {
   const name = service.observedContainerName;
-  const same = (value) => String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const same = (value) => String(value || "").trim().toLowerCase();
 
   if (!name || same(name) === same(service.name)) {
     return "";
