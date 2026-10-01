@@ -357,6 +357,12 @@ export function buildRollbackRecord(service, { imageId, imageRepoDigest, backedU
  * Enforces the retention setting after a new backup lands. Backups are
  * timestamped directories, so lexical order is chronological and the newest
  * entries are simply the tail.
+ *
+ * `options.protect` names directories an operation in flight is still reading
+ * from, and they survive regardless of retention. A rollback resolves which
+ * backup it is restoring from and only then takes a backup of its own, so at
+ * the default retention of 1 the new one would otherwise prune the very
+ * directory the next step reads its snapshot out of.
  */
 export async function pruneServiceBackups(settings, serviceId, options = {}) {
   const keep = Number(settings.backupRetention ?? 1);
@@ -375,17 +381,27 @@ export async function pruneServiceBackups(settings, serviceId, options = {}) {
     return { pruned: 0, kept: 0 };
   }
 
-  const doomed = stamps.slice(0, Math.max(0, stamps.length - keep));
+  // Compared by stamp, so a caller may pass either a full path or the
+  // directory name and either resolves to the same entry.
+  const spared = new Set((options.protect || []).filter(Boolean).map((entry) => path.basename(entry)));
+  const doomed = stamps
+    .slice(0, Math.max(0, stamps.length - keep))
+    .filter((stamp) => !spared.has(stamp));
 
   for (const stamp of doomed) {
     await (options.rmImpl || rm)(path.join(root, stamp), { recursive: true, force: true });
   }
 
-  if (doomed.length) {
-    options.logger?.info("backup.pruned", { serviceId, pruned: doomed.length, kept: keep });
+  if (doomed.length || spared.size) {
+    options.logger?.info("backup.pruned", {
+      serviceId,
+      pruned: doomed.length,
+      kept: stamps.length - doomed.length,
+      spared: [...spared]
+    });
   }
 
-  return { pruned: doomed.length, kept: Math.min(stamps.length, keep) };
+  return { pruned: doomed.length, kept: stamps.length - doomed.length };
 }
 
 export async function backupService(settings, service, options = {}) {

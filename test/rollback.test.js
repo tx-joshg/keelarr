@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 
 import { ManagedStackService } from "../src/lib/app-services/managed-stack-service.js";
 import { JOB_STATUS, JobRegistry, STEP_STATUS } from "../src/lib/jobs.js";
 import { HEALTH_OUTCOME } from "../src/lib/health.js";
-import { findRollbackPoint } from "../src/lib/runtime.js";
+import { backupService, findRollbackPoint } from "../src/lib/runtime.js";
 import { readComposeImage, setComposeImage } from "../src/lib/generator.js";
 import { createLogger } from "../src/lib/logger.js";
 import { normalizeSettings } from "../src/lib/store.js";
@@ -1721,4 +1721,82 @@ test("a revert whose previous image is genuinely down still says so", async (t) 
   assert.match(result.error, /did not come back either/);
   assert.equal(activity.at(-1).details.running, false);
   assert.equal(result.reverted, true);
+});
+
+// --- a rollback must not prune the backup it is about to restore from ----------
+
+test("a rollback protects its own restore point from retention", async (t) => {
+  const stack = await createStack(t);
+  const stamp = "2026-08-03T00-00-00-000Z";
+  await writeBackup(stack.root, stamp, {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const backupOptions = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true }),
+      backupServiceImpl: async (_s, _svc, options) => {
+        backupOptions.push(options);
+        return { backupDir: "/backups/radarr/newer", rollback: {} };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // The restore point is resolved in preflight and the backup written here is
+  // newer, so at the default retention of 1 pruning would delete it one step
+  // before restore-config reads its snapshot out of it.
+  assert.equal(backupOptions.length, 1);
+  assert.deepEqual(
+    backupOptions[0].protect,
+    [path.join(stack.root, ".keelarr-backups", "radarr", stamp)],
+    "the backup step tells pruning to spare the restore point"
+  );
+});
+
+test("a rollback's restore point still exists when the restore step reads it", async (t) => {
+  const stack = await createStack(t);
+  const stamp = "2026-08-03T00-00-00-000Z";
+  const pointDir = await writeBackup(stack.root, stamp, {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+  await writeFile(path.join(pointDir, "config-snapshot.tar.gz"), "archive", "utf8");
+
+  let snapshotPresent = null;
+  const { service } = createService(t, stack, {
+    impls: {
+      // The real backupService, so retention actually runs: stubbing it is why
+      // this went unnoticed, since the stub has no side effect to catch. Only
+      // the docker-dependent snapshot and daemon calls are kept out of it.
+      backupServiceImpl: async (settings, svc, options) =>
+        backupService({ ...settings, dockerBin: "/nonexistent/docker" }, svc, {
+          ...options,
+          snapshotConfigImpl: async () => ({ ok: false, skipped: true, reason: "not under test" })
+        }),
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async (_s, _svc, dir) => {
+        snapshotPresent = await stat(path.join(dir, "config-snapshot.tar.gz")).then(() => true, () => false);
+        return { ok: true };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // At the default retention of 1, the backup this rollback writes is newer than
+  // the point it restores from, so pruning deleted that point and restore-config
+  // read a directory that was no longer there — manual rollback could not
+  // restore a config snapshot at all on a default install.
+  assert.equal(snapshotPresent, true, "the rollback pruned the snapshot it was about to restore");
 });

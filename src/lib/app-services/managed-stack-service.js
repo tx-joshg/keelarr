@@ -789,7 +789,14 @@ export class ManagedStackService {
     const stepLogger = logger.child({ serviceId: service.id, containerName: service.containerName });
 
     const backup = await ctx.step("backup", async () => {
-      const result = await this.backupService(settings, service, { logger: stepLogger });
+      // The point this rollback restores from is protected: it was resolved in
+      // preflight, it is older than the backup being written here, and at the
+      // default retention of 1 pruning would otherwise delete it a step before
+      // restore-config reads its snapshot.
+      const result = await this.backupService(settings, service, {
+        logger: stepLogger,
+        protect: [point.backupDir]
+      });
       return { detail: `Backed up to ${result.backupDir}.`, ...result };
     });
 
