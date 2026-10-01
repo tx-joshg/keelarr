@@ -1694,6 +1694,11 @@ test("a revert that comes back running but unhealthy does not claim it never cam
   // is the sentence an operator reads first.
   assert.match(activity.at(-1).message, /running but still not healthy/);
   assert.equal(activity.at(-1).details.running, true);
+  // Both operator-facing strings have to agree: the wrapper upgradeOne builds
+  // must not introduce it as a service that did not come back and then quote a
+  // reason saying it is running.
+  assert.match(result.error, /but it is still not healthy/);
+  assert.ok(!/did not come back either/.test(result.error), `contradicts itself: ${result.error}`);
   assert.match(result.error, /It is running, but not healthy/);
   // Still not a recovery: an app on its old image with a failing healthcheck is
   // not fixed, so revertedDown stays true and the nightly summary counts it with
@@ -1713,6 +1718,7 @@ test("a revert whose previous image is genuinely down still says so", async (t) 
   const result = await service.upgradeManagedService("radarr");
 
   assert.match(activity.at(-1).message, /did not come back either/);
+  assert.match(result.error, /did not come back either/);
   assert.equal(activity.at(-1).details.running, false);
   assert.equal(result.reverted, true);
 });

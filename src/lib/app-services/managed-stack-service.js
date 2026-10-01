@@ -1315,10 +1315,16 @@ export class ManagedStackService {
       health,
       stdout: result.stdout,
       stderr: result.stderr,
+      // The job step and the API read this, and the activity entry says the same
+      // thing in its own words a layer down. Both have to agree: a previous
+      // image that is up but unhealthy must not be introduced as one that did
+      // not come back, with its own reason then saying it is running.
       error: revert.ok
         ? `${health.reason} Reverted to ${revertedTo}.`
         : revert.restored
-          ? `${health.reason} Reverted to ${revertedTo}, but that did not come back either: ${revert.reason}`
+          ? revert.running
+            ? `${health.reason} Reverted to ${revertedTo}, but it is still not healthy: ${revert.reason}`
+            : `${health.reason} Reverted to ${revertedTo}, but that did not come back either: ${revert.reason}`
           : `${health.reason} Revert was not possible: ${revert.reason}`
     };
   }
