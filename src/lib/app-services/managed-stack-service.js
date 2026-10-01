@@ -1342,12 +1342,19 @@ export class ManagedStackService {
    * recovery, not whether to revert, and a revert is already a failure path
    * that an operator is waiting on. A container still starting when it runs
    * out is not a failure — it is on its way up.
+   *
+   * What it answers is whether the service is *running*, not whether it is
+   * healthy. Those come apart for a container that is up with a failing
+   * healthcheck, and that state is the one the refusal path already records as
+   * current — the new image is what is running, badly, and the activity entry
+   * carries the failure. Calling it down here would contradict that and leave
+   * the same situation recorded two different ways depending on the route in.
    */
   async redeployAndConfirm(settings, service, logger) {
     const deployed = await this.generateAndDeploy(settings, service, { logger });
 
     if (!deployed.ok) {
-      return { ok: false, deployed, health: null };
+      return { running: false, deployed, health: null };
     }
 
     try {
@@ -1358,10 +1365,10 @@ export class ManagedStackService {
         logger
       });
 
-      return { ok: health.outcome !== HEALTH_OUTCOME.FAILED, deployed, health };
+      return { running: health.status === "running", deployed, health };
     } catch (error) {
       logger.warn("service.recovery_verify_failed", { serviceId: service.id, message: error.message });
-      return { ok: false, deployed, health: null };
+      return { running: false, deployed, health: null };
     }
   }
 
@@ -1458,10 +1465,10 @@ export class ManagedStackService {
         const why = (stopped.stderr || stopped.stdout || "compose down failed.").split("\n").filter(Boolean).pop();
 
         return refuse(
-          recovered.ok
+          recovered.running
             ? `it could not be stopped, so its database was left alone rather than restored underneath a running app: ${why}`
             : `it could not be stopped (${why}), and it could not be started again afterwards. ${service.name} is down.`,
-          { running: recovered.ok }
+          { running: recovered.running }
         );
       }
 
@@ -1479,10 +1486,10 @@ export class ManagedStackService {
         const recovered = await this.redeployAndConfirm(settings, service, logger);
 
         return refuse(
-          recovered.ok
+          recovered.running
             ? `its configuration could not be restored, so the image was left alone: ${restoredConfig.reason}`
             : `its configuration could not be restored (${restoredConfig.reason}), and it could not be started again afterwards. ${service.name} is down.`,
-          { running: recovered.ok }
+          { running: recovered.running }
         );
       }
 
@@ -1534,19 +1541,19 @@ export class ManagedStackService {
       // to bring it back, and if that fails too, say the service is down
       // instead of leaving the operator to discover it.
       const recovered = stillPinned
-        ? { ok: false }
+        ? { running: false }
         : await this.redeployAndConfirm(settings, service, logger);
 
       // The compose file names the tag again and the new image is up, so that
       // image is what is current. The health check deliberately skipped this
       // update on its way to a revert, and leaving the service on its old
       // "ready" would let Upgrade All start the whole sequence over at once.
-      if (recovered.ok) {
+      if (recovered.running) {
         await this.recordFreshImageState(service.id, { upgradedAt: new Date().toISOString() });
       }
       const reason = stillPinned
         ? `${deployReason.replace(/\.?$/, ".")} The compose file is still pinned to ${point.imageRef}.`
-        : recovered.ok
+        : recovered.running
           ? deployReason
           : `${deployReason.replace(/\.?$/, ".")} ${service.name} could not be started again afterwards either, so it is down.`;
 
@@ -1559,7 +1566,7 @@ export class ManagedStackService {
           reason: health.reason,
           reverted: false,
           stillPinned,
-          running: recovered.ok,
+          running: recovered.running,
           stderr: restore.stderr
         }
       });
@@ -1568,7 +1575,7 @@ export class ManagedStackService {
         ok: false,
         pinned: stillPinned,
         restored: false,
-        running: recovered.ok,
+        running: recovered.running,
         imageRef: point.imageRef,
         taggedImage: point.taggedImage,
         reason

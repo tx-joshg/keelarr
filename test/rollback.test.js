@@ -871,7 +871,10 @@ function createUpgradeService(t, stack, overrides = {}) {
       calls.push("verify");
       // The revert's own verification is the second call; it always comes back.
       const first = calls.filter((call) => call === "verify").length === 1;
-      return first ? (overrides.health || { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" }) : { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy" };
+      // A real verified result reports the running container it observed, and
+      // the revert reads that status to decide what to report and record.
+      const healthy = { outcome: HEALTH_OUTCOME.VERIFIED, reason: "healthy", status: "running" };
+      return first ? (overrides.health || healthy) : healthy;
     },
     generateAndDeployImpl: async () => {
       calls.push("compose-up");
@@ -1649,5 +1652,28 @@ test("a fallback onto the new image records it as current", async (t) => {
 
   // The tag is running again, so it is current. Left as "ready", Upgrade All
   // would start the same upgrade and the same revert over immediately.
+  assert.equal(stored.radarr.status, "current");
+});
+
+test("a recovery that comes back running but unhealthy is reported as running", async (t) => {
+  const stack = await createStack(t);
+  const { stored, activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    stored: { radarr: { status: "ready" } },
+    impls: {
+      restoreConfigSnapshotImpl: async () => ({ ok: false, reason: "tar failed" }),
+      // Up, but its healthcheck never passes: FAILED with status "running".
+      verifyServiceHealthImpl: async () => UNHEALTHY_RUNNING
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // "Running but unhealthy" is the state the refusal path already records as
+  // current. Collapsing it to "down" here would record the same situation two
+  // different ways depending on which route reached it.
+  assert.equal(activity.at(-1).details.running, true);
+  assert.ok(!/is down/.test(result.error), `should not claim it is down: ${result.error}`);
   assert.equal(stored.radarr.status, "current");
 });
