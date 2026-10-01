@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildConfigRestoreScript,
   buildRollbackRecord,
   explainDeployFailure,
   deriveUpdateStatusFromPullResult,
@@ -141,4 +142,27 @@ test("a conflict with no port in the message still explains itself", () => {
 
   assert.match(explained, /already in use/);
   assert.doesNotMatch(explained, /undefined/);
+});
+
+test("restoring a config snapshot keeps what the snapshot deliberately excluded", () => {
+  const script = buildConfigRestoreScript();
+
+  // Clearing all of /config would delete the app's own database backups to
+  // restore an archive that never contained them — removing the recovery copies
+  // an operator needs precisely when a rollback did not work either. Trailarr's
+  // config/backups is what made the 25 September failure diagnosable at all.
+  assert.match(script, /case "\$entry" in/);
+  assert.match(script, /\[Bb\]ackups/);
+  assert.match(script, /\[Ll\]ogs/);
+  assert.ok(!/rm -rf \/dst\/\*/.test(script), "no blanket wipe of the config directory");
+  // Still destructive for everything the snapshot does cover: a file written
+  // after it must not survive and confuse the older version.
+  assert.match(script, /rm -rf "\$entry"/);
+  assert.match(script, /tar xzf \/backup\/config-snapshot\.tar\.gz -C \/dst/);
+});
+
+test("the restore script survives a config directory with no dotfiles", () => {
+  // `.[!.]*` comes through literally when nothing matches, and `rm -rf` on that
+  // literal would fail under `set -e`.
+  assert.match(buildConfigRestoreScript(), /\[ -e "\$entry" \] \|\| continue/);
 });

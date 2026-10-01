@@ -1368,8 +1368,15 @@ export class ManagedStackService {
     // its port. So the database goes back with the image, the way a manual
     // rollback does, or the revert does not happen at all.
     //
-    // Read the mount while the container still exists: restoring takes it down
-    // first, and a container that is gone cannot be inspected for its mounts.
+    // Whether the app keeps state is read from the stack definition, not from
+    // the live container. readConfigMountSource returns null both for a service
+    // that genuinely has no /config and for an inspect that failed or found no
+    // container, and reading that ambiguity as "stateless" would authorise the
+    // exact image-only revert this is here to prevent. The declaration cannot
+    // fail, so it decides, and the mount only ever adds to it.
+    const declaresConfig = Array.isArray(service.volumes) && service.volumes.includes("config");
+    // Read while the container still exists: restoring takes it down first, and
+    // a container that is gone cannot be inspected for its mounts.
     const configMount = await this.readConfigMountSource(settings, service, { logger });
 
     if (point.configSnapshot) {
@@ -1377,20 +1384,35 @@ export class ManagedStackService {
         return refuse("its /config mount could not be read, so the database could not be put back with the image.");
       }
 
-      // Stop first: restoring the database under a running app would leave it
-      // holding stale handles and half-written state.
-      await this.composeDown(settings, service, { logger });
+      // Stop first, and only carry on if it actually stopped. The restore
+      // clears /config before extracting, so letting it race a live process is
+      // how a database gets torn in half — and compose down reports failure by
+      // returning it, not by throwing.
+      const stopped = await this.composeDown(settings, service, { logger });
+
+      if (!stopped.ok) {
+        await this.generateAndDeploy(settings, service, { logger });
+        const why = (stopped.stderr || stopped.stdout || "compose down failed.").split("\n").filter(Boolean).pop();
+        return refuse(`it could not be stopped, so its database was left alone rather than restored underneath a running app: ${why}`);
+      }
+
       const restoredConfig = await this.restoreConfigSnapshot(settings, service, point.backupDir, {
         logger,
         mount: configMount
       });
 
       if (!restoredConfig.ok) {
-        // The service is down and its /config is in an unknown state. Bring it
-        // back on the image it was upgraded to — the one image that certainly
-        // matches whatever schema is now on disk — rather than leaving it off.
-        await this.generateAndDeploy(settings, service, { logger });
-        return refuse(`its configuration could not be restored, so the image was left alone: ${restoredConfig.reason}`);
+        // Down, with /config in an unknown state. Bring it back on the image it
+        // was upgraded to — the one image that certainly matches whatever schema
+        // is on disk — and say plainly when even that did not work, rather than
+        // reporting a service that is down as merely left running.
+        const recovered = await this.generateAndDeploy(settings, service, { logger });
+
+        return refuse(
+          recovered.ok
+            ? `its configuration could not be restored, so the image was left alone: ${restoredConfig.reason}`
+            : `its configuration could not be restored (${restoredConfig.reason}), and it could not be started again afterwards. ${service.name} is down.`
+        );
       }
 
       logger.info("service.revert_config_restored", {
@@ -1398,12 +1420,12 @@ export class ManagedStackService {
         backupDir: point.backupDir,
         backedUpAt: point.backedUpAt
       });
-    } else if (configMount) {
+    } else if (declaresConfig || configMount) {
       // Stateful, with nothing to put the state back from. Going back on the
       // image alone is the move that bricks it; the new image is at least
       // consistent with its own schema, so it stays and the operator is told.
       return refuse(
-        `no configuration snapshot was captured before the upgrade and ${service.name} keeps state in ${configMount.source}, so going back to ${point.imageRef} risks leaving it on a database the older version cannot read.`
+        `no configuration snapshot was captured before the upgrade and ${service.name} keeps state in ${configMount?.source || "its config directory"}, so going back to ${point.imageRef} risks leaving it on a database the older version cannot read.`
       );
     }
 

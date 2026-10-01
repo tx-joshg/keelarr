@@ -843,8 +843,19 @@ function createUpgradeService(t, stack, overrides = {}) {
   const activity = [];
   const stored = overrides.stored || {};
   const ok = { ok: true, stdout: "", stderr: "", code: 0 };
+  // Radarr declares a /config volume, and every backup since snapshots existed
+  // captures one, so a rollback point with a snapshot is the realistic default.
+  // Without it a revert now declines rather than stranding a stateful app on a
+  // database its older version cannot read, which is its own test below.
   const point = overrides.point === undefined
-    ? { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" }
+    ? {
+        imageId: "sha256:previous",
+        imageRef: "linuxserver/radarr@sha256:previous",
+        taggedImage: "linuxserver/radarr:latest",
+        backupDir: "/stacks/.keelarr-backups/radarr/2026-09-25T06-00-45-961Z",
+        backedUpAt: "2026-09-25T06:00:45.961Z",
+        configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+      }
     : overrides.point;
 
   const service = new ManagedStackService({
@@ -868,6 +879,13 @@ function createUpgradeService(t, stack, overrides = {}) {
     },
     findRollbackPointImpl: async () => point,
     imageExistsLocallyImpl: async () => overrides.imageMissing !== true,
+    // The restore half of a revert, stubbed to succeed and deliberately not
+    // recorded in `calls`: the tests below that care about the order of the
+    // stop and the restore record them themselves, and the ones that only care
+    // that a revert happened keep asserting the sequence they always did.
+    readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+    composeDownImpl: async () => ok,
+    restoreConfigSnapshotImpl: async () => ({ ok: true }),
     readUpdateStateImpl: async () => stored,
     writeUpdateStateImpl: async (next) => {
       writes.push(JSON.parse(JSON.stringify(next)));
@@ -1157,9 +1175,17 @@ test("Upgrade All reverts an unhealthy service when auto-revert is on and keeps 
     findRollbackPointImpl: async (_s, svc) => ({
       imageId: "sha256:previous",
       imageRef: `linuxserver/${svc.id}@sha256:previous`,
-      taggedImage: `linuxserver/${svc.id}:latest`
+      taggedImage: `linuxserver/${svc.id}:latest`,
+      backupDir: `/stacks/.keelarr-backups/${svc.id}/2026-09-25T06-00-45-961Z`,
+      backedUpAt: "2026-09-25T06:00:45.961Z",
+      configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: `/config/${svc.id}` }
     }),
     imageExistsLocallyImpl: async () => true,
+    // Both declare a /config volume, so the revert puts the database back with
+    // the image rather than declining.
+    readConfigMountSourceImpl: async (_s, svc) => ({ type: "bind", source: `/config/${svc.id}` }),
+    composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "", code: 0 }),
+    restoreConfigSnapshotImpl: async () => ({ ok: true }),
     generateAndDeployImpl: async (_s, svc) => {
       pinned.push(svc.id);
       return { ok: true, stdout: "", stderr: "", code: 0 };
@@ -1302,15 +1328,92 @@ test("a revert whose config restore fails brings the service back up on the new 
 
 test("a stateless service with no config snapshot is still reverted on the image alone", async (t) => {
   const stack = await createStack(t);
-  const { service } = createUpgradeService(t, stack, {
+  // FlareSolverr's shape: it answers a challenge and forgets, so the catalog
+  // declares no volumes at all and there is no database to mismatch.
+  const stateless = { ...stack.settings, services: { radarr: { ...stack.settings.services.radarr, volumes: [] } } };
+  const { calls, service } = createUpgradeService(t, stack, {
     autoRevert: true,
     health: UNHEALTHY,
+    point: { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" },
+    impls: {
+      loadSettingsImpl: async () => ({ ...stateless, autoRevert: true }),
+      readConfigMountSourceImpl: async () => null
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Nothing stateful to mismatch, so the old behaviour is right here: no stop,
+  // no restore, just the image put back.
+  assert.deepEqual(calls, ["pull+up", "verify", "compose-up", "verify"]);
+  assert.equal(result.reverted, true);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr@sha256:previous");
+});
+
+test("an unreadable /config mount is not mistaken for a stateless service", async (t) => {
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    point: { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" },
+    // docker inspect failed, or the failed upgrade left no container to inspect.
+    // Indistinguishable from "no /config" in the return value, so the stack
+    // definition decides — and Radarr declares one.
     impls: { readConfigMountSourceImpl: async () => null }
   });
 
   const result = await service.upgradeManagedService("radarr");
 
-  // Nothing stateful to mismatch, so the old behaviour is right here.
-  assert.equal(result.reverted, true);
-  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr@sha256:previous");
+  assert.deepEqual(calls, ["pull+up", "verify"], "nothing was put back");
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /keeps state in its config directory/);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("a revert does not restore over an app it could not stop", async (t) => {
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: {
+      composeDownImpl: async () => {
+        calls.push("compose-down");
+        return { ok: false, stdout: "", stderr: "error during connect: container is restarting", code: 1 };
+      },
+      restoreConfigSnapshotImpl: async () => {
+        calls.push("restore-config");
+        return { ok: true };
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // compose down reports failure by returning it, not by throwing. Carrying on
+  // would race `rm -rf /config` against a process still writing to it.
+  assert.ok(!calls.includes("restore-config"), "the destructive restore never ran");
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /could not be stopped/);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("a failed config restore that cannot be started again says the service is down", async (t) => {
+  const stack = await createStack(t);
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: {
+      restoreConfigSnapshotImpl: async () => ({ ok: false, reason: "tar failed" }),
+      // Stopped, the restore failed, and the recovery deploy fails too.
+      generateAndDeployImpl: async () => ({ ok: false, stdout: "", stderr: "no such image", code: 1 })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Reporting this as "left running" would be a lie: it was stopped to restore,
+  // the restore failed, and it did not come back.
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /could not be started again afterwards/);
+  assert.match(result.error, /is down/);
 });
