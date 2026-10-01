@@ -4,7 +4,6 @@ import { access } from "node:fs/promises";
 import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
 import {
   backupService,
-  pruneServiceBackups,
   composeDown,
   ensureSharedNetwork,
   explainDeployFailure,
@@ -61,7 +60,6 @@ export class ManagedStackService {
   constructor({
     appendActivityImpl = appendActivity,
     backupServiceImpl = backupService,
-    pruneServiceBackupsImpl = pruneServiceBackups,
     checkForUpdatesImpl = checkForUpdates,
     ensureSharedNetworkImpl = ensureSharedNetwork,
     findRollbackPointImpl = findRollbackPoint,
@@ -98,7 +96,6 @@ export class ManagedStackService {
     writeUpdateStateImpl = writeUpdateState
   } = {}) {
     this.backupService = backupServiceImpl;
-    this.pruneServiceBackups = pruneServiceBackupsImpl;
     this.ensureSharedNetwork = ensureSharedNetworkImpl;
     this.findRollbackPoint = findRollbackPointImpl;
     this.imageExistsLocally = imageExistsLocallyImpl;
@@ -811,6 +808,12 @@ export class ManagedStackService {
       // Only then, though. Rolling back the image alone — the default — reads
       // nothing out of that directory afterwards, and keeping it anyway would
       // leave two backups on disk for an operator who asked to keep one.
+      //
+      // A configuration rollback does leave that spare behind, until the next
+      // backup for this service prunes it. Reclaiming it inside the rollback
+      // needs a second retention pass whose placement has to satisfy both the
+      // undo paths above and the bookkeeping below, and that is a change of its
+      // own rather than a line here.
       const result = await this.backupService(settings, service, {
         logger: stepLogger,
         protect: willRestoreConfig ? [point.backupDir] : []
@@ -879,28 +882,6 @@ export class ManagedStackService {
         statusCode: 500,
         details: { reason: health.reason, restored: true }
       });
-    }
-
-    // Here, and nowhere else. The rollback has operationally stuck: deploy
-    // succeeded and the health check did not fail, so no undoPin remains above
-    // to send the operator back to this point — and finalize below writes state
-    // and activity, either of which can throw, so anything after it may not run
-    // at all. That makes this the only position that both keeps the point while
-    // it is still a retry target and prunes it once it is not.
-    //
-    // It has to happen somewhere: a rollback pins the service, and a pinned
-    // service is what scheduled installs skip, so the next backup that would
-    // prune the spare might never come and "Only the latest" would quietly mean
-    // two for as long as the app stays pinned.
-    if (willRestoreConfig) {
-      try {
-        const pruned = await this.pruneServiceBackups(settings, service.id, { logger: stepLogger });
-        stepLogger.info("rollback.pruned_restore_point", { serviceId: service.id, pruned: pruned.pruned });
-      } catch (error) {
-        // Bookkeeping, after the fact. The rollback has already succeeded and a
-        // spare backup left behind is not a reason to report it as failed.
-        stepLogger.warn("rollback.prune_failed", { serviceId: service.id, message: error.message });
-      }
     }
 
     ctx.skip("restore", "Not needed.");
