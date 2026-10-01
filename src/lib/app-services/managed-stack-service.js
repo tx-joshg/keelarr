@@ -729,6 +729,14 @@ export class ManagedStackService {
 
   async runRollback(ctx, serviceId, input, context) {
     const logger = this.scopedLogger(context);
+    // Settled once, before anything reads it. Restoring a snapshot replaces the
+    // live /config, so the flag that asks for it is required to be the boolean
+    // the dashboard sends: a caller posting the string "false" would otherwise
+    // be truthy and destroy the configuration it meant to keep. Every later
+    // decision — the mount read, the retention protection, the step itself and
+    // what the result claims — reads this and not the raw input, so they cannot
+    // disagree about whether a restore was asked for.
+    const restoreConfig = input.restoreConfig === true;
     let plan = null;
 
     await ctx.step("preflight", async () => {
@@ -770,11 +778,11 @@ export class ManagedStackService {
       // Read the /config mount now, while the container still exists. The
       // restore step removes it first, and a deleted container cannot be
       // inspected for its mounts.
-      const configMount = input.restoreConfig && point.configSnapshot
+      const configMount = restoreConfig && point.configSnapshot
         ? await this.readConfigMountSource(settings, service, { logger })
         : null;
 
-      if (input.restoreConfig && point.configSnapshot && !configMount) {
+      if (restoreConfig && point.configSnapshot && !configMount) {
         throw new KeelarrError(
           `Cannot restore configuration for ${service.name}: no /config mount was found on the running container.`,
           { statusCode: 409 }
@@ -789,7 +797,7 @@ export class ManagedStackService {
     const stepLogger = logger.child({ serviceId: service.id, containerName: service.containerName });
     // Decided once, because the backup step has to know whether anything will
     // still be reading the restore point after it prunes.
-    const willRestoreConfig = input.restoreConfig === true && Boolean(point.configSnapshot);
+    const willRestoreConfig = restoreConfig && Boolean(point.configSnapshot);
 
     const backup = await ctx.step("backup", async () => {
       // When the configuration is coming back, the point it comes from is
@@ -830,7 +838,7 @@ export class ManagedStackService {
         return { detail: `Restored configuration captured ${point.backedUpAt}.` };
       });
     } else {
-      ctx.skip("restore-config", input.restoreConfig
+      ctx.skip("restore-config", restoreConfig
         ? "No configuration snapshot was captured for this rollback point."
         : "Keeping current configuration.");
     }
@@ -898,7 +906,7 @@ export class ManagedStackService {
       containerName: service.containerName,
       rolledBackTo: point.imageRef,
       rolledBackFrom: currentImage,
-      configRestored: Boolean(input.restoreConfig && point.configSnapshot),
+      configRestored: willRestoreConfig,
       backupDir: backup.backupDir,
       health,
       pinNote: `${service.name} is pinned to ${point.imageRef}. Running an upgrade clears the pin and moves it forward again.`

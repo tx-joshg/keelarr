@@ -1852,3 +1852,63 @@ test("a rollback whose point has no snapshot does not hold on to it either", asy
   assert.deepEqual(backupOptions[0].protect, []);
   assert.equal(job.steps.find((s) => s.name === "restore-config").status, STEP_STATUS.SKIPPED);
 });
+
+test("a non-boolean restore flag is not treated as a request to restore", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const restored = [];
+  const backupOptions = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => {
+        restored.push(1);
+        return { ok: true };
+      },
+      backupServiceImpl: async (_s, _svc, options) => {
+        backupOptions.push(options);
+        return { backupDir: "/backups/radarr/newer", rollback: {} };
+      }
+    }
+  });
+
+  // The HTTP endpoint does no validation, and restoring replaces the live
+  // /config — so the string "false" being truthy must not destroy the
+  // configuration a caller meant to keep.
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: "false" }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.deepEqual(restored, [], "nothing was restored");
+  assert.deepEqual(backupOptions[0].protect, []);
+  // And the result must not claim otherwise.
+  assert.equal(job.result.configRestored, false);
+  assert.equal(job.steps.find((s) => s.name === "restore-config").status, STEP_STATUS.SKIPPED);
+});
+
+test("a rollback that restores reports configRestored, and one that cannot does not", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous"
+  });
+
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true })
+    }
+  });
+
+  // Asked for with a real boolean, but the point has no snapshot to give.
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.equal(job.result.configRestored, false, "it cannot restore what was never captured");
+});
