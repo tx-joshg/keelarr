@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
 import {
   backupService,
+  pruneServiceBackups,
   composeDown,
   ensureSharedNetwork,
   explainDeployFailure,
@@ -60,6 +61,7 @@ export class ManagedStackService {
   constructor({
     appendActivityImpl = appendActivity,
     backupServiceImpl = backupService,
+    pruneServiceBackupsImpl = pruneServiceBackups,
     checkForUpdatesImpl = checkForUpdates,
     ensureSharedNetworkImpl = ensureSharedNetwork,
     findRollbackPointImpl = findRollbackPoint,
@@ -96,6 +98,7 @@ export class ManagedStackService {
     writeUpdateStateImpl = writeUpdateState
   } = {}) {
     this.backupService = backupServiceImpl;
+    this.pruneServiceBackups = pruneServiceBackupsImpl;
     this.ensureSharedNetwork = ensureSharedNetworkImpl;
     this.findRollbackPoint = findRollbackPointImpl;
     this.imageExistsLocally = imageExistsLocallyImpl;
@@ -841,6 +844,24 @@ export class ManagedStackService {
       ctx.skip("restore-config", restoreConfig
         ? "No configuration snapshot was captured for this rollback point."
         : "Keeping current configuration.");
+    }
+
+    if (willRestoreConfig) {
+      // The snapshot has been consumed, so the point it came out of is no longer
+      // protected and retention applies to it like anything else. Without this
+      // the one pass that would have pruned it has already happened, and a
+      // rollback pins the service — which is precisely what keeps scheduled
+      // installs away from it — so the next backup that would prune it might
+      // never come. "Only the latest" would quietly mean two, on a NAS, for as
+      // long as the app stays pinned.
+      try {
+        const pruned = await this.pruneServiceBackups(settings, service.id, { logger: stepLogger });
+        stepLogger.info("rollback.pruned_restore_point", { serviceId: service.id, pruned: pruned.pruned });
+      } catch (error) {
+        // Bookkeeping. The rollback itself has already succeeded, and leaving a
+        // spare backup behind is not a reason to report it as failed.
+        stepLogger.warn("rollback.prune_failed", { serviceId: service.id, message: error.message });
+      }
     }
 
     await ctx.step("pin", async () => {

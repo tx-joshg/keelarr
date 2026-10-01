@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 
 import { ManagedStackService } from "../src/lib/app-services/managed-stack-service.js";
 import { JOB_STATUS, JobRegistry, STEP_STATUS } from "../src/lib/jobs.js";
@@ -1911,4 +1911,129 @@ test("a rollback that restores reports configRestored, and one that cannot does 
 
   assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
   assert.equal(job.result.configRestored, false, "it cannot restore what was never captured");
+});
+
+test("retention catches up once the restored snapshot is no longer needed", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const prunes = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true }),
+      pruneServiceBackupsImpl: async (_s, serviceId, options) => {
+        prunes.push({ serviceId, protect: options.protect });
+        return { pruned: 1, kept: 1 };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // A rollback pins the service, and pinned services are skipped by scheduled
+  // installs — so the next backup that would have pruned the spare might never
+  // come. Retention has to catch up here instead.
+  assert.equal(prunes.length, 1);
+  assert.equal(prunes[0].serviceId, "radarr");
+  assert.equal(prunes[0].protect, undefined, "nothing is protected once the snapshot is consumed");
+});
+
+test("an image-only rollback does not need a catch-up prune", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz" }
+  });
+
+  const prunes = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      pruneServiceBackupsImpl: async () => {
+        prunes.push(1);
+        return { pruned: 0, kept: 1 };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr" }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // Nothing was protected, so the backup step's own pass already applied it.
+  assert.deepEqual(prunes, []);
+});
+
+test("a rollback still succeeds when the catch-up prune fails", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true }),
+      pruneServiceBackupsImpl: async () => {
+        throw new Error("EACCES: permission denied");
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  // The rollback already happened. A spare backup left behind is not a reason to
+  // report it as failed.
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.equal(job.result.configRestored, true);
+});
+
+test("a config rollback ends with the retention the operator asked for", async (t) => {
+  const stack = await createStack(t);
+  const stamp = "2026-08-03T00-00-00-000Z";
+  const pointDir = await writeBackup(stack.root, stamp, {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+  await writeFile(path.join(pointDir, "config-snapshot.tar.gz"), "archive", "utf8");
+
+  let snapshotPresent = null;
+  const { service } = createService(t, stack, {
+    impls: {
+      // Real backup and real retention, so the whole sequence runs: write a
+      // newer backup, spare the point, restore from it, then let retention
+      // catch up. Only the docker-dependent pieces are stubbed.
+      backupServiceImpl: async (settings, svc, options) =>
+        backupService({ ...settings, dockerBin: "/nonexistent/docker" }, svc, {
+          ...options,
+          snapshotConfigImpl: async () => ({ ok: false, skipped: true, reason: "not under test" })
+        }),
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async (_s, _svc, dir) => {
+        snapshotPresent = await stat(path.join(dir, "config-snapshot.tar.gz")).then(() => true, () => false);
+        return { ok: true };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // The snapshot was there when it was needed...
+  assert.equal(snapshotPresent, true);
+  // ...and the spare is gone afterwards, so backupRetention: 1 means one.
+  const left = await readdir(path.join(stack.root, ".keelarr-backups", "radarr"));
+  assert.equal(left.length, 1, `expected one backup to remain, found ${left.join(", ")}`);
+  assert.ok(!left.includes(stamp), "the consumed restore point is the one that went");
 });
