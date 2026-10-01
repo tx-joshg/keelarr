@@ -1800,3 +1800,55 @@ test("a rollback's restore point still exists when the restore step reads it", a
   // restore a config snapshot at all on a default install.
   assert.equal(snapshotPresent, true, "the rollback pruned the snapshot it was about to restore");
 });
+
+test("an image-only rollback does not hold on to the old restore point", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const backupOptions = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      backupServiceImpl: async (_s, _svc, options) => {
+        backupOptions.push(options);
+        return { backupDir: "/backups/radarr/newer", rollback: {} };
+      }
+    }
+  });
+
+  // Restore configuration left unchecked, which is the UI default.
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr" }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  // Nothing reads the point after this, so protecting it would leave two
+  // backups on disk for an operator whose retention asks for one.
+  assert.deepEqual(backupOptions[0].protect, []);
+});
+
+test("a rollback whose point has no snapshot does not hold on to it either", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous"
+  });
+
+  const backupOptions = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      backupServiceImpl: async (_s, _svc, options) => {
+        backupOptions.push(options);
+        return { backupDir: "/backups/radarr/newer", rollback: {} };
+      }
+    }
+  });
+
+  // Asked for, but there is no snapshot to restore, so restore-config skips.
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.SUCCEEDED, job.error?.message);
+  assert.deepEqual(backupOptions[0].protect, []);
+  assert.equal(job.steps.find((s) => s.name === "restore-config").status, STEP_STATUS.SKIPPED);
+});

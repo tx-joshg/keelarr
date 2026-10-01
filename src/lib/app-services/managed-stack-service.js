@@ -787,20 +787,27 @@ export class ManagedStackService {
 
     const { settings, service, point, currentImage, configMount } = plan;
     const stepLogger = logger.child({ serviceId: service.id, containerName: service.containerName });
+    // Decided once, because the backup step has to know whether anything will
+    // still be reading the restore point after it prunes.
+    const willRestoreConfig = input.restoreConfig === true && Boolean(point.configSnapshot);
 
     const backup = await ctx.step("backup", async () => {
-      // The point this rollback restores from is protected: it was resolved in
-      // preflight, it is older than the backup being written here, and at the
-      // default retention of 1 pruning would otherwise delete it a step before
-      // restore-config reads its snapshot.
+      // When the configuration is coming back, the point it comes from is
+      // protected: it was resolved in preflight, it is older than the backup
+      // being written here, and at the default retention of 1 pruning would
+      // otherwise delete it a step before restore-config reads its snapshot.
+      //
+      // Only then, though. Rolling back the image alone — the default — reads
+      // nothing out of that directory afterwards, and keeping it anyway would
+      // leave two backups on disk for an operator who asked to keep one.
       const result = await this.backupService(settings, service, {
         logger: stepLogger,
-        protect: [point.backupDir]
+        protect: willRestoreConfig ? [point.backupDir] : []
       });
       return { detail: `Backed up to ${result.backupDir}.`, ...result };
     });
 
-    if (input.restoreConfig && point.configSnapshot) {
+    if (willRestoreConfig) {
       await ctx.step("restore-config", async () => {
         // Stop first: restoring the database under a running app would leave
         // it holding stale handles and half-written state.
