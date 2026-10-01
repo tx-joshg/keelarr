@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { tmpdir } from "node:os";
 
 import {
+  pruneServiceBackups,
   buildConfigRestoreScript,
   buildRollbackRecord,
   explainDeployFailure,
@@ -195,4 +199,70 @@ test("the restore honours the exclusions recorded with the snapshot", () => {
   // An empty or missing record falls back rather than clearing everything.
   assert.match(buildConfigRestoreScript([]), /\[Bb\]ackups/);
   assert.match(buildConfigRestoreScript(undefined), /\[Bb\]ackups/);
+});
+
+// --- retention must not eat a backup an operation is still reading -------------
+
+async function withBackups(t, stamps, { backupRetention = 1 } = {}) {
+  const root = await mkdtemp(path.join(tmpdir(), "keelarr-prune-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  for (const stamp of stamps) {
+    const dir = path.join(root, ".keelarr-backups", "radarr", stamp);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "config-snapshot.tar.gz"), stamp, "utf8");
+  }
+
+  return {
+    settings: { stackRoot: root, backupRetention },
+    remaining: async () => (await readdir(path.join(root, ".keelarr-backups", "radarr"))).sort()
+  };
+}
+
+const OLDER = "2026-09-25T06-00-45-961Z";
+const NEWER = "2026-10-01T09-00-00-000Z";
+
+test("retention prunes the older backup when nothing claims it", async (t) => {
+  const { settings, remaining } = await withBackups(t, [OLDER, NEWER]);
+
+  const result = await pruneServiceBackups(settings, "radarr");
+
+  assert.equal(result.pruned, 1);
+  assert.deepEqual(await remaining(), [NEWER]);
+});
+
+test("a protected backup survives retention, because something is restoring from it", async (t) => {
+  const { settings, remaining } = await withBackups(t, [OLDER, NEWER]);
+
+  // A rollback resolves its restore point and only then writes a backup of its
+  // own. At the default retention of 1 that new backup pruned the point, and the
+  // restore-config step a moment later read a directory that no longer existed —
+  // so manual rollback could not restore a config snapshot at all.
+  const result = await pruneServiceBackups(settings, "radarr", {
+    protect: [path.join(settings.stackRoot, ".keelarr-backups", "radarr", OLDER)]
+  });
+
+  assert.equal(result.pruned, 0);
+  assert.equal(result.kept, 2);
+  assert.deepEqual(await remaining(), [OLDER, NEWER], "the restore point is still there");
+});
+
+test("a protected backup is matched by name as well as by full path", async (t) => {
+  const { settings, remaining } = await withBackups(t, [OLDER, NEWER]);
+
+  const result = await pruneServiceBackups(settings, "radarr", { protect: [OLDER] });
+
+  assert.equal(result.pruned, 0);
+  assert.deepEqual(await remaining(), [OLDER, NEWER]);
+});
+
+test("protecting a backup does not stop retention pruning the rest", async (t) => {
+  const oldest = "2026-08-01T00-00-00-000Z";
+  const { settings, remaining } = await withBackups(t, [oldest, OLDER, NEWER]);
+
+  const result = await pruneServiceBackups(settings, "radarr", { protect: [OLDER] });
+
+  // Sparing one entry is not a licence to keep everything.
+  assert.equal(result.pruned, 1);
+  assert.deepEqual(await remaining(), [OLDER, NEWER]);
 });
