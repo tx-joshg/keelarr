@@ -1182,3 +1182,135 @@ test("Upgrade All reverts an unhealthy service when auto-revert is on and keeps 
   assert.equal(job.steps.find((step) => step.name === "sonarr").status, STEP_STATUS.SUCCEEDED);
   assert.equal(job.result.results.find((r) => r.serviceId === "radarr").reverted, true);
 });
+
+// --- an automatic revert must not strand the app on a newer database ------------
+
+const PREVIOUS_WITH_SNAPSHOT = {
+  imageId: "sha256:previous",
+  imageRef: "linuxserver/radarr@sha256:previous",
+  taggedImage: "linuxserver/radarr:latest",
+  backupDir: "/stacks/.keelarr-backups/radarr/2026-09-25T06-00-45-961Z",
+  backedUpAt: "2026-09-25T06:00:45.961Z",
+  configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+};
+
+/**
+ * The Trailarr outage in one test. The new image migrated the database forward,
+ * the health check gave up, and the revert put the old image back on top of the
+ * new schema — so the older binary could not read it and parked itself. Going
+ * back has to take the database with it.
+ */
+test("an automatic revert restores the config snapshot before putting the image back", async (t) => {
+  const stack = await createStack(t);
+  const restores = [];
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    point: PREVIOUS_WITH_SNAPSHOT,
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => {
+        calls.push("compose-down");
+        return { ok: true, stdout: "", stderr: "", code: 0 };
+      },
+      restoreConfigSnapshotImpl: async (_s, _svc, dir, opts) => {
+        calls.push("restore-config");
+        restores.push({ dir, mount: opts.mount });
+        return { ok: true };
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // The order is the point: stopped, database put back, then the image.
+  assert.deepEqual(calls, ["pull+up", "verify", "compose-down", "restore-config", "compose-up", "verify"]);
+  assert.equal(result.reverted, true);
+  assert.deepEqual(restores, [{ dir: PREVIOUS_WITH_SNAPSHOT.backupDir, mount: { type: "bind", source: "/config/radarr" } }]);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr@sha256:previous");
+});
+
+test("a revert says in the record that the database went back with the image", async (t) => {
+  const stack = await createStack(t);
+  const { activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    point: PREVIOUS_WITH_SNAPSHOT,
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "", code: 0 }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.equal(result.reverted, true);
+  // An operator reading this the next morning needs to know it was a real
+  // revert and not a reset to an older binary over a newer database.
+  assert.match(activity.at(-1).message, /configuration from 2026-09-25T06:00:45\.961Z was restored with it/);
+});
+
+test("a stateful service with no config snapshot is left on the new image rather than bricked", async (t) => {
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    // A backup that captured the image but not the database — the snapshot
+    // failed, or the backup predates snapshots entirely.
+    point: { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" },
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Nothing was put back: the new image is unhealthy but at least consistent
+  // with the schema on disk, which beats an older image that cannot read it.
+  assert.deepEqual(calls, ["pull+up", "verify"]);
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /keeps state in \/config\/radarr/);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("a revert whose config restore fails brings the service back up on the new image", async (t) => {
+  const stack = await createStack(t);
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    point: PREVIOUS_WITH_SNAPSHOT,
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => {
+        calls.push("compose-down");
+        return { ok: true, stdout: "", stderr: "", code: 0 };
+      },
+      restoreConfigSnapshotImpl: async () => ({ ok: false, reason: "tar failed" })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // It was taken down to restore, the restore failed, so it goes back up on
+  // the image it was upgraded to rather than being left off.
+  assert.deepEqual(calls, ["pull+up", "verify", "compose-down", "compose-up"]);
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /could not be restored/);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("a stateless service with no config snapshot is still reverted on the image alone", async (t) => {
+  const stack = await createStack(t);
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: { readConfigMountSourceImpl: async () => null }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Nothing stateful to mismatch, so the old behaviour is right here.
+  assert.equal(result.reverted, true);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr@sha256:previous");
+});

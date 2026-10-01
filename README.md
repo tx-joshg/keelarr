@@ -47,7 +47,10 @@ It runs as one container, reads your Docker socket, and gives you:
 - **Upgrades and rollbacks**, including a config snapshot so a rollback restores
   the app's database, not just its image.
 - **Scheduled updates**, per app, at one time of day you choose — and, if you
-  ask for it, an upgrade that does not come back is put back on its own.
+  ask for it, an upgrade that does not come back is put back on its own, database
+  included. When it cannot put the database back it leaves the new image running
+  and says so, rather than stranding an app on a schema its older version cannot
+  read.
 - **Removal that is reversible** — keep the config, reinstall later, and the app
   comes back as itself rather than as a fresh install.
 

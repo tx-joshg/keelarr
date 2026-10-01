@@ -1361,6 +1361,52 @@ export class ManagedStackService {
       return refuse(`the previous image ${point.imageRef} is no longer on this host.`);
     }
 
+    // Putting the image back is only half a revert. An app that migrates its
+    // database on startup has already moved the schema forward by the time the
+    // health check fails, and the older binary cannot read what the newer one
+    // wrote — Trailarr parks itself on "Can't locate revision" and never binds
+    // its port. So the database goes back with the image, the way a manual
+    // rollback does, or the revert does not happen at all.
+    //
+    // Read the mount while the container still exists: restoring takes it down
+    // first, and a container that is gone cannot be inspected for its mounts.
+    const configMount = await this.readConfigMountSource(settings, service, { logger });
+
+    if (point.configSnapshot) {
+      if (!configMount) {
+        return refuse("its /config mount could not be read, so the database could not be put back with the image.");
+      }
+
+      // Stop first: restoring the database under a running app would leave it
+      // holding stale handles and half-written state.
+      await this.composeDown(settings, service, { logger });
+      const restoredConfig = await this.restoreConfigSnapshot(settings, service, point.backupDir, {
+        logger,
+        mount: configMount
+      });
+
+      if (!restoredConfig.ok) {
+        // The service is down and its /config is in an unknown state. Bring it
+        // back on the image it was upgraded to — the one image that certainly
+        // matches whatever schema is now on disk — rather than leaving it off.
+        await this.generateAndDeploy(settings, service, { logger });
+        return refuse(`its configuration could not be restored, so the image was left alone: ${restoredConfig.reason}`);
+      }
+
+      logger.info("service.revert_config_restored", {
+        serviceId: service.id,
+        backupDir: point.backupDir,
+        backedUpAt: point.backedUpAt
+      });
+    } else if (configMount) {
+      // Stateful, with nothing to put the state back from. Going back on the
+      // image alone is the move that bricks it; the new image is at least
+      // consistent with its own schema, so it stays and the operator is told.
+      return refuse(
+        `no configuration snapshot was captured before the upgrade and ${service.name} keeps state in ${configMount.source}, so going back to ${point.imageRef} risks leaving it on a database the older version cannot read.`
+      );
+    }
+
     const restore = await this.restoreImage(settings, service, point.imageRef, logger);
 
     if (!restore.ok) {
@@ -1392,6 +1438,12 @@ export class ManagedStackService {
     }
 
     const revertHealth = await this.verifyServiceHealth(settings, service, { ...this.verifyOptions, logger });
+    // Worth saying out loud in the record: an operator reading this the next
+    // morning needs to know the database went back too, because that is the
+    // difference between a revert and a reset to an older binary.
+    const configNote = point.configSnapshot
+      ? ` Its configuration from ${point.backedUpAt || "the pre-upgrade backup"} was restored with it.`
+      : "";
     // The pin is in place whatever the previous image does next, and it is
     // what keeps the nightly run away, so the state is rolled-back either way.
     await this.recordRolledBackState(service.id);
@@ -1404,7 +1456,7 @@ export class ManagedStackService {
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
-        message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, but that did not come back either.`,
+        message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, but that did not come back either.${configNote}`,
         details: {
           serviceId: service.id,
           reason: health.reason,
@@ -1420,6 +1472,7 @@ export class ManagedStackService {
         ok: false,
         pinned: true,
         restored: true,
+        configRestored: Boolean(point.configSnapshot),
         imageRef: point.imageRef,
         taggedImage: point.taggedImage,
         health: revertHealth,
@@ -1430,7 +1483,7 @@ export class ManagedStackService {
     await this.appendActivity({
       kind: "upgrade",
       level: "error",
-      message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}.`,
+      message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}.${configNote}`,
       details: {
         serviceId: service.id,
         reason: health.reason,
@@ -1446,7 +1499,15 @@ export class ManagedStackService {
       revertHealth: revertHealth.outcome
     });
 
-    return { ok: true, pinned: true, restored: true, imageRef: point.imageRef, taggedImage: point.taggedImage, health: revertHealth };
+    return {
+      ok: true,
+      pinned: true,
+      restored: true,
+      configRestored: Boolean(point.configSnapshot),
+      imageRef: point.imageRef,
+      taggedImage: point.taggedImage,
+      health: revertHealth
+    };
   }
 
   async upgradeManagedService(serviceId, context = {}) {

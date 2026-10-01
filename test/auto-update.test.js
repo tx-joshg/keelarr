@@ -129,6 +129,10 @@ function createService(overrides = {}) {
     },
     findRollbackPointImpl: async (_s, svc) => ({ imageId: "sha256:previous", imageRef: `linuxserver/${svc.id}@sha256:previous`, taggedImage: `linuxserver/${svc.id}:latest` }),
     imageExistsLocallyImpl: async () => true,
+    // No /config mount and no snapshot in the rollback point above: these are
+    // the stateless case, where putting the image back on its own is a whole
+    // revert. The database-safety rules have their own tests in rollback.test.js.
+    readConfigMountSourceImpl: async () => null,
     setComposeImageImpl: async () => {},
     // A reverted app's compose file names a digest; everything else names the tag.
     readComposeImageImpl: async (svc) => overrides.pinned?.includes(svc.id)
