@@ -2101,3 +2101,37 @@ test("a rollback whose health check fails keeps the point too", async (t) => {
   assert.equal(job.status, JOB_STATUS.FAILED);
   assert.deepEqual(prunes, []);
 });
+
+test("retention catches up even when the rollback's bookkeeping fails", async (t) => {
+  const stack = await createStack(t);
+  await writeBackup(stack.root, "2026-08-03T00-00-00-000Z", {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const prunes = [];
+  const { service } = createService(t, stack, {
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true }),
+      // finalize writes state and activity, and a full disk is exactly the
+      // condition under which a leaked backup matters most.
+      appendActivityImpl: async () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+      pruneServiceBackupsImpl: async () => {
+        prunes.push(1);
+        return { pruned: 1, kept: 1 };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  // The image and the configuration are already back and verified. Whatever
+  // finalize does with its records, retention has had its pass.
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.deepEqual(prunes, [1], "the spare was pruned despite finalize failing");
+});
