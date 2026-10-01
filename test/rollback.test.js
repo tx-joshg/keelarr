@@ -1677,3 +1677,42 @@ test("a recovery that comes back running but unhealthy is reported as running", 
   assert.ok(!/is down/.test(result.error), `should not claim it is down: ${result.error}`);
   assert.equal(stored.radarr.status, "current");
 });
+
+test("a revert that comes back running but unhealthy does not claim it never came back", async (t) => {
+  const stack = await createStack(t);
+  const { activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    impls: {
+      // The new image is unhealthy and so is the old one, but the old one is up.
+      verifyServiceHealthImpl: async () => UNHEALTHY_RUNNING
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // "did not come back either" of a running container is simply wrong, and it
+  // is the sentence an operator reads first.
+  assert.match(activity.at(-1).message, /running but still not healthy/);
+  assert.equal(activity.at(-1).details.running, true);
+  assert.match(result.error, /It is running, but not healthy/);
+  // Still not a recovery: an app on its old image with a failing healthcheck is
+  // not fixed, so revertedDown stays true and the nightly summary counts it with
+  // the failures. That classification is unchanged here and covered by
+  // "a reverted app that stays down is counted with the failures" in
+  // auto-update.test.js; upgradeManagedService does not surface the field.
+  assert.equal(result.reverted, true);
+});
+
+test("a revert whose previous image is genuinely down still says so", async (t) => {
+  const stack = await createStack(t);
+  const { activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    impls: { verifyServiceHealthImpl: async () => UNHEALTHY }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.match(activity.at(-1).message, /did not come back either/);
+  assert.equal(activity.at(-1).details.running, false);
+  assert.equal(result.reverted, true);
+});

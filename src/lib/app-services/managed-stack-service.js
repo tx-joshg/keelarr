@@ -1305,6 +1305,9 @@ export class ManagedStackService {
       // Pinned means the compose file names it, which a failed restore can
       // also leave behind. Only the first is a revert in any useful sense.
       reverted: revert.restored === true,
+      // Covers both a previous image that never came up and one that came up
+      // unhealthy: neither is a recovery, which is what the nightly summary
+      // separates. `running` on the result says which of the two it was.
       revertedDown: revert.restored === true && revert.ok !== true,
       pinned: revert.pinned === true,
       revertedTo: revert.imageRef || null,
@@ -1595,33 +1598,54 @@ export class ManagedStackService {
     const revertedTo = point.taggedImage || point.imageRef;
 
     if (revertHealth.outcome === HEALTH_OUTCOME.FAILED) {
-      // Going back did not bring it back — a migration the new image ran on
-      // the database, most likely. Calling that "reverted" and returning ok
-      // would report a service that is down as recovered.
+      // Going back did not bring it back healthy — a migration the new image ran
+      // on the database, most likely. Calling that "reverted" and returning ok
+      // would report a service that is not working as recovered.
+      //
+      // Down and up-but-unhealthy are different things, though, and the record
+      // has to say which: "did not come back either" of a container that is
+      // running is simply wrong, and it is the sentence an operator reads first.
+      // Both still count as a failed revert rather than a recovery — an app on
+      // its old image with a failing healthcheck is not fixed — but only one of
+      // them is off.
+      const revertRunning = revertHealth.status === "running";
+      const message = revertRunning
+        ? `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, which is running but still not healthy.${configNote}`
+        : `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, but that did not come back either.${configNote}`;
+
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
-        message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, but that did not come back either.${configNote}`,
+        message,
         details: {
           serviceId: service.id,
           reason: health.reason,
           reverted: true,
           revertedTo: point.imageRef,
+          running: revertRunning,
           revertHealth: revertHealth.outcome,
           revertReason: revertHealth.reason
         }
       });
-      logger.error("service.upgrade_revert_down", { serviceId: service.id, to: point.imageRef, reason: revertHealth.reason });
+      logger.error("service.upgrade_revert_down", {
+        serviceId: service.id,
+        to: point.imageRef,
+        running: revertRunning,
+        reason: revertHealth.reason
+      });
 
       return {
         ok: false,
         pinned: true,
         restored: true,
+        running: revertRunning,
         configRestored: Boolean(point.configSnapshot),
         imageRef: point.imageRef,
         taggedImage: point.taggedImage,
         health: revertHealth,
-        reason: revertHealth.reason
+        reason: revertRunning
+          ? `${revertHealth.reason} It is running, but not healthy.`
+          : revertHealth.reason
       };
     }
 
@@ -1634,6 +1658,7 @@ export class ManagedStackService {
         reason: health.reason,
         reverted: true,
         revertedTo: point.imageRef,
+        running: true,
         revertHealth: revertHealth.outcome
       }
     });
