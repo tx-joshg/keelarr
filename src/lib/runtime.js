@@ -263,12 +263,23 @@ export async function snapshotConfig(settings, service, backupDir, options = {})
  * recovery copies to perform the recovery.
  */
 export function buildConfigRestoreScript(excludes = CONFIG_SNAPSHOT_EXCLUDES, snapshotFile = CONFIG_SNAPSHOT_FILE) {
-  const keep = excludes.map((entry) => entry.replace(/^\.\//, "")).join("|");
+  const keep = (excludes?.length ? excludes : CONFIG_SNAPSHOT_EXCLUDES)
+    .map((entry) => entry.replace(/^\.\//, ""))
+    .join("|");
 
-  // `[ -e ]` guards the no-match case, where the globs come through literally.
+  // The archive is read through once before anything is deleted. A snapshot
+  // that is missing or truncated would otherwise be discovered by `tar xzf`
+  // after the live config was already gone, turning a failed upgrade into a
+  // fresh install. `set -e` stops here instead.
+  //
+  // Both dot globs are needed: `.[!.]*` misses a name beginning with two dots,
+  // and `.??*` catches those while still skipping `.` and `..` themselves.
+  // `[ -e ]` guards the no-match case, where a glob comes through literally,
+  // and makes the overlap between the two harmless.
   return `set -e
+tar tzf /backup/${snapshotFile} > /dev/null
 cd /dst
-for entry in * .[!.]*; do
+for entry in * .[!.]* .??*; do
   [ -e "$entry" ] || continue
   case "$entry" in
     ${keep}) continue ;;
@@ -304,7 +315,11 @@ export async function restoreConfigSnapshot(settings, service, backupDir, option
       "-v", `${mount.source}:/dst`,
       "-v", `${backupDir}:/backup:ro`,
       options.helperImage || SNAPSHOT_HELPER_IMAGE,
-      "sh", "-c", buildConfigRestoreScript()
+      // The exclusions recorded with this snapshot, not today's list: an
+      // archive made by an older version may have kept different directories,
+      // and clearing by the current list would either delete something the
+      // archive deliberately omitted or preserve something it captured.
+      "sh", "-c", buildConfigRestoreScript(options.excludes)
     ],
     { logger: options.logger, timeoutMs: options.timeoutMs || 300_000 }
   );

@@ -1324,20 +1324,25 @@ export class ManagedStackService {
    * resolves to the image that just failed.
    */
   async revertUpgrade(settings, service, previousImageId, health, logger, { newImageStarted = true } = {}) {
-    const refuse = async (reason) => {
+    // `running` says whether the new image is actually up at the point of
+    // refusing. It defaults to whether it ever started, but a revert that
+    // stopped the service and could not bring it back must say so: recording
+    // the image as current would leave the dashboard and Upgrade All treating
+    // an absent service as done.
+    const refuse = async (reason, { running = newImageStarted } = {}) => {
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
         message: `Upgraded ${service.name}, but it did not come back healthy, and it could not be reverted: ${reason}`,
-        details: { serviceId: service.id, reason: health.reason, reverted: false }
+        details: { serviceId: service.id, reason: health.reason, reverted: false, running }
       });
       // Nothing was put back, so the failed image is what is running — if it
       // ever started. When Compose could not start it, nothing is current,
       // and the old status stays so Upgrade All picks it up again.
-      if (newImageStarted) {
+      if (running) {
         await this.recordFreshImageState(service.id, { upgradedAt: new Date().toISOString() });
       }
-      return { ok: false, pinned: false, restored: false, reason };
+      return { ok: false, pinned: false, restored: false, running, reason };
     };
 
     // Written by upgradeService before the pull; its imageId is the old one,
@@ -1377,7 +1382,15 @@ export class ManagedStackService {
     const declaresConfig = Array.isArray(service.volumes) && service.volumes.includes("config");
     // Read while the container still exists: restoring takes it down first, and
     // a container that is gone cannot be inspected for its mounts.
-    const configMount = await this.readConfigMountSource(settings, service, { logger });
+    //
+    // An upgrade whose `compose up` never started anything leaves no container
+    // to inspect, and that is exactly the failure a revert is for. The snapshot
+    // recorded the mount it captured moments earlier, so that stands in when
+    // the live answer is missing rather than the revert giving up.
+    const recordedMount = point.configSnapshot?.mountSource
+      ? { type: point.configSnapshot.mountType || "bind", source: point.configSnapshot.mountSource }
+      : null;
+    const configMount = (await this.readConfigMountSource(settings, service, { logger })) || recordedMount;
 
     if (point.configSnapshot) {
       if (!configMount) {
@@ -1391,14 +1404,24 @@ export class ManagedStackService {
       const stopped = await this.composeDown(settings, service, { logger });
 
       if (!stopped.ok) {
-        await this.generateAndDeploy(settings, service, { logger });
+        // `down` can fail having already removed the container, so the service
+        // is not necessarily still up. Put it back and report what actually
+        // happened rather than assuming it never moved.
+        const recovered = await this.generateAndDeploy(settings, service, { logger });
         const why = (stopped.stderr || stopped.stdout || "compose down failed.").split("\n").filter(Boolean).pop();
-        return refuse(`it could not be stopped, so its database was left alone rather than restored underneath a running app: ${why}`);
+
+        return refuse(
+          recovered.ok
+            ? `it could not be stopped, so its database was left alone rather than restored underneath a running app: ${why}`
+            : `it could not be stopped (${why}), and it could not be started again afterwards. ${service.name} is down.`,
+          { running: recovered.ok }
+        );
       }
 
       const restoredConfig = await this.restoreConfigSnapshot(settings, service, point.backupDir, {
         logger,
-        mount: configMount
+        mount: configMount,
+        excludes: point.configSnapshot.excluded
       });
 
       if (!restoredConfig.ok) {
@@ -1411,7 +1434,8 @@ export class ManagedStackService {
         return refuse(
           recovered.ok
             ? `its configuration could not be restored, so the image was left alone: ${restoredConfig.reason}`
-            : `its configuration could not be restored (${restoredConfig.reason}), and it could not be started again afterwards. ${service.name} is down.`
+            : `its configuration could not be restored (${restoredConfig.reason}), and it could not be started again afterwards. ${service.name} is down.`,
+          { running: recovered.ok }
         );
       }
 
@@ -1445,18 +1469,44 @@ export class ManagedStackService {
       }
 
       const deployReason = (restore.stderr || restore.stdout || "Compose could not start the previous image.").split("\n").filter(Boolean).pop();
+      // The previous image would not start and the pin is off, so the compose
+      // file names the tag again — the image that was just upgraded to. Nothing
+      // has started it: restoring the config stopped the service, and before
+      // that this path relied on the upgraded container still being there. Try
+      // to bring it back, and if that fails too, say the service is down
+      // instead of leaving the operator to discover it.
+      const recovered = stillPinned
+        ? { ok: false }
+        : await this.generateAndDeploy(settings, service, { logger });
       const reason = stillPinned
         ? `${deployReason.replace(/\.?$/, ".")} The compose file is still pinned to ${point.imageRef}.`
-        : deployReason;
+        : recovered.ok
+          ? deployReason
+          : `${deployReason.replace(/\.?$/, ".")} ${service.name} could not be started again afterwards either, so it is down.`;
 
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
         message: `Upgraded ${service.name}, but it did not come back healthy, and the revert failed too: ${reason}`,
-        details: { serviceId: service.id, reason: health.reason, reverted: false, stillPinned, stderr: restore.stderr }
+        details: {
+          serviceId: service.id,
+          reason: health.reason,
+          reverted: false,
+          stillPinned,
+          running: recovered.ok,
+          stderr: restore.stderr
+        }
       });
 
-      return { ok: false, pinned: stillPinned, restored: false, imageRef: point.imageRef, taggedImage: point.taggedImage, reason };
+      return {
+        ok: false,
+        pinned: stillPinned,
+        restored: false,
+        running: recovered.ok,
+        imageRef: point.imageRef,
+        taggedImage: point.taggedImage,
+        reason
+      };
     }
 
     const revertHealth = await this.verifyServiceHealth(settings, service, { ...this.verifyOptions, logger });

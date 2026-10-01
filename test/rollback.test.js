@@ -1417,3 +1417,128 @@ test("a failed config restore that cannot be started again says the service is d
   assert.match(result.error, /could not be started again afterwards/);
   assert.match(result.error, /is down/);
 });
+
+test("a container that never started falls back to the mount the snapshot recorded", async (t) => {
+  const stack = await createStack(t);
+  const restores = [];
+  const { calls, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    // `compose up` never started anything, so there is nothing to inspect.
+    upgradeResult: { ok: false, phase: "up", stdout: "", stderr: "no such image" },
+    impls: {
+      readConfigMountSourceImpl: async () => null,
+      composeDownImpl: async () => {
+        calls.push("compose-down");
+        return { ok: true, stdout: "", stderr: "", code: 0 };
+      },
+      restoreConfigSnapshotImpl: async (_s, _svc, _dir, opts) => {
+        restores.push(opts.mount);
+        return { ok: true };
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // This is the failure a revert exists for, so refusing for want of a mount
+  // would be the worst possible moment to give up. The snapshot recorded the
+  // mount it captured moments before the upgrade.
+  assert.deepEqual(restores, [{ type: "bind", source: "/config/radarr" }]);
+  assert.equal(result.reverted, true);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr@sha256:previous");
+});
+
+test("the restore clears by the exclusions recorded with the snapshot, not today's list", async (t) => {
+  const stack = await createStack(t);
+  const seen = [];
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    point: {
+      imageId: "sha256:previous",
+      imageRef: "linuxserver/radarr@sha256:previous",
+      taggedImage: "linuxserver/radarr:latest",
+      backupDir: "/stacks/.keelarr-backups/radarr/old",
+      backedUpAt: "2026-08-01T00:00:00.000Z",
+      // An older Keelarr kept a shorter list.
+      configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr", excluded: ["./[Ll]ogs"] }
+    },
+    impls: {
+      restoreConfigSnapshotImpl: async (_s, _svc, _dir, opts) => {
+        seen.push(opts.excludes);
+        return { ok: true };
+      }
+    }
+  });
+
+  await service.upgradeManagedService("radarr");
+
+  // Clearing by today's list would delete a directory that archive kept, or
+  // keep one it captured.
+  assert.deepEqual(seen, [["./[Ll]ogs"]]);
+});
+
+test("a stop that fails and will not restart records the service as down, not current", async (t) => {
+  const stack = await createStack(t);
+  const { stored, activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    stored: { radarr: { status: "ready" } },
+    impls: {
+      composeDownImpl: async () => ({ ok: false, stdout: "", stderr: "container is restarting", code: 1 }),
+      generateAndDeployImpl: async () => ({ ok: false, stdout: "", stderr: "port is already allocated", code: 1 })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // `down` can fail having already removed the container. Recording the new
+  // image as current would leave Upgrade All and the dashboard treating an
+  // absent service as done.
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /is down/);
+  assert.notEqual(stored.radarr.status, "current", "a service that is down is not current");
+  assert.equal(activity.at(-1).details.running, false);
+});
+
+test("a previous image that will not deploy is followed by an attempt to bring the new one back", async (t) => {
+  const stack = await createStack(t);
+  let deploys = 0;
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: {
+      // The revert's own deploy fails; the recovery deploy after unpinning works.
+      generateAndDeployImpl: async () => {
+        deploys += 1;
+        return deploys === 1
+          ? { ok: false, stdout: "", stderr: "manifest unknown", code: 1 }
+          : { ok: true, stdout: "", stderr: "", code: 0 };
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // Restoring the config stopped the service, so without this it would be left
+  // off with a compose file pointing at a perfectly startable image.
+  assert.equal(deploys, 2, "it tried to bring the new image back after unpinning");
+  assert.equal(result.reverted, false);
+  assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
+});
+
+test("a revert that fails both ways says the service is down", async (t) => {
+  const stack = await createStack(t);
+  const { activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: {
+      generateAndDeployImpl: async () => ({ ok: false, stdout: "", stderr: "manifest unknown", code: 1 })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  assert.match(result.error, /could not be started again afterwards either/);
+  assert.equal(activity.at(-1).details.running, false);
+});
