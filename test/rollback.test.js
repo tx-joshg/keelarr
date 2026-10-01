@@ -2037,3 +2037,67 @@ test("a config rollback ends with the retention the operator asked for", async (
   assert.equal(left.length, 1, `expected one backup to remain, found ${left.join(", ")}`);
   assert.ok(!left.includes(stamp), "the consumed restore point is the one that went");
 });
+
+test("a rollback whose deploy fails keeps the point it would be retried from", async (t) => {
+  const stack = await createStack(t);
+  const stamp = "2026-08-03T00-00-00-000Z";
+  const pointDir = await writeBackup(stack.root, stamp, {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+  await writeFile(path.join(pointDir, "config-snapshot.tar.gz"), "archive", "utf8");
+
+  const prunes = [];
+  const { service } = createService(t, stack, {
+    deployResult: { ok: false, stdout: "", stderr: "manifest unknown", code: 1 },
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true }),
+      pruneServiceBackupsImpl: async () => {
+        prunes.push(1);
+        return { pruned: 1, kept: 1 };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  // undoPin puts the newer image back, and the backup taken earlier records that
+  // image — which findRollbackPoint skips. Pruning here would leave nothing to
+  // retry a transiently failed rollback from.
+  assert.deepEqual(prunes, [], "the restore point survives a failed rollback");
+  const left = await readdir(path.join(stack.root, ".keelarr-backups", "radarr"));
+  assert.ok(left.includes(stamp), `the point is still on disk: ${left.join(", ")}`);
+});
+
+test("a rollback whose health check fails keeps the point too", async (t) => {
+  const stack = await createStack(t);
+  const stamp = "2026-08-03T00-00-00-000Z";
+  await writeBackup(stack.root, stamp, {
+    imageId: "sha256:previous",
+    imageRepoDigest: "linuxserver/radarr@sha256:previous",
+    configSnapshot: { file: "config-snapshot.tar.gz", mountType: "bind", mountSource: "/config/radarr" }
+  });
+
+  const prunes = [];
+  const { service } = createService(t, stack, {
+    health: { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited.", status: "exited" },
+    impls: {
+      readConfigMountSourceImpl: async () => ({ type: "bind", source: "/config/radarr" }),
+      composeDownImpl: async () => ({ ok: true, stdout: "", stderr: "" }),
+      restoreConfigSnapshotImpl: async () => ({ ok: true }),
+      pruneServiceBackupsImpl: async () => {
+        prunes.push(1);
+        return { pruned: 1, kept: 1 };
+      }
+    }
+  });
+
+  const job = await settle(service.startRollback("radarr", { confirmContainerName: "radarr", restoreConfig: true }));
+
+  assert.equal(job.status, JOB_STATUS.FAILED);
+  assert.deepEqual(prunes, []);
+});

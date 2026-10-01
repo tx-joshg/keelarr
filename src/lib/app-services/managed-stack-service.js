@@ -846,24 +846,6 @@ export class ManagedStackService {
         : "Keeping current configuration.");
     }
 
-    if (willRestoreConfig) {
-      // The snapshot has been consumed, so the point it came out of is no longer
-      // protected and retention applies to it like anything else. Without this
-      // the one pass that would have pruned it has already happened, and a
-      // rollback pins the service — which is precisely what keeps scheduled
-      // installs away from it — so the next backup that would prune it might
-      // never come. "Only the latest" would quietly mean two, on a NAS, for as
-      // long as the app stays pinned.
-      try {
-        const pruned = await this.pruneServiceBackups(settings, service.id, { logger: stepLogger });
-        stepLogger.info("rollback.pruned_restore_point", { serviceId: service.id, pruned: pruned.pruned });
-      } catch (error) {
-        // Bookkeeping. The rollback itself has already succeeded, and leaving a
-        // spare backup behind is not a reason to report it as failed.
-        stepLogger.warn("rollback.prune_failed", { serviceId: service.id, message: error.message });
-      }
-    }
-
     await ctx.step("pin", async () => {
       await this.setComposeImage(service, point.imageRef);
       return { detail: `Pinned ${service.name} to ${point.imageRef}.` };
@@ -913,6 +895,28 @@ export class ManagedStackService {
 
       return { detail: `${service.name} is pinned to the previous image.` };
     });
+
+    if (willRestoreConfig) {
+      // Last, because everything above can still send the operator back to this
+      // point. The snapshot is spent once restore-config has read it, but pin,
+      // deploy and verify can each fail and undo themselves, and the backup
+      // written earlier records the image that is running again — which
+      // findRollbackPoint skips — so pruning before this would delete the only
+      // record they could retry from.
+      //
+      // It has to happen somewhere, though: a rollback pins the service, and a
+      // pinned service is what scheduled installs skip, so the next backup that
+      // would prune the spare might never come and "Only the latest" would
+      // quietly mean two for as long as the app stays pinned.
+      try {
+        const pruned = await this.pruneServiceBackups(settings, service.id, { logger: stepLogger });
+        stepLogger.info("rollback.pruned_restore_point", { serviceId: service.id, pruned: pruned.pruned });
+      } catch (error) {
+        // Bookkeeping, after the fact. The rollback has already succeeded and a
+        // spare backup left behind is not a reason to report it as failed.
+        stepLogger.warn("rollback.prune_failed", { serviceId: service.id, message: error.message });
+      }
+    }
 
     logger.warn("service.rollback", {
       serviceId: service.id,
