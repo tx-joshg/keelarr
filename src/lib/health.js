@@ -178,10 +178,17 @@ export async function verifyServiceHealth(settings, service, options = {}) {
       break;
     }
 
-    // `starting` is the one state that is positive evidence the app is still
+    // `starting` on a running container is positive evidence the app is still
     // on its way up, so it earns the grace. `unhealthy` does not: that is the
     // container's own healthcheck actively failing.
-    const stillStarting = lastState.healthStatus === "starting";
+    //
+    // Both halves matter. A container in a restart loop reports `restarting`
+    // while its health resets to `starting` on every attempt, which is not a
+    // slow start and must not be handed the grace and then reported as
+    // unverified — that is read as "came up" and records the upgrade as
+    // current. `restarting` is not in DEAD_STATUSES, so without the status
+    // check a crash loop would never reach the revert path at all.
+    const stillStarting = lastState.status === "running" && lastState.healthStatus === "starting";
     const effectiveDeadline = stillStarting ? startingDeadline : deadline;
 
     if (nowImpl() >= effectiveDeadline) {

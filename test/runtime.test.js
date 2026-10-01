@@ -157,14 +157,15 @@ test("restoring a config snapshot keeps what the snapshot deliberately excluded"
   assert.ok(!/rm -rf \/dst\/\*/.test(script), "no blanket wipe of the config directory");
   // Still destructive for everything the snapshot does cover: a file written
   // after it must not survive and confuse the older version.
-  assert.match(script, /rm -rf "\$entry"/);
+  // `--` so a legal config entry named like an option is treated as a filename.
+  assert.match(script, /rm -rf -- "\$entry"/);
   assert.match(script, /tar xzf \/backup\/config-snapshot\.tar\.gz -C \/dst/);
 });
 
 test("the restore script survives a config directory with no dotfiles", () => {
   // `.[!.]*` comes through literally when nothing matches, and `rm -rf` on that
   // literal would fail under `set -e`.
-  assert.match(buildConfigRestoreScript(), /\[ -e "\$entry" \] \|\| continue/);
+  assert.match(buildConfigRestoreScript(), /\[ -e "\$entry" \] \|\| \[ -L "\$entry" \] \|\| continue/);
 });
 
 test("the restore validates the archive before it deletes anything", () => {

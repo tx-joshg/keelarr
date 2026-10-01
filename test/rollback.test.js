@@ -900,7 +900,11 @@ function createUpgradeService(t, stack, overrides = {}) {
   return { calls, writes, activity, stored, service };
 }
 
-const UNHEALTHY = { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited." };
+// A real verifyServiceHealth result always carries the status it observed, and
+// the revert reads it to decide whether the new image is actually running.
+const UNHEALTHY = { outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited.", status: "exited" };
+// Up, but its healthcheck never passed. Still running, unlike the above.
+const UNHEALTHY_RUNNING = { outcome: HEALTH_OUTCOME.FAILED, reason: "Container healthcheck reports unhealthy.", status: "running" };
 
 test("a revert whose previous image does not come back either is reported as down, not as recovered", async (t) => {
   // A migration the new image ran on the database, say: going back does not
@@ -1081,8 +1085,10 @@ test("a revert is refused when the previous image is gone from the host", async 
   assert.deepEqual(calls, ["pull+up", "verify"]);
   assert.equal(result.reverted, false);
   assert.match(result.error, /no longer on this host/);
-  // Nothing was put back, so the failed image is what is running.
-  assert.equal(stored.radarr.status, "current");
+  // The health check found the container exited, so nothing is running and the
+  // old status stays: an absent service recorded as current reads as done to
+  // both the dashboard and Upgrade All.
+  assert.equal(stored.radarr?.status, undefined);
   assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
 });
 
@@ -1318,9 +1324,10 @@ test("a revert whose config restore fails brings the service back up on the new 
 
   const result = await service.upgradeManagedService("radarr");
 
-  // It was taken down to restore, the restore failed, so it goes back up on
-  // the image it was upgraded to rather than being left off.
-  assert.deepEqual(calls, ["pull+up", "verify", "compose-down", "compose-up"]);
+  // It was taken down to restore, the restore failed, so it goes back up on the
+  // image it was upgraded to rather than being left off — and that recovery is
+  // checked, because `compose up` exiting zero is not proof it stayed up.
+  assert.deepEqual(calls, ["pull+up", "verify", "compose-down", "compose-up", "verify"]);
   assert.equal(result.reverted, false);
   assert.match(result.error, /could not be restored/);
   assert.equal(await readComposeImage(stack.settings.services.radarr), "linuxserver/radarr:latest");
@@ -1541,4 +1548,106 @@ test("a revert that fails both ways says the service is down", async (t) => {
 
   assert.match(result.error, /could not be started again afterwards either/);
   assert.equal(activity.at(-1).details.running, false);
+});
+
+test("a service the health check found exited is not recorded as current", async (t) => {
+  const stack = await createStack(t);
+  const { stored, activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    stored: { radarr: { status: "ready" } },
+    point: { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // No snapshot and Radarr declares /config, so the revert declines — and the
+  // container is exited, so the image it declined to replace is not running.
+  assert.equal(result.reverted, false);
+  assert.equal(stored.radarr.status, "ready", "left for Upgrade All to pick up again");
+  assert.equal(activity.at(-1).details.running, false);
+});
+
+test("a service that is up but unhealthy is still recorded as current when a revert is declined", async (t) => {
+  const stack = await createStack(t);
+  const { stored, activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY_RUNNING,
+    stored: { radarr: { status: "ready" } },
+    point: { imageId: "sha256:previous", imageRef: "linuxserver/radarr@sha256:previous", taggedImage: "linuxserver/radarr:latest" }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // The new image is what is running, badly. That is true of the image, and the
+  // activity entry is what carries the failure.
+  assert.equal(result.reverted, false);
+  assert.equal(stored.radarr.status, "current");
+  assert.equal(activity.at(-1).details.running, true);
+});
+
+test("a recovery deploy that exits zero but does not stay up is reported as down", async (t) => {
+  const stack = await createStack(t);
+  const { service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: {
+      restoreConfigSnapshotImpl: async () => ({ ok: false, reason: "tar failed" }),
+      // Compose is happy; the container exits a second later.
+      verifyServiceHealthImpl: async () => ({ outcome: HEALTH_OUTCOME.FAILED, reason: "Container is exited.", status: "exited" })
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // `compose up` returning zero is not proof of a running service, which is why
+  // the ordinary upgrade path health-checks a deploy it knows succeeded.
+  assert.match(result.error, /could not be started again afterwards/);
+  assert.match(result.error, /is down/);
+});
+
+test("a compose file that cannot be written does not leave the revert silent", async (t) => {
+  const stack = await createStack(t);
+  const { activity, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    impls: {
+      setComposeImageImpl: async () => {
+        throw new Error("EACCES: permission denied, open 'compose.yml'");
+      }
+    }
+  });
+
+  const result = await service.upgradeManagedService("radarr");
+
+  // It rejects rather than returning, and the service has already been stopped
+  // to restore its database, so an unhandled throw left it down in silence.
+  assert.equal(result.reverted, false);
+  assert.match(result.error, /permission denied/);
+  assert.equal(activity.at(-1).kind, "upgrade");
+  assert.equal(activity.at(-1).level, "error");
+});
+
+test("a fallback onto the new image records it as current", async (t) => {
+  const stack = await createStack(t);
+  let deploys = 0;
+  const { stored, service } = createUpgradeService(t, stack, {
+    autoRevert: true,
+    health: UNHEALTHY,
+    stored: { radarr: { status: "ready" } },
+    impls: {
+      generateAndDeployImpl: async () => {
+        deploys += 1;
+        return deploys === 1
+          ? { ok: false, stdout: "", stderr: "manifest unknown", code: 1 }
+          : { ok: true, stdout: "", stderr: "", code: 0 };
+      }
+    }
+  });
+
+  await service.upgradeManagedService("radarr");
+
+  // The tag is running again, so it is current. Left as "ready", Upgrade All
+  // would start the same upgrade and the same revert over immediately.
+  assert.equal(stored.radarr.status, "current");
 });

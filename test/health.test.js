@@ -281,3 +281,32 @@ test("the grace is not extended to a healthcheck that is actively failing", asyn
   assert.equal(result.outcome, HEALTH_OUTCOME.FAILED);
   assert.match(result.reason, /Timed out after 60000ms/);
 });
+
+test("a container in a restart loop is not given the starting grace", async () => {
+  let clock = 0;
+  let polls = 0;
+
+  const result = await verifyServiceHealth({}, service, {
+    // A crash loop: Docker reports `restarting`, and the healthcheck resets to
+    // `starting` on every attempt.
+    inspectImpl: async () => {
+      polls += 1;
+      return { exists: true, status: "restarting", healthStatus: "starting" };
+    },
+    probeImpl: async () => null,
+    sleepImpl: async () => {
+      clock += 30_000;
+    },
+    intervalMs: 0,
+    timeoutMs: 60_000,
+    startingGraceMs: 600_000,
+    nowImpl: () => clock
+  });
+
+  // `restarting` is not in DEAD_STATUSES, so without the status check this took
+  // the grace and then resolved to unverified — which callers read as "came up"
+  // and record as current. A crash-looping upgrade must reach the revert path.
+  assert.equal(result.outcome, HEALTH_OUTCOME.FAILED);
+  assert.match(result.reason, /Timed out after 60000ms/);
+  assert.ok(clock < 600_000, `it gave up at the deadline, not after the grace (polled ${polls} times)`);
+});

@@ -275,16 +275,20 @@ export function buildConfigRestoreScript(excludes = CONFIG_SNAPSHOT_EXCLUDES, sn
   // Both dot globs are needed: `.[!.]*` misses a name beginning with two dots,
   // and `.??*` catches those while still skipping `.` and `..` themselves.
   // `[ -e ]` guards the no-match case, where a glob comes through literally,
-  // and makes the overlap between the two harmless.
+  // and makes the overlap between the two harmless. `-L` catches it too: `-e`
+  // is false for a dangling symlink, so one left behind by the upgraded app
+  // would survive a restore meant to discard it. `--` keeps a config entry
+  // named like an option — `-v` is a legal filename — from being read as one,
+  // which `rm` would otherwise accept and silently not delete.
   return `set -e
 tar tzf /backup/${snapshotFile} > /dev/null
 cd /dst
 for entry in * .[!.]* .??*; do
-  [ -e "$entry" ] || continue
+  [ -e "$entry" ] || [ -L "$entry" ] || continue
   case "$entry" in
     ${keep}) continue ;;
   esac
-  rm -rf "$entry"
+  rm -rf -- "$entry"
 done
 tar xzf /backup/${snapshotFile} -C /dst`;
 }
