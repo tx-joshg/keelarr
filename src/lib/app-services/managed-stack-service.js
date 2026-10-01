@@ -81,6 +81,10 @@ export class ManagedStackService {
     writeAutoUpdateStateImpl = writeAutoUpdateState,
     lease = null,
     leaseHeartbeatMs = 60_000,
+    // Long enough to catch a container that starts and exits, short enough not
+    // to add minutes to a revert that has already gone wrong. Injectable so the
+    // tests do not wait on it.
+    recoveryVerifyTimeoutMs = 15_000,
     setIntervalImpl = setInterval,
     clearIntervalImpl = clearInterval,
     setComposeImageImpl = setComposeImage,
@@ -125,6 +129,7 @@ export class ManagedStackService {
     this.autoUpdateStateQueue = Promise.resolve();
     this.lease = lease;
     this.leaseHeartbeatMs = leaseHeartbeatMs;
+    this.recoveryVerifyTimeoutMs = recoveryVerifyTimeoutMs;
     this.setIntervalImpl = setIntervalImpl;
     this.clearIntervalImpl = clearIntervalImpl;
     this.upgradeAllServices = upgradeAllServicesImpl;
@@ -1300,6 +1305,9 @@ export class ManagedStackService {
       // Pinned means the compose file names it, which a failed restore can
       // also leave behind. Only the first is a revert in any useful sense.
       reverted: revert.restored === true,
+      // Covers both a previous image that never came up and one that came up
+      // unhealthy: neither is a recovery, which is what the nightly summary
+      // separates. `running` on the result says which of the two it was.
       revertedDown: revert.restored === true && revert.ok !== true,
       pinned: revert.pinned === true,
       revertedTo: revert.imageRef || null,
@@ -1307,10 +1315,16 @@ export class ManagedStackService {
       health,
       stdout: result.stdout,
       stderr: result.stderr,
+      // The job step and the API read this, and the activity entry says the same
+      // thing in its own words a layer down. Both have to agree: a previous
+      // image that is up but unhealthy must not be introduced as one that did
+      // not come back, with its own reason then saying it is running.
       error: revert.ok
         ? `${health.reason} Reverted to ${revertedTo}.`
         : revert.restored
-          ? `${health.reason} Reverted to ${revertedTo}, but that did not come back either: ${revert.reason}`
+          ? revert.running
+            ? `${health.reason} Reverted to ${revertedTo}, but it is still not healthy: ${revert.reason}`
+            : `${health.reason} Reverted to ${revertedTo}, but that did not come back either: ${revert.reason}`
           : `${health.reason} Revert was not possible: ${revert.reason}`
     };
   }
@@ -1323,21 +1337,75 @@ export class ManagedStackService {
    * The pin target is the digest from the backup, never the tag: the tag now
    * resolves to the image that just failed.
    */
+  /**
+   * Brings a service back up and checks that it stayed up.
+   *
+   * `compose up` exiting zero is not proof of a running service: a container
+   * that starts and exits a second later satisfies the command and fails the
+   * app, which is why the ordinary upgrade path health-checks a deploy it
+   * already knows succeeded. Every recovery inside a revert needs the same
+   * scepticism, because what it returns decides whether the service is
+   * reported as running and its image recorded as current.
+   *
+   * On a short leash deliberately: this is deciding what to say about a
+   * recovery, not whether to revert, and a revert is already a failure path
+   * that an operator is waiting on. A container still starting when it runs
+   * out is not a failure — it is on its way up.
+   *
+   * What it answers is whether the service is *running*, not whether it is
+   * healthy. Those come apart for a container that is up with a failing
+   * healthcheck, and that state is the one the refusal path already records as
+   * current — the new image is what is running, badly, and the activity entry
+   * carries the failure. Calling it down here would contradict that and leave
+   * the same situation recorded two different ways depending on the route in.
+   */
+  async redeployAndConfirm(settings, service, logger) {
+    const deployed = await this.generateAndDeploy(settings, service, { logger });
+
+    if (!deployed.ok) {
+      return { running: false, deployed, health: null };
+    }
+
+    try {
+      const health = await this.verifyServiceHealth(settings, service, {
+        ...this.verifyOptions,
+        timeoutMs: this.recoveryVerifyTimeoutMs,
+        startingGraceMs: 0,
+        logger
+      });
+
+      return { running: health.status === "running", deployed, health };
+    } catch (error) {
+      logger.warn("service.recovery_verify_failed", { serviceId: service.id, message: error.message });
+      return { running: false, deployed, health: null };
+    }
+  }
+
   async revertUpgrade(settings, service, previousImageId, health, logger, { newImageStarted = true } = {}) {
-    const refuse = async (reason) => {
+    // `running` says whether the new image is actually up at the point of
+    // refusing. It defaults to whether it ever started, but a revert that
+    // stopped the service and could not bring it back must say so: recording
+    // the image as current would leave the dashboard and Upgrade All treating
+    // an absent service as done.
+    // The health check that sent us here recorded what the container was doing.
+    // A container it found exited is not running, whatever Compose said earlier,
+    // and recording its image as current would leave an absent service looking
+    // done to the dashboard and to Upgrade All.
+    const newImageRunning = newImageStarted && health?.status === "running";
+    const refuse = async (reason, { running = newImageRunning } = {}) => {
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
         message: `Upgraded ${service.name}, but it did not come back healthy, and it could not be reverted: ${reason}`,
-        details: { serviceId: service.id, reason: health.reason, reverted: false }
+        details: { serviceId: service.id, reason: health.reason, reverted: false, running }
       });
       // Nothing was put back, so the failed image is what is running — if it
       // ever started. When Compose could not start it, nothing is current,
       // and the old status stays so Upgrade All picks it up again.
-      if (newImageStarted) {
+      if (running) {
         await this.recordFreshImageState(service.id, { upgradedAt: new Date().toISOString() });
       }
-      return { ok: false, pinned: false, restored: false, reason };
+      return { ok: false, pinned: false, restored: false, running, reason };
     };
 
     // Written by upgradeService before the pull; its imageId is the old one,
@@ -1361,7 +1429,105 @@ export class ManagedStackService {
       return refuse(`the previous image ${point.imageRef} is no longer on this host.`);
     }
 
-    const restore = await this.restoreImage(settings, service, point.imageRef, logger);
+    // Putting the image back is only half a revert. An app that migrates its
+    // database on startup has already moved the schema forward by the time the
+    // health check fails, and the older binary cannot read what the newer one
+    // wrote — Trailarr parks itself on "Can't locate revision" and never binds
+    // its port. So the database goes back with the image, the way a manual
+    // rollback does, or the revert does not happen at all.
+    //
+    // Whether the app keeps state is read from the stack definition, not from
+    // the live container. readConfigMountSource returns null both for a service
+    // that genuinely has no /config and for an inspect that failed or found no
+    // container, and reading that ambiguity as "stateless" would authorise the
+    // exact image-only revert this is here to prevent. The declaration cannot
+    // fail, so it decides, and the mount only ever adds to it.
+    const declaresConfig = Array.isArray(service.volumes) && service.volumes.includes("config");
+    // Read while the container still exists: restoring takes it down first, and
+    // a container that is gone cannot be inspected for its mounts.
+    //
+    // An upgrade whose `compose up` never started anything leaves no container
+    // to inspect, and that is exactly the failure a revert is for. The snapshot
+    // recorded the mount it captured moments earlier, so that stands in when
+    // the live answer is missing rather than the revert giving up.
+    const recordedMount = point.configSnapshot?.mountSource
+      ? { type: point.configSnapshot.mountType || "bind", source: point.configSnapshot.mountSource }
+      : null;
+    const configMount = (await this.readConfigMountSource(settings, service, { logger })) || recordedMount;
+
+    if (point.configSnapshot) {
+      if (!configMount) {
+        return refuse("its /config mount could not be read, so the database could not be put back with the image.");
+      }
+
+      // Stop first, and only carry on if it actually stopped. The restore
+      // clears /config before extracting, so letting it race a live process is
+      // how a database gets torn in half — and compose down reports failure by
+      // returning it, not by throwing.
+      const stopped = await this.composeDown(settings, service, { logger });
+
+      if (!stopped.ok) {
+        // `down` can fail having already removed the container, so the service
+        // is not necessarily still up. Put it back and report what actually
+        // happened rather than assuming it never moved.
+        const recovered = await this.redeployAndConfirm(settings, service, logger);
+        const why = (stopped.stderr || stopped.stdout || "compose down failed.").split("\n").filter(Boolean).pop();
+
+        return refuse(
+          recovered.running
+            ? `it could not be stopped, so its database was left alone rather than restored underneath a running app: ${why}`
+            : `it could not be stopped (${why}), and it could not be started again afterwards. ${service.name} is down.`,
+          { running: recovered.running }
+        );
+      }
+
+      const restoredConfig = await this.restoreConfigSnapshot(settings, service, point.backupDir, {
+        logger,
+        mount: configMount,
+        excludes: point.configSnapshot.excluded
+      });
+
+      if (!restoredConfig.ok) {
+        // Down, with /config in an unknown state. Bring it back on the image it
+        // was upgraded to — the one image that certainly matches whatever schema
+        // is on disk — and say plainly when even that did not work, rather than
+        // reporting a service that is down as merely left running.
+        const recovered = await this.redeployAndConfirm(settings, service, logger);
+
+        return refuse(
+          recovered.running
+            ? `its configuration could not be restored, so the image was left alone: ${restoredConfig.reason}`
+            : `its configuration could not be restored (${restoredConfig.reason}), and it could not be started again afterwards. ${service.name} is down.`,
+          { running: recovered.running }
+        );
+      }
+
+      logger.info("service.revert_config_restored", {
+        serviceId: service.id,
+        backupDir: point.backupDir,
+        backedUpAt: point.backedUpAt
+      });
+    } else if (declaresConfig || configMount) {
+      // Stateful, with nothing to put the state back from. Going back on the
+      // image alone is the move that bricks it; the new image is at least
+      // consistent with its own schema, so it stays and the operator is told.
+      return refuse(
+        `no configuration snapshot was captured before the upgrade and ${service.name} keeps state in ${configMount?.source || "its config directory"}, so going back to ${point.imageRef} risks leaving it on a database the older version cannot read.`
+      );
+    }
+
+    // setComposeImage reads, parses and writes the compose file, so this rejects
+    // rather than returning on a permission or disk-space error. Unhandled, that
+    // threw straight out of a revert that had already stopped the service, past
+    // every recovery and every activity entry, and left it down in silence.
+    let restore;
+
+    try {
+      restore = await this.restoreImage(settings, service, point.imageRef, logger);
+    } catch (error) {
+      logger.error("service.revert_restore_failed", { serviceId: service.id, message: error.message });
+      restore = { ok: false, stdout: "", stderr: error.message };
+    }
 
     if (!restore.ok) {
       // The compose file was already pinned to the digest. Left like that, the
@@ -1377,65 +1543,128 @@ export class ManagedStackService {
       }
 
       const deployReason = (restore.stderr || restore.stdout || "Compose could not start the previous image.").split("\n").filter(Boolean).pop();
+      // The previous image would not start and the pin is off, so the compose
+      // file names the tag again — the image that was just upgraded to. Nothing
+      // has started it: restoring the config stopped the service, and before
+      // that this path relied on the upgraded container still being there. Try
+      // to bring it back, and if that fails too, say the service is down
+      // instead of leaving the operator to discover it.
+      const recovered = stillPinned
+        ? { running: false }
+        : await this.redeployAndConfirm(settings, service, logger);
+
+      // The compose file names the tag again and the new image is up, so that
+      // image is what is current. The health check deliberately skipped this
+      // update on its way to a revert, and leaving the service on its old
+      // "ready" would let Upgrade All start the whole sequence over at once.
+      if (recovered.running) {
+        await this.recordFreshImageState(service.id, { upgradedAt: new Date().toISOString() });
+      }
       const reason = stillPinned
         ? `${deployReason.replace(/\.?$/, ".")} The compose file is still pinned to ${point.imageRef}.`
-        : deployReason;
+        : recovered.running
+          ? deployReason
+          : `${deployReason.replace(/\.?$/, ".")} ${service.name} could not be started again afterwards either, so it is down.`;
 
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
         message: `Upgraded ${service.name}, but it did not come back healthy, and the revert failed too: ${reason}`,
-        details: { serviceId: service.id, reason: health.reason, reverted: false, stillPinned, stderr: restore.stderr }
+        details: {
+          serviceId: service.id,
+          reason: health.reason,
+          reverted: false,
+          stillPinned,
+          running: recovered.running,
+          stderr: restore.stderr
+        }
       });
 
-      return { ok: false, pinned: stillPinned, restored: false, imageRef: point.imageRef, taggedImage: point.taggedImage, reason };
+      return {
+        ok: false,
+        pinned: stillPinned,
+        restored: false,
+        running: recovered.running,
+        imageRef: point.imageRef,
+        taggedImage: point.taggedImage,
+        reason
+      };
     }
 
     const revertHealth = await this.verifyServiceHealth(settings, service, { ...this.verifyOptions, logger });
+    // Worth saying out loud in the record: an operator reading this the next
+    // morning needs to know the database went back too, because that is the
+    // difference between a revert and a reset to an older binary.
+    const configNote = point.configSnapshot
+      ? ` Its configuration from ${point.backedUpAt || "the pre-upgrade backup"} was restored with it.`
+      : "";
     // The pin is in place whatever the previous image does next, and it is
     // what keeps the nightly run away, so the state is rolled-back either way.
     await this.recordRolledBackState(service.id);
     const revertedTo = point.taggedImage || point.imageRef;
 
     if (revertHealth.outcome === HEALTH_OUTCOME.FAILED) {
-      // Going back did not bring it back — a migration the new image ran on
-      // the database, most likely. Calling that "reverted" and returning ok
-      // would report a service that is down as recovered.
+      // Going back did not bring it back healthy — a migration the new image ran
+      // on the database, most likely. Calling that "reverted" and returning ok
+      // would report a service that is not working as recovered.
+      //
+      // Down and up-but-unhealthy are different things, though, and the record
+      // has to say which: "did not come back either" of a container that is
+      // running is simply wrong, and it is the sentence an operator reads first.
+      // Both still count as a failed revert rather than a recovery — an app on
+      // its old image with a failing healthcheck is not fixed — but only one of
+      // them is off.
+      const revertRunning = revertHealth.status === "running";
+      const message = revertRunning
+        ? `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, which is running but still not healthy.${configNote}`
+        : `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, but that did not come back either.${configNote}`;
+
       await this.appendActivity({
         kind: "upgrade",
         level: "error",
-        message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}, but that did not come back either.`,
+        message,
         details: {
           serviceId: service.id,
           reason: health.reason,
           reverted: true,
           revertedTo: point.imageRef,
+          running: revertRunning,
           revertHealth: revertHealth.outcome,
           revertReason: revertHealth.reason
         }
       });
-      logger.error("service.upgrade_revert_down", { serviceId: service.id, to: point.imageRef, reason: revertHealth.reason });
+      logger.error("service.upgrade_revert_down", {
+        serviceId: service.id,
+        to: point.imageRef,
+        running: revertRunning,
+        reason: revertHealth.reason
+      });
 
       return {
         ok: false,
         pinned: true,
         restored: true,
+        running: revertRunning,
+        configRestored: Boolean(point.configSnapshot),
         imageRef: point.imageRef,
         taggedImage: point.taggedImage,
         health: revertHealth,
-        reason: revertHealth.reason
+        reason: revertRunning
+          ? `${revertHealth.reason} It is running, but not healthy.`
+          : revertHealth.reason
       };
     }
 
     await this.appendActivity({
       kind: "upgrade",
       level: "error",
-      message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}.`,
+      message: `Upgraded ${service.name}, but it did not come back healthy. Reverted to ${revertedTo}.${configNote}`,
       details: {
         serviceId: service.id,
         reason: health.reason,
         reverted: true,
         revertedTo: point.imageRef,
+        running: true,
         revertHealth: revertHealth.outcome
       }
     });
@@ -1446,7 +1675,15 @@ export class ManagedStackService {
       revertHealth: revertHealth.outcome
     });
 
-    return { ok: true, pinned: true, restored: true, imageRef: point.imageRef, taggedImage: point.taggedImage, health: revertHealth };
+    return {
+      ok: true,
+      pinned: true,
+      restored: true,
+      configRestored: Boolean(point.configSnapshot),
+      imageRef: point.imageRef,
+      taggedImage: point.taggedImage,
+      health: revertHealth
+    };
   }
 
   async upgradeManagedService(serviceId, context = {}) {

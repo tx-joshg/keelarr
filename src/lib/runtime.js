@@ -253,9 +253,57 @@ export async function snapshotConfig(settings, service, backupDir, options = {})
 }
 
 /**
+ * The shell the restore helper container runs: clear what the snapshot covers,
+ * then extract it over the top.
+ *
+ * Only what the snapshot could have captured is cleared. The excludes are not
+ * incidental — `[Bb]ackups` is the app's own database backups, the thing an
+ * operator reaches for when a rollback did not work either — so wiping all of
+ * /config to restore an archive that never contained them would delete the
+ * recovery copies to perform the recovery.
+ */
+export function buildConfigRestoreScript(excludes = CONFIG_SNAPSHOT_EXCLUDES, snapshotFile = CONFIG_SNAPSHOT_FILE) {
+  const keep = (excludes?.length ? excludes : CONFIG_SNAPSHOT_EXCLUDES)
+    .map((entry) => entry.replace(/^\.\//, ""))
+    .join("|");
+
+  // The archive is read through once before anything is deleted. A snapshot
+  // that is missing or truncated would otherwise be discovered by `tar xzf`
+  // after the live config was already gone, turning a failed upgrade into a
+  // fresh install. `set -e` stops here instead.
+  //
+  // Both dot globs are needed: `.[!.]*` misses a name beginning with two dots,
+  // and `.??*` catches those while still skipping `.` and `..` themselves.
+  // `[ -e ]` guards the no-match case, where a glob comes through literally,
+  // and makes the overlap between the two harmless. `-L` catches it too: `-e`
+  // is false for a dangling symlink, so one left behind by the upgraded app
+  // would survive a restore meant to discard it. `--` keeps a config entry
+  // named like an option — `-v` is a legal filename — from being read as one,
+  // which `rm` would otherwise accept and silently not delete.
+  return `set -e
+tar tzf /backup/${snapshotFile} > /dev/null
+cd /dst
+for entry in * .[!.]* .??*; do
+  [ -e "$entry" ] || [ -L "$entry" ] || continue
+  case "$entry" in
+    ${keep}) continue ;;
+  esac
+  rm -rf -- "$entry"
+done
+tar xzf /backup/${snapshotFile} -C /dst`;
+}
+
+/**
  * Replaces the live /config with a snapshot. Destructive by design: anything
  * the app wrote after the snapshot is discarded, which is the point when an
  * upgrade has migrated a database beyond what the old version can read.
+ *
+ * What the snapshot deliberately left out is left alone. The excludes are not
+ * incidental — `[Bb]ackups` is the app's own database backups, which is exactly
+ * what an operator needs if the rollback does not work either, and clearing all
+ * of /config would delete them to restore an archive that never contained them.
+ * So everything the snapshot could have captured goes, and everything it
+ * excluded by design stays.
  */
 export async function restoreConfigSnapshot(settings, service, backupDir, options = {}) {
   const mount = options.mount ?? (await readConfigMountSource(settings, service, options));
@@ -271,10 +319,11 @@ export async function restoreConfigSnapshot(settings, service, backupDir, option
       "-v", `${mount.source}:/dst`,
       "-v", `${backupDir}:/backup:ro`,
       options.helperImage || SNAPSHOT_HELPER_IMAGE,
-      "sh", "-c",
-      // Clear first so files created after the snapshot do not survive a
-      // restore and confuse the older version.
-      `set -e; rm -rf /dst/* /dst/.[!.]* 2>/dev/null || true; tar xzf /backup/${CONFIG_SNAPSHOT_FILE} -C /dst`
+      // The exclusions recorded with this snapshot, not today's list: an
+      // archive made by an older version may have kept different directories,
+      // and clearing by the current list would either delete something the
+      // archive deliberately omitted or preserve something it captured.
+      "sh", "-c", buildConfigRestoreScript(options.excludes)
     ],
     { logger: options.logger, timeoutMs: options.timeoutMs || 300_000 }
   );

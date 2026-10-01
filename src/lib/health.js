@@ -133,10 +133,24 @@ export function isProbeableAppUrl(value) {
  * deadline passes. A container that is merely running when time runs out
  * resolves to `unverified` rather than success, so the caller can decide
  * whether to keep the rollback container in place.
+ *
+ * A container whose healthcheck still reports `starting` gets a bounded grace
+ * beyond the deadline, and resolves to `unverified` rather than `failed` if it
+ * is still starting when that runs out. Only an observation that says the app
+ * is actually down — exited, dead, or a healthcheck reporting unhealthy past
+ * the deadline — is a failure, because `failed` is what triggers a revert.
  */
 export async function verifyServiceHealth(settings, service, options = {}) {
   const {
     timeoutMs = 90_000,
+    // A container whose own healthcheck still says `starting` is telling us it
+    // has not finished coming up. Docker holds that state for
+    // start_period + retries × interval, which legitimately outruns the
+    // deadline on an app that migrates a database or updates bundled tools at
+    // boot — Trailarr answers at about 90s on a NAS. Keep polling for a
+    // bounded extra stretch so the run gets a real verdict rather than
+    // calling a slow start a death.
+    startingGraceMs = 120_000,
     intervalMs = 2_000,
     inspectImpl = inspectContainerState,
     probeImpl = probeAppUrl,
@@ -146,6 +160,7 @@ export async function verifyServiceHealth(settings, service, options = {}) {
   } = options;
 
   const deadline = nowImpl() + timeoutMs;
+  const startingDeadline = deadline + startingGraceMs;
   let last = { outcome: "pending", reason: "No observation recorded." };
   let lastState = { exists: false, status: null, healthStatus: null };
   let lastProbe = null;
@@ -163,11 +178,32 @@ export async function verifyServiceHealth(settings, service, options = {}) {
       break;
     }
 
-    if (nowImpl() >= deadline) {
-      // Ran out of time. Running-but-unproven is reported as such; anything
-      // else never came up and counts as a failure.
-      last = last.outcome === "running-unverified"
-        ? { outcome: HEALTH_OUTCOME.UNVERIFIED, reason: last.reason }
+    // `starting` on a running container is positive evidence the app is still
+    // on its way up, so it earns the grace. `unhealthy` does not: that is the
+    // container's own healthcheck actively failing.
+    //
+    // Both halves matter. A container in a restart loop reports `restarting`
+    // while its health resets to `starting` on every attempt, which is not a
+    // slow start and must not be handed the grace and then reported as
+    // unverified — that is read as "came up" and records the upgrade as
+    // current. `restarting` is not in DEAD_STATUSES, so without the status
+    // check a crash loop would never reach the revert path at all.
+    const stillStarting = lastState.status === "running" && lastState.healthStatus === "starting";
+    const effectiveDeadline = stillStarting ? startingDeadline : deadline;
+
+    if (nowImpl() >= effectiveDeadline) {
+      // Ran out of time. Running-but-unproven is reported as such, and so is a
+      // container still starting after the grace — neither is evidence of
+      // death, and treating a slow start as one is what turns an upgrade that
+      // merely needed another minute into a revert. Anything else never came
+      // up and counts as a failure.
+      last = last.outcome === "running-unverified" || stillStarting
+        ? {
+            outcome: HEALTH_OUTCOME.UNVERIFIED,
+            reason: stillStarting
+              ? `${last.reason} Still starting after ${Math.round((timeoutMs + startingGraceMs) / 1000)}s, so it was left running rather than called failed.`
+              : last.reason
+          }
         : { outcome: HEALTH_OUTCOME.FAILED, reason: `${last.reason} Timed out after ${timeoutMs}ms.` };
       break;
     }
