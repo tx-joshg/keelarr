@@ -10,7 +10,7 @@ import {
   renameContainer,
   startContainer,
   stopContainer
-} from "../runtime.js";
+} from "../runtimes/index.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
 import { appendActivity, loadSettings, saveSettings } from "../store.js";
 import { JobRegistry } from "../jobs.js";

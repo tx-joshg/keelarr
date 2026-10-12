@@ -26,9 +26,65 @@ src/server.js            listens, then initialises — in that order, deliberate
       wiring             what should be connected to what, and doing it
 ```
 
-Underneath those sit the primitives: `runtime.js` (Docker and Compose),
+Underneath those sit the primitives: `runtimes/` (how a stack is actually run),
 `generator.js` (Compose files), `status.js` (the dashboard row), `jobs.js`
 (background work), `store.js` (settings), `health.js`, `logger.js`.
+
+## The runtime port
+
+`runtimes/index.js` is the only module that knows which runtime is in use.
+
+```
+runtimes/index.js          the port: one dispatcher per operation
+  docker-runtime.js        Compose on a host, driven by `docker`. The proven path
+  kube-runtime.js          manifests in a namespace, driven by `oc`. Unproven
+  kube-manifests.js        Deployment, Service, PVC, Route
+```
+
+Every operation takes `settings` first, and that is the whole reason the seam is
+cheap: the runtime a call belongs to is already in its first argument, so
+dispatch is one lookup rather than a runtime object threaded through ten
+services. Nothing above this directory branches on the runtime.
+
+Two rules hold it together:
+
+- **An absent `runtime` means Docker, permanently.** Every install that predates
+  a second runtime has no such key, and the only safe reading of its absence is
+  the runtime it has been running on all along. An unrecognised value falls back
+  the same way, because a settings file naming a runtime this build does not
+  have is a downgrade.
+- **A runtime refuses what it cannot do.** `kube-runtime.js` returns
+  `{ ok: false, reason }` for update checks, config snapshots, cutover and
+  self-update rather than approximating them. A runtime that silently
+  half-implements an operation is worse than one that declines it — the
+  difference only shows up during a rollback, which is the worst moment to
+  discover it.
+
+`kube-manifests.js` carries the only place the two cluster flavours differ:
+OKD exposes an app with a `Route`, plain Kubernetes with an `Ingress`, and the
+kinds a teardown may name follow from that. Everything else about a deployed
+app is identical on both, which is why the branch lives in one function rather
+than in a second runtime.
+
+The Kubernetes runtime has never been run against a cluster.
+[docs/testing.md](testing.md#the-kubernetes-runtime) says exactly what that
+means and what else is still Docker-only.
+
+## Compatibility rules
+
+`compatibility.js` judges a selection of apps before any of it is installed —
+port collisions, two request portals, Seerr with no media server to sign in
+against, Tautulli on a stack with no Plex.
+
+It refuses almost nothing. Only `blocked` findings stop a save, and the only
+blocked rule is a port collision, which genuinely cannot start. Conflicts are
+acknowledged and advice is read; both remain the operator's call. A homelab tool
+that turns its own opinions into errors stops being useful the first time it is
+wrong.
+
+The rules are enforced in `host-profile-service.js` on the write path, not only
+in the browser, because `/api/settings` and `/api/setup` take a selection
+straight from a request body.
 
 ### Dependency injection everywhere
 

@@ -1,6 +1,15 @@
+/**
+ * The Docker runtime: Compose files on a host, driven by the `docker` CLI.
+ *
+ * This is Keelarr's original and only proven runtime, moved here unchanged when
+ * a second one was added. Nothing in it dispatches or branches on which runtime
+ * is in use — `runtimes/index.js` decides that, and this file simply is the
+ * Docker answer. Keeping it ignorant of the alternative is what makes it
+ * possible to say the Docker path behaves exactly as it did before.
+ */
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_IDLE_TIMEOUT_MS, runCommand } from "./command-runner.js";
+import { DEFAULT_IDLE_TIMEOUT_MS, runCommand } from "../command-runner.js";
 
 function composeArgs(service, ...tail) {
   return [
@@ -918,3 +927,99 @@ export async function upgradeAllServices(settings, services, options = {}) {
 
   return results;
 }
+
+/**
+ * Which driver backs each named network.
+ *
+ * The driver is the only trustworthy way to recognise macvlan, and the whole
+ * address resolver turns on it — so it belongs to the runtime rather than to
+ * the wiring code that consumes it. A runtime with no networks of its own can
+ * answer this without shelling out to anything.
+ */
+export async function readNetworkDrivers(settings, names, options = {}) {
+  const unique = [...new Set((names || []).filter(Boolean))];
+  const drivers = new Map();
+
+  if (unique.length === 0) {
+    return drivers;
+  }
+
+  const result = await runCommand(
+    settings.dockerBin,
+    ["network", "inspect", ...unique, "--format", "{{.Name}}|{{.Driver}}"],
+    options
+  );
+
+  if (!result.ok) {
+    return drivers;
+  }
+
+  for (const line of String(result.stdout || "").split("\n")) {
+    const [name, driver] = line.trim().split("|");
+
+    if (name && driver) {
+      drivers.set(name, driver);
+    }
+  }
+
+  return drivers;
+}
+
+/**
+ * Joins the controller to the networks its services live on.
+ *
+ * Docker-specific by nature: the attachment lives on the container rather than
+ * in a Compose file, which is what makes it survive the controller being
+ * recreated.
+ */
+export async function attachController(settings, plan, options = {}) {
+  const { attachController: attach } = await import("../wiring/attach.js");
+  return attach(settings, plan, options);
+}
+
+/**
+ * This module as a runtime object.
+ *
+ * A plain binding of the functions above, so the port has something uniform to
+ * dispatch to. Listed explicitly rather than gathered reflectively: the list is
+ * the interface, and an interface you cannot read is not one.
+ */
+export const dockerRuntime = {
+  kind: "docker",
+  readConfigMountSource,
+  inspectContainers,
+  readContainerFile,
+  snapshotConfig,
+  restoreConfigSnapshot,
+  pruneServiceBackups,
+  backupService,
+  stopContainer,
+  startContainer,
+  renameContainer,
+  removeContainer,
+  containerExists,
+  inspectContainerState,
+  composeDown,
+  findRollbackPoint,
+  imageExistsLocally,
+  composeDownRemovingVolumes,
+  removeImage,
+  measurePath,
+  restartService,
+  composePs,
+  ensureSharedNetwork,
+  generateAndDeploy,
+  installService,
+  upgradeService,
+  pullImage,
+  readImageId,
+  readContainerImageIdByName,
+  tagImage,
+  readContainerLogs,
+  readContainerOutcome,
+  runDetachedContainer,
+  checkForUpdates,
+  upgradeAllServices,
+  readNetworkDrivers,
+  attachController
+};

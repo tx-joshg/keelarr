@@ -53,6 +53,9 @@ const ui = {
   removal: null,
   // Read-only report on how the apps are connected to each other.
   wiring: null,
+  // The app picker: which apps Keelarr should manage, and for each one whether
+  // that means installing it or taking over one already running.
+  wizard: null,
   rowMenu: null,
   busy: null,
   selectedImportContainerId: null,
@@ -1205,6 +1208,7 @@ function toolbarButtons() {
 
     return [
       { action: "refresh", icon: "fa-solid fa-rotate", label: "Refresh" },
+      { action: "manage-apps", icon: "fa-solid fa-sliders", label: "Manage Apps" },
       ...(undeployed
         ? [{ action: "deploy-all", icon: "fa-solid fa-cloud-arrow-up", label: `Deploy ${undeployed}` }]
         : []),
@@ -2048,13 +2052,97 @@ function renderSettingsView() {
     }
   ];
 
+  const runtimeIsKube = state.settings?.runtime === "kube";
+  const kubeIsPlain = state.settings?.kubeFlavor === "kubernetes";
   const advancedFields = [
     {
       key: "ombiVersion",
       label: "Ombi Version",
       help: "Pin a tag if you need a fixed release.",
       advanced: true
-    }
+    },
+    {
+      key: "runtime",
+      label: "Runtime",
+      // Behind Advanced on purpose. The Kubernetes runtime has never been run
+      // against a real cluster, and an unproven runtime should be findable
+      // without being in the way of someone who did not go looking for it.
+      help: "What manages the stack. Docker writes Compose files and is the proven path. Kubernetes writes OKD manifests and has never been run against a real cluster — see docs/testing.md before choosing it.",
+      advanced: true,
+      options: [
+        { value: "docker", label: "Docker Compose (proven)" },
+        { value: "kube", label: "Kubernetes / OKD (untested)" }
+      ]
+    },
+    // Only once the runtime they belong to is chosen. Six empty Kubernetes
+    // fields on a Docker install are six things to wonder about.
+    ...(runtimeIsKube
+      ? [
+          {
+            key: "kubeFlavor",
+            label: "Cluster",
+            help: "OKD and OpenShift expose apps with Routes and need a cluster administrator to allow the identity Keelarr asks for. Plain Kubernetes uses an Ingress and has no such restriction.",
+            advanced: true,
+            options: [
+              { value: "okd", label: "OKD / OpenShift" },
+              { value: "kubernetes", label: "Plain Kubernetes" }
+            ]
+          },
+          {
+            key: "kubeBin",
+            label: "oc / kubectl",
+            help: "The CLI Keelarr runs. `oc` on OKD and OpenShift; `kubectl` elsewhere.",
+            advanced: true
+          },
+          {
+            key: "kubeNamespace",
+            label: "Namespace",
+            help: "Where the stack is created. Its ServiceAccount needs the anyuid SCC, or the pods will be rejected at admission — docs/testing.md has the command.",
+            advanced: true
+          },
+          {
+            key: "kubeMediaClaim",
+            label: "Media Claim",
+            help: "An existing ReadWriteMany PersistentVolumeClaim holding the library. Keelarr never creates this one: it is shared by every app and outlives all of them.",
+            advanced: true
+          },
+          {
+            key: "kubeStorageClass",
+            label: "Storage Class",
+            help: "For the per-app config claims Keelarr does create. Leave empty to use the cluster's default — naming one that does not exist leaves every claim Pending.",
+            advanced: true
+          },
+          {
+            key: "kubeConfigSize",
+            label: "Config Claim Size",
+            help: "How much storage each app's config claim requests.",
+            advanced: true
+          },
+          {
+            key: "kubeDomain",
+            label: "Domain",
+            help: `Hostnames are built as <app>.<domain>. Leave empty and no ${kubeIsPlain ? "Ingress" : "Route"} is created, so nothing is exposed outside the cluster.`,
+            advanced: true
+          },
+          // Ingress-only, so absent on OKD where the router handles both.
+          ...(kubeIsPlain
+            ? [
+                {
+                  key: "kubeIngressClass",
+                  label: "Ingress Class",
+                  help: "Which ingress controller serves these hostnames. Leave empty to use the cluster's default.",
+                  advanced: true
+                },
+                {
+                  key: "kubeTlsSecret",
+                  label: "TLS Secret",
+                  help: "A Secret holding the certificate for these hostnames. An OKD Route gets TLS from the router for free; an Ingress does not, so leaving this empty serves the apps over plain HTTP.",
+                  advanced: true
+                }
+              ]
+            : [])
+        ]
+      : [])
   ];
 
   const backupFields = [
@@ -2113,7 +2201,7 @@ function renderSettingsView() {
         : ""}
       <fieldset class="fieldset">
         <legend class="legend">Apps To Manage</legend>
-        <div class="manage-intro">${escapeHtml(`${selectedServiceIds().length} of ${state.catalog.length || 10} services selected. Keelarr generates and operates only what is checked.`)}</div>
+        <div class="manage-intro">${escapeHtml(`${selectedServiceIds().length} of ${state.catalog.length || 10} services selected. Keelarr generates and operates only what is checked.`)} Manage Apps on the Stack page shows which of these are already running here, and says which combinations will not work.</div>
         ${manageRows}
       </fieldset>
       <div class="action-row">
@@ -2692,6 +2780,395 @@ function renderBootstrapState() {
   `;
 }
 
+/**
+ * The app picker.
+ *
+ * Two things make this more than a list of checkboxes. First, ticking a box
+ * means one of two quite different things depending on whether that app is
+ * already running on the host — install something new, or take over something
+ * that exists — and the operator should know which they are agreeing to before
+ * they agree to it. Second, some combinations do not work, and the cheapest
+ * moment to say so is while they are still checkboxes.
+ */
+async function openWizard() {
+  ui.wizard = { open: true, loading: true, error: null, view: null, selection: new Set(), acknowledged: new Set(), submitting: false };
+  render();
+
+  try {
+    const view = await request("/api/setup/wizard");
+    ui.wizard = {
+      open: true,
+      loading: false,
+      error: null,
+      view,
+      selection: new Set(view.selectedServiceIds || []),
+      // Conflicts are acknowledged per finding rather than all at once, so
+      // agreeing to one does not quietly agree to another.
+      acknowledged: new Set(),
+      compatibility: view.compatibility,
+      submitting: false
+    };
+  } catch (error) {
+    ui.wizard = { open: true, loading: false, error: error.message, view: null, selection: new Set(), acknowledged: new Set(), submitting: false };
+  }
+
+  render();
+}
+
+function closeWizard() {
+  ui.wizard = null;
+  render();
+}
+
+function wizardRow(id) {
+  return (ui.wizard?.view?.catalog || []).find((entry) => entry.id === id) || null;
+}
+
+/**
+ * Re-judges the selection after every change.
+ *
+ * Asked of the controller rather than worked out here, for the same reason the
+ * catalog order is: duplicating the rules in the page would let the two drift,
+ * and the one in the page is the one nobody would notice going stale.
+ */
+async function refreshWizardCompatibility() {
+  const dialog = ui.wizard;
+
+  if (!dialog?.view) {
+    return;
+  }
+
+  const selected = [...dialog.selection];
+  const overrides = Object.fromEntries(
+    dialog.view.catalog
+      .filter((entry) => entry.port !== entry.defaultPort)
+      .map((entry) => [entry.id, { port: entry.port }])
+  );
+
+  try {
+    dialog.compatibility = await request("/api/catalog/compatibility", {
+      method: "POST",
+      body: JSON.stringify({
+        selectedServiceIds: selected,
+        serviceOverrides: overrides,
+        // The scan the picker already did. Passing it back is what lets the
+        // controller notice a Plex it does not manage without scanning again.
+        discovered: (dialog.view.unrecognized || []).map((item) => ({ name: item.name, image: item.image }))
+      })
+    });
+    // An acknowledgement belongs to the finding it was given for. Dropping the
+    // ones that no longer apply stops a stale tick carrying over to a different
+    // conflict the operator has not seen.
+    const live = new Set((dialog.compatibility.conflicts || []).map((finding) => finding.id));
+    dialog.acknowledged = new Set([...dialog.acknowledged].filter((id) => live.has(id)));
+  } catch (error) {
+    dialog.error = error.message;
+  }
+
+  render();
+}
+
+function toggleWizardApp(id, wanted) {
+  const dialog = ui.wizard;
+  const row = wizardRow(id);
+
+  if (!dialog || !row) {
+    return;
+  }
+
+  // An app already running that adoption has refused cannot be managed yet.
+  // Offering the box and failing on submit would be a promise this screen is
+  // not in a position to make.
+  if (row.action === "adopt" && row.existing && !row.existing.adoptable) {
+    return;
+  }
+
+  if (wanted) {
+    dialog.selection.add(id);
+  } else {
+    dialog.selection.delete(id);
+  }
+
+  refreshWizardCompatibility().catch(showError);
+}
+
+function toggleWizardAcknowledgement(id, wanted) {
+  const dialog = ui.wizard;
+
+  if (!dialog) {
+    return;
+  }
+
+  if (wanted) {
+    dialog.acknowledged.add(id);
+  } else {
+    dialog.acknowledged.delete(id);
+  }
+
+  render();
+}
+
+/**
+ * Whether the picker can be submitted.
+ *
+ * Blocked findings are the only hard stop, and they come from the controller —
+ * which enforces them again on save, so this is a courtesy rather than the
+ * gate. Conflicts need a tick each; advice needs nothing.
+ */
+function wizardCanSubmit() {
+  const dialog = ui.wizard;
+
+  if (!dialog?.view || dialog.submitting) {
+    return false;
+  }
+
+  const compatibility = dialog.compatibility || dialog.view.compatibility;
+  const unacknowledged = (compatibility.conflicts || []).filter((finding) => !dialog.acknowledged.has(finding.id));
+
+  return compatibility.ok && unacknowledged.length === 0;
+}
+
+/**
+ * Applies the picker.
+ *
+ * Installs and adoptions go down different paths on purpose. A selection is
+ * written through /api/setup, which generates catalog Compose files — exactly
+ * the wrong thing to do to a container that already exists. So anything the
+ * scan found is handed to the adoption endpoint instead, which builds a draft
+ * from the live container, read-only, and leaves cutover as its own explicit
+ * step. Getting this wrong would overwrite somebody's working stack with
+ * defaults.
+ */
+async function submitWizard() {
+  const dialog = ui.wizard;
+
+  if (!dialog?.view || !wizardCanSubmit()) {
+    return;
+  }
+
+  dialog.submitting = true;
+  dialog.error = null;
+  render();
+
+  try {
+    const adoptions = [...dialog.selection]
+      .map(wizardRow)
+      .filter((row) => row?.action === "adopt" && row.existing?.adoptable);
+    const adoptionIds = new Set(adoptions.map((row) => row.id));
+    // Everything except the adoptions, which add themselves to the selection as
+    // a side effect of being adopted.
+    const installSelection = [...dialog.selection].filter((id) => !adoptionIds.has(id));
+
+    await request("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({ ...state.settings, selectedServiceIds: installSelection, deploy: false })
+    });
+
+    // Sequential rather than parallel: each adoption reads and rewrites the
+    // settings file, and two of those racing would lose one of the drafts.
+    for (const row of adoptions) {
+      await request(`/api/import/${encodeURIComponent(row.existing.containerId)}/adopt-draft`, { method: "POST" });
+    }
+
+    ui.wizard = null;
+    await loadState();
+    showToast(
+      adoptions.length
+        ? `Saved. ${adoptions.length} existing app${adoptions.length === 1 ? "" : "s"} adopted as a draft — review and cut over from Adoption.`
+        : "Saved which apps Keelarr manages.",
+      "success"
+    );
+  } catch (error) {
+    if (ui.wizard) {
+      ui.wizard.submitting = false;
+      ui.wizard.error = error.message;
+    }
+    render();
+  }
+}
+
+const WIZARD_ACTION_META = {
+  install: { label: "Will install", tone: "wizard-tag-install", icon: "fa-solid fa-download" },
+  adopt: { label: "Already running", tone: "wizard-tag-adopt", icon: "fa-brands fa-docker" },
+  managed: { label: "Managed", tone: "wizard-tag-managed", icon: "fa-solid fa-circle-check" }
+};
+
+function renderWizardFinding(finding, { acknowledgeable = false, acknowledged = false } = {}) {
+  const names = (finding.subjects || [])
+    .map((id) => wizardRow(id)?.name || id)
+    .join(", ");
+
+  return `
+    <div class="wizard-finding wizard-finding-${escapeHtml(finding.severity)}">
+      <div class="wizard-finding-head">
+        <i class="${finding.severity === "blocked"
+          ? "fa-solid fa-circle-exclamation"
+          : finding.severity === "conflict"
+            ? "fa-solid fa-triangle-exclamation"
+            : "fa-solid fa-circle-info"}"></i>
+        <strong>${escapeHtml(finding.summary)}</strong>
+      </div>
+      <div class="wizard-finding-body">
+        <div>${escapeHtml(finding.consequence)}</div>
+        ${finding.remedy ? `<div class="wizard-finding-remedy">${escapeHtml(finding.remedy)}</div>` : ""}
+        ${names ? `<div class="wizard-finding-subjects">${escapeHtml(names)}</div>` : ""}
+      </div>
+      ${acknowledgeable
+        ? `<label class="wizard-ack">
+             <input type="checkbox" data-wizard-ack="${escapeHtml(finding.id)}" ${acknowledged ? "checked" : ""} />
+             <span>I know, set it up anyway</span>
+           </label>`
+        : ""}
+    </div>
+  `;
+}
+
+function renderWizardModal() {
+  const dialog = ui.wizard;
+
+  if (!dialog?.open) {
+    return "";
+  }
+
+  if (dialog.loading) {
+    return `
+      <div class="modal-backdrop" data-modal-backdrop="wizard">
+        <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="Manage apps">
+          <div class="path-picker-title">Looking at what is already running...</div>
+          <div class="path-picker-copy">Scanning this host's containers so each app can say whether it would be installed or adopted.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (!dialog.view) {
+    return `
+      <div class="modal-backdrop" data-modal-backdrop="wizard">
+        <div class="path-picker-modal" role="dialog" aria-modal="true" aria-label="Manage apps">
+          <div class="path-picker-header">
+            <div class="path-picker-title">Manage apps</div>
+            <button type="button" class="toast-dismiss" data-wizard-close="true" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="result-panel result-panel-danger">
+            <div class="result-panel-copy">${escapeHtml(dialog.error || "The app list could not be read.")}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const compatibility = dialog.compatibility || dialog.view.compatibility;
+  const blockedSubjects = new Set((compatibility.blocked || []).flatMap((finding) => finding.subjects || []));
+  const conflictSubjects = new Set((compatibility.conflicts || []).flatMap((finding) => finding.subjects || []));
+
+  const rows = dialog.view.catalog
+    .map((entry) => {
+      const checked = dialog.selection.has(entry.id);
+      const meta = WIZARD_ACTION_META[checked && entry.existing ? "managed" : entry.action] || WIZARD_ACTION_META.install;
+      const refused = entry.action === "adopt" && entry.existing && !entry.existing.adoptable;
+      const flagged = blockedSubjects.has(entry.id)
+        ? " wizard-row-blocked"
+        : conflictSubjects.has(entry.id)
+          ? " wizard-row-conflict"
+          : "";
+
+      return `
+        <label class="wizard-row${checked ? " wizard-row-on" : ""}${refused ? " wizard-row-refused" : ""}${flagged}">
+          <input type="checkbox" data-wizard-app="${escapeHtml(entry.id)}" ${checked ? "checked" : ""} ${refused ? "disabled" : ""} />
+          <span class="wizard-row-main">
+            <span class="wizard-row-title">
+              ${escapeHtml(entry.name)}
+              <span class="wizard-tag ${meta.tone}"><i class="${meta.icon}"></i>${escapeHtml(meta.label)}</span>
+            </span>
+            <span class="wizard-row-copy">${escapeHtml(entry.description)}</span>
+            ${entry.existing
+              ? `<span class="wizard-row-note">
+                   <i class="fa-brands fa-docker"></i>
+                   ${escapeHtml(entry.existing.containerName || "container")} &middot; ${escapeHtml(entry.existing.image || "unknown image")}
+                   ${refused
+                     ? ` &middot; <strong>cannot be adopted yet</strong>`
+                     : entry.action === "adopt"
+                       ? " &middot; would be adopted as a draft, not reinstalled"
+                       : ""}
+                 </span>`
+              : ""}
+            ${refused
+              ? entry.existing.issues.map((issue) => `<span class="wizard-row-issue">${escapeHtml(issue.message)}</span>`).join("")
+              : ""}
+          </span>
+          <span class="wizard-row-port">:${escapeHtml(String(entry.port))}</span>
+        </label>
+      `;
+    })
+    .join("");
+
+  const unacknowledged = (compatibility.conflicts || []).filter((finding) => !dialog.acknowledged.has(finding.id));
+  const canSubmit = wizardCanSubmit();
+  const adoptCount = [...dialog.selection].map(wizardRow).filter((row) => row?.action === "adopt").length;
+
+  return `
+    <div class="modal-backdrop" data-modal-backdrop="wizard">
+      <div class="path-picker-modal wizard-modal" role="dialog" aria-modal="true" aria-label="Manage apps">
+        <div class="path-picker-header">
+          <div>
+            <div class="path-picker-title">Which apps should Keelarr manage?</div>
+            <div class="path-picker-copy">
+              Anything already running on this host is adopted rather than reinstalled.
+              ${dialog.view.scannedAt ? `Scanned ${escapeHtml(formatRelative(dialog.view.scannedAt))}.` : ""}
+            </div>
+          </div>
+          <button type="button" class="toast-dismiss" data-wizard-close="true" aria-label="Close">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        ${dialog.view.initialized
+          ? ""
+          : '<div class="result-list result-list-warning"><strong>Host profile not configured</strong><ul><li>Set the host paths in Settings first. Keelarr needs to know where stacks, config and media live before it can write anything.</li></ul></div>'}
+
+        <div class="wizard-rows">${rows}</div>
+
+        ${(compatibility.blocked || []).length
+          ? `<div class="wizard-findings">${(compatibility.blocked).map((finding) => renderWizardFinding(finding)).join("")}</div>`
+          : ""}
+
+        ${(compatibility.conflicts || []).length
+          ? `<div class="wizard-findings">${(compatibility.conflicts).map((finding) =>
+              renderWizardFinding(finding, { acknowledgeable: true, acknowledged: dialog.acknowledged.has(finding.id) })
+            ).join("")}</div>`
+          : ""}
+
+        ${(compatibility.advice || []).length
+          ? `<div class="wizard-findings">${(compatibility.advice).map((finding) => renderWizardFinding(finding)).join("")}</div>`
+          : ""}
+
+        ${dialog.view.mediaServers.length
+          ? `<div class="muted-paragraph wizard-footnote">Also running here, unmanaged: ${escapeHtml(dialog.view.mediaServers.join(", "))}. Keelarr will leave these alone.</div>`
+          : ""}
+
+        ${dialog.error ? `<div class="result-panel result-panel-danger"><div class="result-panel-copy">${escapeHtml(dialog.error)}</div></div>` : ""}
+
+        <div class="path-picker-actions wizard-actions">
+          <div class="muted-paragraph wizard-count">
+            ${dialog.selection.size} app${dialog.selection.size === 1 ? "" : "s"} selected${adoptCount ? `, ${adoptCount} adopted` : ""}
+          </div>
+          <button type="button" class="button-default" data-wizard-close="true">Cancel</button>
+          <button type="button" class="button-success" data-wizard-submit="true" ${canSubmit ? "" : "disabled"}
+            title="${escapeHtml(
+              (compatibility.blocked || []).length
+                ? "Fix the blocked combination first."
+                : unacknowledged.length
+                  ? "Acknowledge the conflicts above first."
+                  : "Writes the stack files. Nothing is deployed yet."
+            )}">
+            ${dialog.submitting ? "Saving..." : "Save selection"}
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function render() {
   if (state.auth && state.auth.required && !state.auth.authenticated) {
     renderAuthGate();
@@ -2706,6 +3183,10 @@ function render() {
   // Every render replaces the whole tree, which resets scroll to the top.
   // Toggling a checkbox halfway down Settings should not throw you back up.
   const previousScroll = appNode.querySelector(".scroll-shell")?.scrollTop ?? 0;
+  // The same courtesy for an open modal, which scrolls independently. Without
+  // it, ticking an app halfway down the picker throws you back to the top —
+  // and the picker is a list long enough for that to lose your place.
+  const previousModalScroll = appNode.querySelector(".path-picker-modal")?.scrollTop ?? 0;
 
   try {
     document.title = `${appDisplayName()} v${appVersion()}`;
@@ -2759,6 +3240,7 @@ function render() {
   ${renderControllerUpdateModal()}
         ${renderRemovalModal()}
         ${renderWiringModal()}
+        ${renderWizardModal()}
       </div>
     `;
 
@@ -2775,6 +3257,11 @@ function render() {
     const scroller = appNode.querySelector(".scroll-shell");
     if (scroller && previousScroll > 0) {
       scroller.scrollTop = previousScroll;
+    }
+
+    const modal = appNode.querySelector(".path-picker-modal");
+    if (modal && previousModalScroll > 0) {
+      modal.scrollTop = previousModalScroll;
     }
 
     window.__keelarrRenderError = null;
@@ -4308,6 +4795,11 @@ appNode.addEventListener("click", (event) => {
         return;
       }
 
+      if (action === "manage-apps") {
+        await runBusy("Looking at what is already running...", openWizard);
+        return;
+      }
+
       if (action === "check-updates") {
         await runBusy("Checking for updates...", checkAllUpdates);
         return;
@@ -4404,6 +4896,20 @@ appNode.addEventListener("click", (event) => {
 
   if (backdropKind === "wiring" || event.target.closest("[data-wiring-close]")) {
     closeWiringDialog();
+    return;
+  }
+
+  if (backdropKind === "wizard" || event.target.closest("[data-wizard-close]")) {
+    // Not while a save is in flight: the adoptions run one after another, and
+    // closing mid-sequence would leave the operator with no idea how far it got.
+    if (!ui.wizard?.submitting) {
+      closeWizard();
+    }
+    return;
+  }
+
+  if (event.target.closest("[data-wizard-submit]")) {
+    submitWizard().catch(showError);
     return;
   }
 
@@ -4720,6 +5226,16 @@ appNode.addEventListener("input", (event) => {
     return;
   }
 
+  if (target.dataset.wizardApp && ui.wizard) {
+    toggleWizardApp(target.dataset.wizardApp, target.checked);
+    return;
+  }
+
+  if (target.dataset.wizardAck && ui.wizard) {
+    toggleWizardAcknowledgement(target.dataset.wizardAck, target.checked);
+    return;
+  }
+
   if (target.dataset.removalOption && ui.removal) {
     ui.removal[target.dataset.removalOption] = target.checked;
     render();
@@ -4795,6 +5311,15 @@ appNode.addEventListener("change", (event) => {
   }
 
   updateSettingValue(target.name, target.value);
+
+  // Most settings change nothing else on the page until Save, which is why
+  // this listener does not normally re-render. The runtime is the exception:
+  // it decides which fields exist, so the form has to be rebuilt around it.
+  // The cluster flavour decides which of the Kubernetes fields exist, the same
+  // way the runtime decides whether any of them do.
+  if (target.name === "runtime" || target.name === "kubeFlavor") {
+    render();
+  }
 });
 
 appNode.addEventListener("keydown", (event) => {

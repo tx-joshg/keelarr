@@ -23,7 +23,11 @@ const SETTINGS_PATH = {
   // qBittorrent's web interface is a single page; the Web UI options live in
   // its own settings dialog rather than at a routable path.
   qbittorrent: "/",
-  jellyfin: "/web/index.html#!/dashboard"
+  jellyfin: "/web/index.html#!/dashboard",
+  // Where Radarr and Sonarr are listed. Safe to use for the first-run
+  // prerequisite too: Seerr redirects anyone who has not finished the wizard to
+  // /setup from wherever they land, so this self-corrects.
+  seerr: "/settings/services"
 };
 
 export function settingsLinkFor(serviceId, appUrl) {
@@ -136,6 +140,24 @@ export function findMissingPrerequisites({ apps, services, appUrls = {} }) {
       // wired and unable to do its job until a person decides.
       consequence: "It will not fetch subtitles until at least one language is chosen.",
       link: settingsLinkFor("bazarr", appUrls.bazarr)
+    });
+  }
+
+  const requests = apps.get("seerr");
+
+  // Seerr's whole account model comes from the media server it authenticates
+  // against, which is the first thing its wizard asks for. Until that is done it
+  // has no users, no admin, and no API key — so there is nothing to wire, and
+  // nothing Keelarr can do about it: signing in requires the operator's own
+  // Jellyfin or Plex credentials, which Keelarr deliberately never holds.
+  if (has("seerr") && requests && requests.initialized === false) {
+    missing.push({
+      serviceId: "seerr",
+      name: "Seerr",
+      requirement: "first-run-setup",
+      summary: "Seerr has not been set up yet — it still needs to be signed in to a media server.",
+      consequence: "Nobody can request anything, and Keelarr cannot connect it to Radarr or Sonarr, until that is done.",
+      link: settingsLinkFor("seerr", appUrls.seerr)
     });
   }
 

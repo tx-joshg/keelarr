@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 
 import { scanDockerInventory } from "./import-scanner.js";
 import { readActivity, readUpdateState } from "./store.js";
-import { composePs, inspectContainers } from "./runtime.js";
+import { composePs, inspectContainers } from "./runtimes/index.js";
 import { probeAppUrl } from "./health.js";
 import {
   LAN_CLIENT,

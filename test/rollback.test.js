@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { ManagedStackService } from "../src/lib/app-services/managed-stack-service.js";
 import { JOB_STATUS, JobRegistry, STEP_STATUS } from "../src/lib/jobs.js";
 import { HEALTH_OUTCOME } from "../src/lib/health.js";
-import { backupService, findRollbackPoint } from "../src/lib/runtime.js";
+import { backupService, findRollbackPoint } from "../src/lib/runtimes/index.js";
 import { readComposeImage, setComposeImage } from "../src/lib/generator.js";
 import { createLogger } from "../src/lib/logger.js";
 import { normalizeSettings } from "../src/lib/store.js";
@@ -730,7 +730,7 @@ async function seedBackups(root, serviceId, stamps) {
 }
 
 test("pruning keeps only the newest backups the retention setting allows", async (t) => {
-  const { pruneServiceBackups } = await import("../src/lib/runtime.js");
+  const { pruneServiceBackups } = await import("../src/lib/runtimes/index.js");
   const { readdir } = await import("node:fs/promises");
   const stack = await createStack(t);
 
@@ -750,7 +750,7 @@ test("pruning keeps only the newest backups the retention setting allows", async
 });
 
 test("retention of 1 leaves exactly the latest backup", async (t) => {
-  const { pruneServiceBackups } = await import("../src/lib/runtime.js");
+  const { pruneServiceBackups } = await import("../src/lib/runtimes/index.js");
   const { readdir } = await import("node:fs/promises");
   const stack = await createStack(t);
 
@@ -761,7 +761,7 @@ test("retention of 1 leaves exactly the latest backup", async (t) => {
 });
 
 test("a retention of 0 keeps everything", async (t) => {
-  const { pruneServiceBackups } = await import("../src/lib/runtime.js");
+  const { pruneServiceBackups } = await import("../src/lib/runtimes/index.js");
   const { readdir } = await import("node:fs/promises");
   const stack = await createStack(t);
 
@@ -773,7 +773,7 @@ test("a retention of 0 keeps everything", async (t) => {
 });
 
 test("pruning a service that has no backups yet is not an error", async (t) => {
-  const { pruneServiceBackups } = await import("../src/lib/runtime.js");
+  const { pruneServiceBackups } = await import("../src/lib/runtimes/index.js");
   const stack = await createStack(t);
 
   const result = await pruneServiceBackups({ ...stack.settings, backupRetention: 1 }, "neverbackedup");
