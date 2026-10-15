@@ -57,6 +57,7 @@ Hosts used so far:
 | Library folders created | Live · QNAP | Created on the host path behind the container path, inheriting the parent's ownership |
 | Address resolution across network modes | Live · QNAP | host, macvlan (`qnet`), bridge and shared-network all resolved; unroutable pairs reported as blocked rather than given an address that times out |
 | Existing configuration left alone | Live · QNAP | A download client pointing elsewhere is reported as drift and never overwritten |
+| Seerr pointed at Radarr and Sonarr | Automated | Tested before written, because Seerr's own test response is the only source of the quality-profile and root-folder ids its create call requires. Never run against a live Seerr |
 | Leftovers from a removed app | Live · QNAP | Prowlarr's proxy for a deleted FlareSolverr, and its sync to a deleted Lidarr, both detected |
 
 ## Credentials and safety
@@ -214,6 +215,7 @@ underneath still reaches the real machine.
 | TrueNAS SCALE | **Untested** | Docker availability varies by version |
 | Windows | **Unsupported** | Keelarr mounts host paths at the same absolute path inside the container, which `C:\` cannot satisfy. Run it inside WSL2 with POSIX paths |
 | Rootless Docker / Podman | **Untested** | The socket path is hardcoded to `/var/run/docker.sock` |
+| OKD / OpenShift | **Untested** | A second runtime exists and is unit-tested against a stub `oc`. No cluster has run it. See [The Kubernetes runtime](#the-kubernetes-runtime) |
 
 ## Help wanted
 
@@ -240,6 +242,7 @@ interest, rather than filling the tracker with nine unattended issues.
 | 5 | **TrueNAS SCALE** | Docker availability varies by version. Say which version, and whether the controller could reach the socket |
 | 6 | **WSL2 on Windows** | Keelarr mounts host paths at the same absolute path inside the container, which `C:\` cannot satisfy — inside WSL2 with POSIX paths it should work. Nobody has confirmed it does |
 | 7 | **Rootless Docker or Podman** | The socket path is hardcoded to `/var/run/docker.sock`. Say where yours is and whether pointing at it was enough |
+| 8 | **An OKD or OpenShift cluster** | The biggest evidence gap in the project. Nothing below has ever run on a cluster |
 | 8 | **qBittorrent registered into a live Arr** | The payload is covered by tests but has never been written into a real Radarr or Sonarr. Wire it and say whether the connection test passed |
 | 9 | **Jellyfin in a real stack** | It is in the catalog and installs, but no live stack has been built around it |
 | 10 | **A stack larger than nine services** | Everything here was proven against small stacks. Timings and the wiring check's readiness budget may not hold at twenty |
@@ -253,3 +256,66 @@ Two known limits, so nobody spends time rediscovering them:
   was gone, its own database still points at the old one. The wiring check
   reports this as drift for apps with an API; for Trailarr and Ombi it can only
   warn, because correcting it would mean writing into their schema.
+
+
+## The Kubernetes runtime
+
+Keelarr has a second runtime, selected with `runtime: "kube"` in settings, that
+manages a stack as OKD/OpenShift manifests instead of Compose files. It is
+**unproven**. Nobody on the project has a cluster, so everything below is
+reasoning and unit tests against a stub `oc`, not evidence.
+
+What that distinction means in practice: the commands it builds are asserted,
+the manifests it writes are asserted, and whether a real cluster accepts either
+is unknown.
+
+| Scenario | Level | Evidence |
+| --- | --- | --- |
+| Runtime selection | Automated | Absent or unrecognised `runtime` resolves to Docker. The Docker path is unchanged — the whole suite passes through the new port |
+| Both runtimes offer the same operations | Automated | A contract test fails if either grows or loses one |
+| Manifest generation | Automated | Deployment, Service, PVC and Route parsed back from the rendered YAML |
+| Deploy waits for the rollout | Automated | `apply` then `rollout status`; a failed rollout fails the deploy, however happily `apply` returned |
+| Stopping keeps data | Automated | `composeDown` deletes Deployment, Service and Route but never the claim |
+| Pods read as `docker inspect` | Automated | Translated so status, health and wiring keep one shape |
+
+### What it refuses, on purpose
+
+These have no honest Kubernetes equivalent, and return a stated reason rather
+than an approximation:
+
+- **Update checks.** Docker answers "is there a newer image?" by pulling to the
+  same machine and comparing ids. A cluster pulls onto its own nodes and tells
+  the client nothing, and the controller holds no registry credentials. The
+  truthful answer is that it does not know.
+- **Config snapshots, and therefore rollback.** Nothing outside a cluster can
+  mount a PVC, so the helper-container pattern that captures an app's database
+  before an upgrade does not translate. **An upgrade on this runtime is not
+  reversible the way it is on Docker** — the image can be rolled back with
+  `oc rollout undo`, the database cannot.
+- **Cutover and self-update.** Both are built on a local Docker socket. A
+  Deployment has no rename, and the controller cannot start a replacement copy
+  of itself with `oc`.
+
+### Known gaps, beyond being untested
+
+- **Wiring is Docker-only.** The network-driver probe behind address resolution
+  shells out to `docker network inspect`. Addressing on a cluster is simpler
+  than on Docker — every app is reachable at `http://<service>:<port>` through
+  cluster DNS — but that probe needs its own adapter before the wiring check
+  will run.
+- **Adoption is Docker-only.** The scan reads `docker ps`.
+- **Identity needs a cluster administrator.** The manifests ask for
+  `runAsUser`/`fsGroup` 911 so every app writes the shared library as the same
+  user. OKD's default `restricted-v2` SCC overrides that with an arbitrary UID,
+  so the namespace's ServiceAccount needs `anyuid`:
+
+  ```
+  oc adm policy add-scc-to-user anyuid -z default -n <namespace>
+  ```
+
+  Without it the pod is rejected at admission. That is the intended failure —
+  loudly, before anything runs, rather than quietly with half a stack unable to
+  read the other half's files.
+- **The media volume is yours.** Keelarr creates a ReadWriteOnce claim per app
+  for its config, and never creates the media claim: it is shared by every app,
+  needs ReadWriteMany, and outlives all of them. Name it in `kubeMediaClaim`.

@@ -20,7 +20,7 @@ import {
   removeContainer,
   runDetachedContainer,
   tagImage
-} from "../runtime.js";
+} from "../runtimes/index.js";
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 import { HELPER_SCRIPT } from "./self-update-helper.js";

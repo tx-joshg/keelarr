@@ -53,9 +53,13 @@ It runs as one container, reads your Docker socket, and gives you:
   read.
 - **Removal that is reversible** — keep the config, reinstall later, and the app
   comes back as itself rather than as a fresh install.
+- **An app picker that knows what you already run.** Pick the apps Keelarr
+  should manage and each one says whether that means installing it or adopting a
+  container already on the host — and which combinations will not work, before
+  any of them is written.
 
-Twelve apps in the catalog: Prowlarr, Radarr, Sonarr, Lidarr, Bazarr, SABnzbd,
-qBittorrent, FlareSolverr, Jellyfin, Trailarr, Ombi, Tautulli.
+Thirteen apps in the catalog: Prowlarr, Radarr, Sonarr, Lidarr, Bazarr, SABnzbd,
+qBittorrent, FlareSolverr, Jellyfin, Trailarr, Seerr, Ombi, Tautulli.
 
 The stack check is the clearest picture of what it is for — every connection,
 the address each one resolved to, whether the app itself confirmed it, and the

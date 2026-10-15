@@ -227,8 +227,13 @@ export function matchSupportedService(inspect) {
   }
 
   const imageRepository = normalizeImageRepository(inspect.Config?.Image || "");
-  const definition = Object.values(SERVICE_CATALOG).find(
-    (candidate) => normalizeImageRepository(candidate.defaultImage) === imageRepository
+  // `altImages` covers an app the catalog tracks under a name it used to ship
+  // under. Recognising only `defaultImage` reported a plainly-known container as
+  // unsupported purely because the project had been renamed since it was pulled.
+  const definition = Object.values(SERVICE_CATALOG).find((candidate) =>
+    [candidate.defaultImage, ...(candidate.altImages || [])].some(
+      (image) => normalizeImageRepository(image) === imageRepository
+    )
   );
 
   if (!definition) {

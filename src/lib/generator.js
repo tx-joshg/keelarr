@@ -23,7 +23,14 @@ export function buildEnvEntries(settings, service) {
     // its own user and owns nothing on disk, so writing PUID into its .env
     // states a control that does not exist and invites someone to change it
     // expecting an effect.
-    ...(Object.hasOwn(catalogEnvironment, "PUID") ? [["PUID", settings.puid], ["PGID", settings.pgid]] : []),
+    //
+    // `runsAsStackIdentity` is the second way a stack can read them: the image
+    // ignores PUID/PGID, so Compose imposes identity through `user:` instead.
+    // The keys are just as load-bearing there — omit them and `user:` renders as
+    // a bare colon and the container refuses to start.
+    ...(Object.hasOwn(catalogEnvironment, "PUID") || definition?.runsAsStackIdentity
+      ? [["PUID", settings.puid], ["PGID", settings.pgid]]
+      : []),
     ["TZ", settings.tz],
     ["PORT", service.port],
     ["CONFIG_DIR", service.configDir],

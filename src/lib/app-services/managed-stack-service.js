@@ -13,7 +13,7 @@ import {
   readContainerImageIdByName,
   restartService,
   restoreConfigSnapshot
-} from "../runtime.js";
+} from "../runtimes/index.js";
 import { SHARED_NETWORK, getServiceDefinition, isImportedMode } from "../service-catalog.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
 import { JobRegistry } from "../jobs.js";
@@ -23,7 +23,7 @@ import {
   installService,
   upgradeAllServices,
   upgradeService
-} from "../runtime.js";
+} from "../runtimes/index.js";
 import {
   appendActivity,
   loadSettings,

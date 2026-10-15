@@ -9,15 +9,30 @@ import {
   buildDownloadClientPayload,
   buildIndexerProxyPayload,
   buildRootFolderPayload,
+  buildSeerrServerPayload,
+  buildSeerrTestPayload,
   describeValidation,
   missingCategoryFor
 } from "../wiring/payloads.js";
-import { attachController, planControllerAttachments } from "../wiring/attach.js";
-import { ensureSharedNetwork, inspectContainers } from "../runtime.js";
-import { arrApi, bazarrApi, probeJellyfin, probeQbittorrent, sabnzbdApi, speaksArrApi } from "../wiring/app-clients.js";
+import { planControllerAttachments } from "../wiring/attach.js";
+// Through the port: joining the controller to each app is a Docker idea, and a
+// cluster has nothing to join.
+import { attachController } from "../runtimes/index.js";
+import { ensureSharedNetwork, inspectContainers } from "../runtimes/index.js";
+import {
+  arrApi,
+  bazarrApi,
+  probeJellyfin,
+  probeQbittorrent,
+  probeSeerr,
+  sabnzbdApi,
+  seerrApi,
+  seerrDvrKind,
+  speaksArrApi
+} from "../wiring/app-clients.js";
 import { DOWNLOAD_CLIENTS } from "../wiring/payloads.js";
 import { hasReadableApiKey, readApiKey } from "../wiring/api-keys.js";
-import { readContainerFile } from "../runtime.js";
+import { readContainerFile } from "../runtimes/index.js";
 import { LAN_CLIENT, buildEndpoint, inspectNetworkDrivers, isStillStarting, resolveLink } from "../wiring/topology.js";
 import { planPathMapping, planRootFolder, readMounts } from "../wiring/path-plan.js";
 import { ensureLibraryFolder } from "../wiring/provision.js";
@@ -28,6 +43,7 @@ import {
   reconcileDownloadClient,
   reconcileIndexerProxy,
   reconcileRootFolder,
+  reconcileSeerrServer,
   reconcileSettingsLink
 } from "../wiring/reconcile.js";
 import { SHARED_NETWORK, getServiceDefinition } from "../service-catalog.js";
@@ -47,6 +63,7 @@ export const WIRING_STEPS = [
   { name: "applications", label: "Register the apps with Prowlarr" },
   { name: "proxies", label: "Give Prowlarr its challenge solver" },
   { name: "subtitles", label: "Point Bazarr at the library apps" },
+  { name: "requests", label: "Point Seerr at the library apps" },
   { name: "verify", label: "Run each app's own connection tests" }
 ];
 
@@ -190,7 +207,9 @@ export class WiringService {
     bazarrApiImpl = bazarrApi,
     probeJellyfinImpl = probeJellyfin,
     probeQbittorrentImpl = probeQbittorrent,
+    probeSeerrImpl = probeSeerr,
     sabnzbdApiImpl = sabnzbdApi,
+    seerrApiImpl = seerrApi,
     sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   } = {}) {
     this.now = nowImpl;
@@ -211,7 +230,9 @@ export class WiringService {
     this.bazarrApi = bazarrApiImpl;
     this.probeJellyfin = probeJellyfinImpl;
     this.probeQbittorrent = probeQbittorrentImpl;
+    this.probeSeerr = probeSeerrImpl;
     this.sabnzbdApi = sabnzbdApiImpl;
+    this.seerrApi = seerrApiImpl;
     this.sleep = sleepImpl;
   }
 
@@ -376,7 +397,8 @@ export class WiringService {
       ...this.checkDownloadClients(services, endpoints, current, hostAddress, mounts),
       ...this.checkProwlarrApplications(services, endpoints, current, hostAddress),
       ...this.checkIndexerProxy(services, endpoints, current, hostAddress),
-      ...this.checkBazarrLinks(services, endpoints, current, hostAddress)
+      ...this.checkBazarrLinks(services, endpoints, current, hostAddress),
+      ...this.checkSeerrLinks(services, endpoints, current, hostAddress)
     ];
     const rootFolders = this.checkRootFolders(services, current, mounts, settings);
     const pathMappings = this.checkPathMappings(services, endpoints, mounts, hostAddress, downloadDirs?.completeDir);
@@ -595,6 +617,9 @@ export class WiringService {
         ),
         subtitles: gathered.report.links.filter(
           (link) => link.kind === "subtitle-source" && link.state === RECONCILE_STATE.ABSENT
+        ),
+        requests: gathered.report.links.filter(
+          (link) => link.kind === "request-source" && link.state === RECONCILE_STATE.ABSENT
         )
       };
       const total =
@@ -602,7 +627,8 @@ export class WiringService {
         actionable.applications.length +
         actionable.rootFolders.length +
         actionable.proxies.length +
-        actionable.subtitles.length;
+        actionable.subtitles.length +
+        actionable.requests.length;
 
       if (total === 0) {
         unchanged = this.describeNothingToDo(gathered.report);
@@ -655,6 +681,7 @@ export class WiringService {
     await this.applyApplications(ctx, plan, created, skipped, logger);
     await this.applyIndexerProxies(ctx, plan, created, skipped, logger);
     await this.applySubtitleLinks(ctx, plan, created, logger);
+    await this.applySeerrLinks(ctx, plan, created, logger);
 
     const verification = await ctx.step("verify", async () => {
       const results = [];
@@ -1109,6 +1136,101 @@ export class WiringService {
   }
 
   /**
+   * Points Seerr at each library app.
+   *
+   * One app at a time rather than one batched write, because Seerr's create
+   * endpoint takes a single server and appends it — and because each one has to
+   * be tested first for reasons that are not about caution. Seerr rejects a
+   * server with no quality profile or root folder, and the only place those ids
+   * exist is the response to its own test call. The test is what makes the
+   * write constructible, so there is no version of this that skips it.
+   */
+  async applySeerrLinks(ctx, plan, created, logger) {
+    const { actionable, current, keys } = plan;
+
+    if (actionable.requests.length === 0) {
+      ctx.skip("requests", "Seerr already points at the library apps, or is not part of this stack.");
+      return;
+    }
+
+    await ctx.step("requests", async () => {
+      const failedBefore = this.outcome.failed.length;
+      const base = current.get("seerr")?.baseUrl;
+      const key = keys.get("seerr");
+
+      for (const link of actionable.requests) {
+        const label = `Seerr → ${link.targetName}`;
+        const targetKey = keys.get(link.target);
+        const kind = seerrDvrKind(link.target);
+
+        if (!targetKey) {
+          this.outcome.failed.push({
+            label,
+            reason: `${link.targetName}'s API key could not be read, so Seerr cannot be pointed at it.`
+          });
+          continue;
+        }
+
+        const tested = await this.seerrApi.testServer(
+          base,
+          key,
+          kind,
+          buildSeerrTestPayload({
+            hostname: link.address.host,
+            port: link.address.port,
+            apiKey: targetKey
+          })
+        );
+
+        if (!tested.ok) {
+          this.outcome.failed.push({ label, reason: tested.error });
+          continue;
+        }
+
+        const { payload, chosen, missing } = buildSeerrServerPayload(link.target, {
+          appName: link.targetName,
+          hostname: link.address.host,
+          port: link.address.port,
+          apiKey: targetKey,
+          testResult: tested.data || {},
+          existingServers: current.get("seerr")?.seerrServers?.[kind] || [],
+          // The folder the Arr app itself is using, so Seerr files requests
+          // where the app will actually put them.
+          preferredDirectory: current.get(link.target)?.rootFolders?.[0]?.path || null
+        });
+
+        if (!payload) {
+          this.outcome.failed.push({ label, reason: missing });
+          continue;
+        }
+
+        const result = await this.seerrApi.createServer(base, key, kind, payload);
+
+        // Seerr answers 201 with the stored entry, so unlike Bazarr the response
+        // is evidence. An id is what makes it evidence — a 201 carrying no id
+        // would mean it took the request and kept nothing.
+        if (!result.ok || !Number.isFinite(Number(result.data?.id))) {
+          this.outcome.failed.push({
+            label,
+            reason: result.ok ? "Seerr accepted the server but did not store it." : result.error
+          });
+          continue;
+        }
+
+        created.push({ serviceId: "seerr", label });
+        // Said out loud rather than left implicit: a quality profile is a taste
+        // decision, and Keelarr just made one on the operator's behalf.
+        this.outcome.notes.push(
+          `Seerr will request ${link.targetName} titles at the "${chosen.profileName}" quality profile into ${chosen.directory}. Change either in Seerr.`
+        );
+        logger.info("wiring.created", { label });
+      }
+
+      return { detail: this.describeOutcome(actionable.requests.length, failedBefore) };
+    });
+  }
+
+  /**
    * Test, then write.
    *
    * Arr apps validate on save too, so this is not the only guard — but testing
@@ -1220,6 +1342,43 @@ export class WiringService {
         entry.setupComplete = probe.setupComplete;
         entry.version = probe.version;
         entry.error = probe.error;
+        current.set(service.id, entry);
+        continue;
+      }
+
+      if (service.id === "seerr" && link.ok) {
+        // Probed before it is read. A Seerr nobody has run the wizard on is up,
+        // answering, and has no API key at all — so a failed read there is a
+        // chore rather than a fault, and the two have to be told apart before
+        // the key is even attempted.
+        const probe = await this.probeSeerr(link.baseUrl);
+        entry.initialized = probe.initialized;
+        entry.error = probe.error;
+
+        // Not attempted before the wizard has run. Seerr's API key resolves to
+        // user id 1 — the administrator the wizard creates — so until then every
+        // /settings call is answered 403 by an app that is otherwise perfectly
+        // healthy. Letting that 403 surface would report "Seerr rejected the API
+        // key", which is both wrong and the kind of claim that sends an operator
+        // hunting for a key problem that does not exist.
+        if (probe.reachable && probe.initialized !== false && key) {
+          const [radarr, sonarr] = await Promise.all([
+            this.seerrApi.listServers(link.baseUrl, key, "radarr"),
+            this.seerrApi.listServers(link.baseUrl, key, "sonarr")
+          ]);
+          entry.seerrServers = {
+            radarr: radarr.ok ? radarr.data : [],
+            sonarr: sonarr.ok ? sonarr.data : []
+          };
+          // Deliberately *not* set from the probe. `reachable` is what the link
+          // check reads to decide whether a missing server means "absent" or
+          // "unknown", and an unreadable list must mean unknown — otherwise a
+          // key we could not use would be reported as nothing-configured and
+          // this job would try to write with it.
+          entry.reachable = radarr.ok && sonarr.ok;
+          entry.error = radarr.ok && sonarr.ok ? null : radarr.error || sonarr.error;
+        }
+
         current.set(service.id, entry);
         continue;
       }
@@ -1649,6 +1808,72 @@ export class WiringService {
           address: { baseUrl: link.baseUrl, host: link.host, port: link.port, strategy: link.strategy },
           addressReason: link.reason,
           actual: result.target ? { ip: result.target.ip, port: result.target.port } : null,
+          changes: result.changes,
+          reason: result.reason,
+          test: null
+        };
+      });
+  }
+
+  /**
+   * Seerr's links to the library apps.
+   *
+   * Structurally Bazarr's twin — one request portal pointed at Radarr and
+   * Sonarr — but reconciled as a collection rather than a settings block,
+   * because Seerr keeps an array of servers and will happily hold several.
+   */
+  checkSeerrLinks(services, endpoints, current, hostAddress) {
+    const seerr = services.find((service) => service.id === "seerr");
+
+    if (!seerr) {
+      return [];
+    }
+
+    const app = current.get("seerr");
+
+    return services
+      .filter((service) => Boolean(seerrDvrKind(service.id)))
+      .map((service) => {
+        const kind = seerrDvrKind(service.id);
+        const base = {
+          id: `seerr->${service.id}:requests`,
+          kind: "request-source",
+          source: "seerr",
+          sourceName: "Seerr",
+          target: service.id,
+          targetName: service.name
+        };
+
+        if (!app?.reachable) {
+          return {
+            ...base,
+            ...unreadable(
+              app,
+              app?.initialized === false
+                ? "Seerr has not been set up yet, so it has no API key to read."
+                : "Keelarr could not read Seerr's configuration."
+            )
+          };
+        }
+
+        const link = resolveLink(endpoints.get("seerr"), endpoints.get(service.id), { hostAddress });
+
+        if (!link.ok) {
+          return { ...base, state: "blocked", reason: link.reason, address: null };
+        }
+
+        const result = reconcileSeerrServer(app.seerrServers?.[kind] || [], {
+          appName: service.name,
+          hostname: link.host,
+          port: link.port
+        });
+
+        return {
+          ...base,
+          state: result.state,
+          address: { baseUrl: link.baseUrl, host: link.host, port: link.port, strategy: link.strategy },
+          addressReason: link.reason,
+          actual: result.target ? { hostname: result.target.hostname, port: result.target.port } : null,
           changes: result.changes,
           reason: result.reason,
           test: null

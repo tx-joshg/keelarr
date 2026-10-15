@@ -2096,3 +2096,220 @@ a.header-icon {
   border-color: var(--warning-color);
   color: var(--nav-text);
 }
+
+/* --- the app picker --- */
+
+.wizard-modal {
+  width: min(820px, 100%);
+}
+
+.wizard-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 14px 0 4px;
+}
+
+.wizard-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--default-border);
+  border-radius: 4px;
+  background: var(--input-background);
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.wizard-row:hover {
+  border-color: var(--default-hover-border);
+  background: var(--default-hover-background);
+}
+
+.wizard-row-on {
+  border-color: var(--theme-alt-blue);
+}
+
+/* Disabled rather than hidden: an app the host is running and adoption cannot
+   take over is exactly the thing an operator needs to see explained. */
+.wizard-row-refused {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.wizard-row-blocked {
+  border-color: var(--danger-color);
+}
+
+.wizard-row-conflict {
+  border-color: var(--warning-color);
+}
+
+.wizard-row input {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.wizard-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.wizard-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--nav-text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.wizard-row-copy {
+  color: var(--help-text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.wizard-row-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  color: var(--text-color);
+  font-size: 12px;
+}
+
+.wizard-row-issue {
+  color: var(--warning-color);
+  font-size: 12px;
+}
+
+.wizard-row-port {
+  flex-shrink: 0;
+  color: var(--muted-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.wizard-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.wizard-tag-install {
+  border: 1px solid var(--default-border);
+  color: var(--help-text);
+}
+
+/* The one tag worth a colour: "this already exists" is the distinction the
+   whole screen turns on. */
+.wizard-tag-adopt {
+  border: 1px solid var(--alert-info-border);
+  background: var(--alert-info-background);
+  color: var(--primary-color);
+}
+
+.wizard-tag-managed {
+  border: 1px solid var(--success-border);
+  color: var(--success-background);
+}
+
+.wizard-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.wizard-finding {
+  border: 1px solid var(--default-border);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+
+.wizard-finding-blocked {
+  border-left-color: var(--danger-color);
+  background: rgba(240, 80, 80, 0.08);
+}
+
+.wizard-finding-conflict {
+  border-left-color: var(--warning-color);
+  background: var(--alert-warning-background);
+}
+
+.wizard-finding-advice {
+  border-left-color: var(--alert-info-border);
+  background: var(--alert-info-background);
+}
+
+.wizard-finding-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--nav-text);
+  font-size: 13px;
+}
+
+.wizard-finding-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 0 22px;
+  color: var(--help-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.wizard-finding-remedy {
+  color: var(--text-color);
+}
+
+.wizard-finding-subjects {
+  color: var(--muted-text);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.wizard-ack {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0 22px;
+  color: var(--text-color);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wizard-actions {
+  justify-content: flex-end;
+}
+
+.wizard-count {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+.wizard-footnote {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .wizard-row-port {
+    display: none;
+  }
+}

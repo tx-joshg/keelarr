@@ -260,6 +260,25 @@ export function createHttpApp({
     }
   });
 
+  app.get("/api/setup/wizard", async (request, response, next) => {
+    try {
+      response.json(await keelarrApp.prepareWizard(requestContext(request)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // POST rather than GET: the body carries a candidate selection and the scan
+  // results it was judged against, which is request data rather than a resource
+  // address — and it is long enough to outgrow a query string on a full catalog.
+  app.post("/api/catalog/compatibility", async (request, response, next) => {
+    try {
+      response.json(await keelarrApp.describeCompatibility(request.body || {}));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/host/browse", async (request, response, next) => {
     try {
       response.json(await keelarrApp.browseDirectories(request.query.path || "/", requestContext(request)));

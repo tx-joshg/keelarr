@@ -46,6 +46,7 @@ export const SERVICE_ORDER = [
   "bazarr",
   "jellyfin",
   "trailarr",
+  "seerr",
   "ombi",
   "tautulli"
 ];
@@ -115,6 +116,48 @@ export const SERVICE_CATALOG = {
         PUID: "${PUID}",
         PGID: "${PGID}",
         TZ: "${TZ}"
+      };
+    }
+  },
+  seerr: {
+    id: "seerr",
+    name: "Seerr",
+    family: "request",
+    description: "Request portal for family and friends. Formerly Jellyseerr, and before that a fork of Overseerr.",
+    defaultPort: 5055,
+    defaultImage: "ghcr.io/seerr-team/seerr:latest",
+    // The project has been renamed twice and most running installs still carry
+    // an older name. Adoption matches on the image repository, so without these
+    // a container that is plainly Seerr would be reported as unrecognised.
+    altImages: ["fallenbagel/jellyseerr", "sctx/overseerr"],
+    volumes: ["config"],
+    // Not /config. Seerr reads CONFIG_DIRECTORY and defaults to /app/config, and
+    // mounting the usual path instead is the single most common way to install
+    // it wrong: it starts, works, and loses every setting on the next restart,
+    // because the directory it is actually writing to is inside the container.
+    configMount: "/app/config",
+    // Seerr is not a LinuxServer image. It ignores PUID/PGID and runs as its own
+    // node user (UID 1000), so Compose's `user:` is the only lever that works.
+    // It has to be pulled, because its config directory lives in the same
+    // configRoot as every other app's — left at 1000 it would be the one
+    // directory in there the rest of the stack's identity cannot read.
+    //
+    // Safe to pin here precisely because Seerr mounts no media: it never writes
+    // to the library, it only asks Radarr and Sonarr to. So identity governs
+    // nothing but its own config, which is why this does not reopen the
+    // library-ownership problem docs/architecture.md#identity describes.
+    runsAsStackIdentity: true,
+    // 200 once set up; 302 to /setup before that, which is still a reachable app.
+    healthStatuses: [200, 302, 303, 307],
+    buildEnvironment(service) {
+      return {
+        TZ: "${TZ}",
+        // Pinned to the container side of the port mapping rather than ${PORT}.
+        // Seerr binds whatever PORT says, so taking it from .env would let an
+        // edited host port move the listener away from the port the mapping
+        // still targets — the same trap qBittorrent's WEBUI_PORT avoids.
+        PORT: String(service.port),
+        LOG_LEVEL: "info"
       };
     }
   },
@@ -315,11 +358,19 @@ export function buildComposeSpec(settings, service) {
     networks: [SHARED_NETWORK]
   };
 
+  // For images that ignore PUID/PGID, identity has to be imposed from outside
+  // the container. Written through the same ${PUID}/${PGID} that every other
+  // stack reads, so one identity setting still governs the whole stack rather
+  // than this one service drifting to its image's own default.
+  if (definition.runsAsStackIdentity) {
+    composeService.user = `${"${PUID}"}:${"${PGID}"}`;
+  }
+
   // Declared rather than assumed: FlareSolverr answers a challenge and forgets,
   // so mounting a config directory for it would create an empty one on every
   // host and imply there was something in there worth backing up.
   if (service.volumes.includes("config")) {
-    composeService.volumes.push(`${"${CONFIG_DIR}"}:/config`);
+    composeService.volumes.push(`${"${CONFIG_DIR}"}:${definition.configMount || "/config"}`);
   }
 
   if (service.volumes.includes("media")) {

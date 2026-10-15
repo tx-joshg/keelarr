@@ -1,4 +1,4 @@
-import { inspectContainerState } from "./runtime.js";
+import { inspectContainerState } from "./runtimes/index.js";
 
 export const HEALTH_OUTCOME = Object.freeze({
   /** Container is up and something actively confirmed it works. */

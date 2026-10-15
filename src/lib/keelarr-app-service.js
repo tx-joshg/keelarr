@@ -8,6 +8,8 @@ import { ManagedStackService } from "./app-services/managed-stack-service.js";
 import { RemovalService } from "./app-services/removal-service.js";
 import { WiringService } from "./app-services/wiring-service.js";
 import { buildJobSnapshot } from "./jobs.js";
+import { evaluateCompatibility } from "./compatibility.js";
+import { buildWizardView } from "./setup-wizard.js";
 
 export class KeelarrAppService {
   constructor({
@@ -191,6 +193,37 @@ export class KeelarrAppService {
 
   async scanImportInventory(context = {}) {
     return this.importService.scanImportInventory(context);
+  }
+
+  /**
+   * Judges a candidate selection without saving it.
+   *
+   * A pure function over what the caller already knows, so the wizard can call
+   * it on every tick of a checkbox without a Docker round trip. `discovered` is
+   * passed back in from the scan the wizard already did rather than re-scanned
+   * here, which is what keeps it instant.
+   */
+  async describeCompatibility(input = {}) {
+    return evaluateCompatibility({
+      selectedServiceIds: Array.isArray(input.selectedServiceIds) ? input.selectedServiceIds : [],
+      serviceOverrides: input.serviceOverrides && typeof input.serviceOverrides === "object" ? input.serviceOverrides : {},
+      discovered: Array.isArray(input.discovered) ? input.discovered : []
+    });
+  }
+
+  /**
+   * Everything the app picker needs, in one call.
+   *
+   * The scan is the expensive half and the reason this is one endpoint rather
+   * than three: the picker needs to know, for every app in the catalog, whether
+   * choosing it means installing something new or adopting something already
+   * running. Answering that per-app from the client would be one scan per app.
+   */
+  async prepareWizard(context = {}) {
+    return buildWizardView({
+      settings: await this.loadSettings(),
+      inventory: await this.scanImportInventory(context)
+    });
   }
 
   async previewImport(containerId, context = {}) {

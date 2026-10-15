@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 
 import { writeStacks } from "../generator.js";
-import { inspectContainers } from "../runtime.js";
+import { inspectContainers } from "../runtimes/index.js";
 import { findUnmountedRoots, renderControllerEnv, resolveControllerEnvPath } from "../host-mounts.js";
 import {
   applyDetectionSuggestions,
@@ -15,9 +15,38 @@ import {
   normalizeSettings,
   saveSettings
 } from "../store.js";
+import { evaluateCompatibility, summarizeBlocked } from "../compatibility.js";
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 import { listDirectories } from "../path-browser.js";
+
+/**
+ * Refuses a selection that cannot run.
+ *
+ * Enforced here rather than only in the browser because the UI is not the only
+ * caller: `/api/settings` and `/api/setup` take a selection straight from the
+ * request body, so a check that lived in the page could be stepped around by
+ * anything posting directly — including a script of the operator's own.
+ *
+ * Only `blocked` findings refuse. Conflicts and advice are deliberately not
+ * enforced: they are the operator's call to make, and a tool that turns its own
+ * opinions into 400s stops being useful the first time it is wrong.
+ */
+function assertSelectionCanRun(settings) {
+  const compatibility = evaluateCompatibility({
+    selectedServiceIds: settings.selectedServiceIds || [],
+    serviceOverrides: settings.serviceOverrides || {}
+  });
+
+  if (compatibility.ok) {
+    return compatibility;
+  }
+
+  throw new KeelarrError(summarizeBlocked(compatibility.blocked), {
+    statusCode: 400,
+    details: { compatibility }
+  });
+}
 
 function summarizeValidationErrors(validation) {
   if (!Array.isArray(validation?.errors) || validation.errors.length === 0) {
@@ -271,6 +300,7 @@ export class HostProfileService {
       });
     }
 
+    assertSelectionCanRun(candidateSettings);
     const settings = await this.saveSettings(candidateSettings);
     const controllerEnv = await this.syncControllerEnv(settings, logger);
     logger.info("host.settings_saved", {
@@ -372,14 +402,23 @@ export class HostProfileService {
   async patchServiceOverride(serviceId, patch) {
     const settings = await this.loadSettings();
     const existing = settings.serviceOverrides?.[serviceId] || {};
-
-    return this.saveSettings({
+    const next = {
       ...settings,
       serviceOverrides: {
         ...(settings.serviceOverrides || {}),
         [serviceId]: { ...existing, ...patch }
       }
-    });
+    };
+
+    // Changing a port is the only way to produce a collision, so it is the one
+    // override worth checking. Deliberately *not* applied to the overrides
+    // cutover writes: those describe a container that already exists, and
+    // refusing to record reality would leave the dashboard lying about the host.
+    if (Object.hasOwn(patch, "port")) {
+      assertSelectionCanRun(next);
+    }
+
+    return this.saveSettings(next);
   }
 
   async readControllerDefinition(settings, logger) {
@@ -444,6 +483,7 @@ export class HostProfileService {
       });
     }
 
+    assertSelectionCanRun(candidateSettings);
     const settings = await this.saveSettings(candidateSettings);
     const generated = await this.writeStacks(settings, settings.selectedServiceIds);
 

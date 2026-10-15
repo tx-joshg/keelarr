@@ -49,6 +49,42 @@ export const defaultSettings = {
   // Local time in `tz`, 24-hour. 03:00 sits clear of the US spring-forward
   // gap, when 02:00-02:59 does not exist.
   autoUpdateTime: "03:00",
+  // Which runtime manages the stack. Docker unless said otherwise, and that
+  // default is permanent: every install that predates a second runtime has no
+  // such key, and the only safe reading of its absence is the runtime it has
+  // been running on all along.
+  runtime: "docker",
+  // Kubernetes/OKD settings, all inert while `runtime` is "docker".
+  //
+  // Which kind of cluster. The difference is narrower than it looks and lands
+  // in exactly two places: how an app is exposed (OKD has Routes, plain
+  // Kubernetes has Ingress), and whether the identity the pods ask for needs a
+  // cluster administrator's permission (OKD's SCCs; plain Kubernetes has none).
+  kubeFlavor: "okd",
+  // Empty means "pick from the flavour" — `oc` on OKD, `kubectl` elsewhere.
+  // Worth deriving rather than defaulting, because `kubectl` cannot create a
+  // Route and `oc` is not usually installed beside a plain cluster, so a fixed
+  // default is wrong half the time.
+  kubeBin: "",
+  kubeNamespace: "keelarr",
+  // Left empty so the cluster's default StorageClass applies. Naming one that
+  // does not exist leaves every claim Pending with no obvious cause.
+  kubeStorageClass: "",
+  kubeConfigSize: "5Gi",
+  // The operator's own ReadWriteMany claim for the media library. Not created
+  // by Keelarr for the same reason mediaRoot is not: it is shared by every app
+  // and outlives all of them.
+  kubeMediaClaim: "keelarr-media",
+  // Nothing is exposed outside the cluster until there is a domain to build
+  // hostnames from. Used for both Routes and Ingresses.
+  kubeDomain: "",
+  // Ingress only. Empty uses the cluster's default IngressClass.
+  kubeIngressClass: "",
+  // Ingress only, and optional. A Route gets TLS from the OKD router with no
+  // secret; an Ingress needs one named, and without it the app is served over
+  // plain HTTP — which is worth being an explicit choice rather than a silent
+  // downgrade.
+  kubeTlsSecret: "",
   selectedServiceIds: ["prowlarr", "radarr", "sonarr", "bazarr", "trailarr", "ombi", "tautulli", "sabnzbd"],
   serviceOverrides: {},
   services: {}
@@ -184,6 +220,22 @@ export function normalizeSettings(input = {}) {
   merged.puid = String(merged.puid || defaultSettings.puid).trim();
   merged.pgid = String(merged.pgid || defaultSettings.pgid).trim();
   merged.ombiVersion = String(merged.ombiVersion || defaultSettings.ombiVersion).trim();
+  // An unknown value falls back to Docker rather than erroring. A settings file
+  // naming a runtime this build does not have is a downgrade, and the honest
+  // response to a downgrade is the runtime that still exists.
+  merged.runtime = ["docker", "kube"].includes(merged.runtime) ? merged.runtime : defaultSettings.runtime;
+  merged.kubeFlavor = ["okd", "kubernetes"].includes(merged.kubeFlavor)
+    ? merged.kubeFlavor
+    : defaultSettings.kubeFlavor;
+  merged.kubeBin = String(merged.kubeBin || "").trim()
+    || (merged.kubeFlavor === "kubernetes" ? "kubectl" : "oc");
+  merged.kubeNamespace = String(merged.kubeNamespace || defaultSettings.kubeNamespace).trim();
+  merged.kubeStorageClass = String(merged.kubeStorageClass ?? defaultSettings.kubeStorageClass).trim();
+  merged.kubeConfigSize = String(merged.kubeConfigSize || defaultSettings.kubeConfigSize).trim();
+  merged.kubeMediaClaim = String(merged.kubeMediaClaim || defaultSettings.kubeMediaClaim).trim();
+  merged.kubeDomain = String(merged.kubeDomain ?? defaultSettings.kubeDomain).trim();
+  merged.kubeIngressClass = String(merged.kubeIngressClass ?? defaultSettings.kubeIngressClass).trim();
+  merged.kubeTlsSecret = String(merged.kubeTlsSecret ?? defaultSettings.kubeTlsSecret).trim();
   merged.backupRetention = sanitizeBackupRetention(merged.backupRetention);
   merged.autoRevert = merged.autoRevert === true;
   merged.autoUpdateEnabled = merged.autoUpdateEnabled === true;
