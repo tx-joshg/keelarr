@@ -305,3 +305,61 @@ test("an empty compatibility request is answered, not rejected", async () => {
     assert.equal((await response.json()).ok, true);
   });
 });
+
+test("an app the picker would adopt is judged on the port its container really publishes", () => {
+  const view = buildWizardView({
+    settings: { initialized: true, selectedServiceIds: ["radarr"], serviceOverrides: {} },
+    inventory: {
+      items: [{
+        containerId: "s1",
+        name: "sonarr",
+        recognized: true,
+        serviceId: "sonarr",
+        adoptable: true,
+        issues: [],
+        ports: [{ containerPort: 8989, hostPort: "7878" }]
+      }]
+    }
+  });
+
+  assert.equal(view.catalog.find((entry) => entry.id === "sonarr").port, 7878);
+});
+
+test("ticking that adoption alongside a default Radarr is a visible collision", async () => {
+  const { evaluateCompatibility } = await import("../src/lib/compatibility.js");
+  const view = buildWizardView({
+    settings: { initialized: true, selectedServiceIds: ["radarr"], serviceOverrides: {} },
+    inventory: {
+      items: [{
+        containerId: "s1", name: "sonarr", recognized: true, serviceId: "sonarr",
+        adoptable: true, issues: [], ports: [{ hostPort: "7878" }]
+      }]
+    }
+  });
+  // What the page sends on a toggle: every row whose port is not its default.
+  const overrides = Object.fromEntries(
+    view.catalog.filter((entry) => entry.port !== entry.defaultPort).map((entry) => [entry.id, { port: entry.port }])
+  );
+  const result = evaluateCompatibility({ selectedServiceIds: ["radarr", "sonarr"], serviceOverrides: overrides });
+
+  assert.equal(result.ok, false);
+  assert.match(result.blocked[0].summary, /port 7878/);
+});
+
+test("an unmanaged Jellyfin still counts as Seerr's media server when the picker re-asks", async () => {
+  const { evaluateCompatibility } = await import("../src/lib/compatibility.js");
+  const view = buildWizardView({
+    settings: { initialized: true, selectedServiceIds: [], serviceOverrides: {} },
+    inventory: {
+      items: [{ name: "jellyfin", image: "jellyfin/jellyfin:latest", recognized: true, serviceId: "jellyfin", adoptable: true, issues: [] }]
+    }
+  });
+  // The page's refresh body: unrecognised apps plus the detected media servers.
+  const discovered = [
+    ...view.unrecognized,
+    ...view.mediaServers.map((image) => ({ image }))
+  ];
+  const result = evaluateCompatibility({ selectedServiceIds: ["seerr"], discovered });
+
+  assert.equal(result.conflicts.some((finding) => finding.id === "seerr-without-media-server"), false);
+});

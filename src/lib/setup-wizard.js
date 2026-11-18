@@ -23,6 +23,24 @@ export function buildWizardView({ settings, inventory }) {
     }
   }
 
+  // An app the picker would adopt keeps the port its container already
+  // publishes — adoption saves exactly that. Judging it on the catalog default
+  // instead would let a real collision through: a Sonarr published on 7878
+  // looks like 8989 here, so a new default Radarr would appear to fit.
+  const publishedPort = (item) => {
+    const port = Number((item?.ports || []).find((entry) => entry?.hostPort)?.hostPort);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  };
+  const effectiveOverrides = { ...(settings?.serviceOverrides || {}) };
+
+  for (const [id, item] of running) {
+    const port = selected.includes(id) ? null : publishedPort(item);
+
+    if (port) {
+      effectiveOverrides[id] = { ...(effectiveOverrides[id] || {}), port };
+    }
+  }
+
   const catalog = SERVICE_ORDER.map((id) => {
     const definition = getServiceDefinition(id);
     const existing = running.get(id) || null;
@@ -34,7 +52,7 @@ export function buildWizardView({ settings, inventory }) {
       family: definition.family,
       description: definition.description,
       defaultPort: definition.defaultPort,
-      port: Number(settings?.serviceOverrides?.[id]?.port || definition.defaultPort),
+      port: Number(effectiveOverrides[id]?.port || definition.defaultPort),
       selected: managed,
       // What ticking this box will actually do, which is the whole point of the
       // picker: "install this" and "take over the one you already run" are very
@@ -70,7 +88,7 @@ export function buildWizardView({ settings, inventory }) {
       .map((item) => ({ name: item.name, image: item.image })),
     compatibility: evaluateCompatibility({
       selectedServiceIds: selected,
-      serviceOverrides: settings?.serviceOverrides || {},
+      serviceOverrides: effectiveOverrides,
       discovered: items
     })
   };

@@ -2853,7 +2853,14 @@ async function refreshWizardCompatibility() {
         serviceOverrides: overrides,
         // The scan the picker already did. Passing it back is what lets the
         // controller notice a Plex it does not manage without scanning again.
-        discovered: (dialog.view.unrecognized || []).map((item) => ({ name: item.name, image: item.image }))
+        // Media servers are sent as well as the unrecognised apps: a Jellyfin
+        // that runs here but Keelarr does not manage is recognised, so it is
+        // not in `unrecognized`, yet it still decides whether Seerr has a
+        // server to sign in against.
+        discovered: [
+          ...(dialog.view.unrecognized || []).map((item) => ({ name: item.name, image: item.image })),
+          ...(dialog.view.mediaServers || []).map((image) => ({ image }))
+        ]
       })
     });
     // An acknowledgement belongs to the finding it was given for. Dropping the

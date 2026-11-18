@@ -1,5 +1,6 @@
 import { SERVICE_CATALOG, SERVICE_ORDER, getServiceDefinition } from "./service-catalog.js";
 import { normalizeImageRepository } from "./import-scanner.js";
+import { KeelarrError } from "./errors.js";
 
 /**
  * What a selection of apps will and will not do, before any of it is installed.
@@ -348,4 +349,31 @@ export function evaluateCompatibility({
  */
 export function summarizeBlocked(blocked = []) {
   return blocked.map((finding) => `${finding.summary} ${finding.consequence}`).join(" ");
+}
+
+/**
+ * Refuses a settings object whose selection cannot start.
+ *
+ * Enforced on every write path rather than only in the browser because the UI
+ * is not the only caller: `/api/settings` and `/api/setup` take a selection
+ * straight from a request body, and adoption saves the port an existing
+ * container really publishes — which the picker may never have judged.
+ *
+ * Only `blocked` findings refuse. Conflicts and advice are deliberately not
+ * enforced: they are the operator's call to make.
+ */
+export function assertSelectionCanRun(settings) {
+  const compatibility = evaluateCompatibility({
+    selectedServiceIds: settings.selectedServiceIds || [],
+    serviceOverrides: settings.serviceOverrides || {}
+  });
+
+  if (compatibility.ok) {
+    return compatibility;
+  }
+
+  throw new KeelarrError(summarizeBlocked(compatibility.blocked), {
+    statusCode: 400,
+    details: { compatibility }
+  });
 }

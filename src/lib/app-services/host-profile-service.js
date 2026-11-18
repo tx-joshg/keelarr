@@ -15,38 +15,10 @@ import {
   normalizeSettings,
   saveSettings
 } from "../store.js";
-import { evaluateCompatibility, summarizeBlocked } from "../compatibility.js";
+import { assertSelectionCanRun } from "../compatibility.js";
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 import { listDirectories } from "../path-browser.js";
-
-/**
- * Refuses a selection that cannot run.
- *
- * Enforced here rather than only in the browser because the UI is not the only
- * caller: `/api/settings` and `/api/setup` take a selection straight from the
- * request body, so a check that lived in the page could be stepped around by
- * anything posting directly — including a script of the operator's own.
- *
- * Only `blocked` findings refuse. Conflicts and advice are deliberately not
- * enforced: they are the operator's call to make, and a tool that turns its own
- * opinions into 400s stops being useful the first time it is wrong.
- */
-function assertSelectionCanRun(settings) {
-  const compatibility = evaluateCompatibility({
-    selectedServiceIds: settings.selectedServiceIds || [],
-    serviceOverrides: settings.serviceOverrides || {}
-  });
-
-  if (compatibility.ok) {
-    return compatibility;
-  }
-
-  throw new KeelarrError(summarizeBlocked(compatibility.blocked), {
-    statusCode: 400,
-    details: { compatibility }
-  });
-}
 
 function summarizeValidationErrors(validation) {
   if (!Array.isArray(validation?.errors) || validation.errors.length === 0) {

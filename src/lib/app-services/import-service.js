@@ -5,6 +5,7 @@ import {
   buildImportReviewArtifacts
 } from "../import-planner.js";
 import { scanDockerInventory } from "../import-scanner.js";
+import { assertSelectionCanRun } from "../compatibility.js";
 import { appendActivity, loadSettings, normalizeSettings, saveSettings } from "../store.js";
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
@@ -127,6 +128,12 @@ export class ImportService {
         [item.serviceId]: importedOverride
       }
     });
+    // The adopted container's real published port goes into the overrides here,
+    // and that is a port the picker may have judged on a catalog default. A
+    // collision with something already selected would only surface when the
+    // other app failed to bind, so it is refused before anything is written.
+    assertSelectionCanRun(nextSettingsDraft);
+
     const nextPreview = await this.buildImportPreview(nextSettingsDraft, item);
     const reviewArtifacts = this.buildImportReviewArtifacts(nextPreview);
     const draft = {
