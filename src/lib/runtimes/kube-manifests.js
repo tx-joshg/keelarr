@@ -1,6 +1,6 @@
 import YAML from "yaml";
 
-import { getServiceDefinition } from "../service-catalog.js";
+import { configMountTarget, getServiceDefinition } from "../service-catalog.js";
 
 /**
  * Kubernetes/OKD manifests for a catalog service.
@@ -91,7 +91,7 @@ export function buildEnv(settings, service) {
     PGID: String(settings.pgid),
     TZ: settings.tz,
     PORT: String(service.port),
-    CONFIG_DIR: definition?.configMount || "/config",
+    CONFIG_DIR: configMountTarget(service.id),
     MEDIA_DIR: "/Media"
   };
 
@@ -114,7 +114,7 @@ export function buildDeployment(settings, service) {
   const volumes = [];
 
   if (service.volumes.includes("config")) {
-    volumeMounts.push({ name: "config", mountPath: definition?.configMount || "/config" });
+    volumeMounts.push({ name: "config", mountPath: configMountTarget(service.id) });
     volumes.push({ name: "config", persistentVolumeClaim: { claimName: configClaimName(service.id) } });
   }
 

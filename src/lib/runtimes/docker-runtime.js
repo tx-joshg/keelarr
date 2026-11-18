@@ -10,6 +10,7 @@
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_IDLE_TIMEOUT_MS, runCommand } from "../command-runner.js";
+import { configMountTarget } from "../service-catalog.js";
 
 function composeArgs(service, ...tail) {
   return [
@@ -127,17 +128,19 @@ const SNAPSHOT_HELPER_IMAGE = "alpine:latest";
 export const CONFIG_SNAPSHOT_FILE = "config-snapshot.tar.gz";
 
 /**
- * Finds whatever is mounted at /config, which may be a bind path or a named
- * volume depending on how the container was originally created.
+ * Finds whatever is mounted at the service's config path (/config for most,
+ * /app/config for Seerr), which may be a bind path or a named volume depending
+ * on how the container was originally created.
  */
 export async function readConfigMountSource(settings, service, options = {}) {
+  const target = configMountTarget(service.id);
   const result = await runCommand(
     settings.dockerBin,
     [
       "inspect",
       service.containerName,
       "--format",
-      '{{range .Mounts}}{{if eq .Destination "/config"}}{{.Type}}|{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}{{end}}{{end}}'
+      `{{range .Mounts}}{{if eq .Destination "${target}"}}{{.Type}}|{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}{{end}}{{end}}`
     ],
     { logger: options.logger }
   );

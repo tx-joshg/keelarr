@@ -268,6 +268,16 @@ export function getServiceDefinition(id) {
   return SERVICE_CATALOG[id];
 }
 
+/**
+ * Where a service keeps its config inside the container. Almost every app uses
+ * /config; Seerr does not. Every consumer that looks for "the config mount" —
+ * Compose generation, adoption checks, import previews, snapshots — has to ask
+ * here rather than assume, or it will judge a correctly mounted Seerr broken.
+ */
+export function configMountTarget(id) {
+  return SERVICE_CATALOG[id]?.configMount || "/config";
+}
+
 export function buildServiceFromCatalog(baseSettings, id, override = {}) {
   const definition = getServiceDefinition(id);
 
@@ -370,7 +380,7 @@ export function buildComposeSpec(settings, service) {
   // so mounting a config directory for it would create an empty one on every
   // host and imply there was something in there worth backing up.
   if (service.volumes.includes("config")) {
-    composeService.volumes.push(`${"${CONFIG_DIR}"}:${definition.configMount || "/config"}`);
+    composeService.volumes.push(`${"${CONFIG_DIR}"}:${configMountTarget(service.id)}`);
   }
 
   if (service.volumes.includes("media")) {

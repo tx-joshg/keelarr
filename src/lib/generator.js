@@ -1,5 +1,5 @@
 import path from "node:path";
-import { access, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chown, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 
 import YAML from "yaml";
 
@@ -62,8 +62,63 @@ export function renderEnvExampleText(entries) {
   return `${entries.map(([key]) => `${key}=`).join("\n")}\n`;
 }
 
-async function writeServiceFiles(settings, service) {
+/**
+ * Prepares the config directory for an image that runs as the stack identity
+ * through Compose's `user:` rather than PUID/PGID (Seerr).
+ *
+ * LinuxServer images start as root and chown their own /config, so a bind
+ * source Docker creates as root is harmless for them. An image started directly
+ * as 911:911 gets no such chance: if Docker creates the directory, it is owned
+ * by root and the app exits with EACCES the first time it writes its database.
+ * So the directory is made here, before deployment, and handed to the stack
+ * identity.
+ *
+ * Ownership is only taken for a directory this created, or one that is still
+ * empty — an existing config directory with files in it belongs to whoever
+ * wrote them, and recursively re-owning somebody's data is not this call's job.
+ * A failed chown is reported rather than thrown: the stack files are still
+ * worth writing, and the warning says exactly what to run.
+ */
+export async function prepareConfigDir(settings, service, options = {}) {
+  const definition = getServiceDefinition(service.id);
+
+  if (!definition?.runsAsStackIdentity || !service.volumes?.includes("config") || !service.configDir) {
+    return null;
+  }
+
+  const mkdirImpl = options.mkdirImpl || mkdir;
+  const chownImpl = options.chownImpl || chown;
+  const readdirImpl = options.readdirImpl || readdir;
+  const created = Boolean(await mkdirImpl(service.configDir, { recursive: true }));
+
+  if (!created) {
+    const entries = await readdirImpl(service.configDir).catch(() => null);
+
+    if (!entries || entries.length > 0) {
+      return { path: service.configDir, created: false, owned: false };
+    }
+  }
+
+  const uid = Number(settings.puid);
+  const gid = Number(settings.pgid);
+
+  try {
+    await chownImpl(service.configDir, uid, gid);
+  } catch (error) {
+    return {
+      path: service.configDir,
+      created,
+      owned: false,
+      warning: `${service.name} runs as ${uid}:${gid} but ${service.configDir} could not be given to that identity (${error.code || error.message}). Run \`chown ${uid}:${gid} ${service.configDir}\` before starting it, or it will not be able to write its database.`
+    };
+  }
+
+  return { path: service.configDir, created, owned: true };
+}
+
+async function writeServiceFiles(settings, service, options = {}) {
   await mkdir(service.stackDir, { recursive: true });
+  const configDir = await prepareConfigDir(settings, service, options);
 
   const composeSpec = buildComposeSpec(settings, service);
   const composeText = YAML.stringify(composeSpec);
@@ -76,7 +131,8 @@ async function writeServiceFiles(settings, service) {
   return {
     serviceId: service.id,
     composePath: service.composePath,
-    envPath: service.envPath
+    envPath: service.envPath,
+    ...(configDir ? { configDir } : {})
   };
 }
 
@@ -298,7 +354,7 @@ export async function reconcileStackIdentity(settings, service) {
   };
 }
 
-export async function writeStacks(settings, serviceIds = settings.selectedServiceIds) {
+export async function writeStacks(settings, serviceIds = settings.selectedServiceIds, options = {}) {
   const writes = [];
 
   for (const serviceId of serviceIds) {
@@ -334,7 +390,7 @@ export async function writeStacks(settings, serviceIds = settings.selectedServic
       continue;
     }
 
-    writes.push(await writeServiceFiles(settings, service));
+    writes.push(await writeServiceFiles(settings, service, options));
   }
 
   return writes;

@@ -2,7 +2,7 @@ import { access } from "node:fs/promises";
 
 import YAML from "yaml";
 
-import { buildServiceFromCatalog } from "./service-catalog.js";
+import { buildServiceFromCatalog, configMountTarget } from "./service-catalog.js";
 
 async function fileExists(filePath) {
   try {
@@ -405,7 +405,8 @@ export async function buildImportPreview(settings, item, options = {}) {
     fileExists(target.envPath)
   ]);
 
-  const configMount = getMountForTarget(item.mounts, "/config");
+  const configTarget = configMountTarget(target.id);
+  const configMount = getMountForTarget(item.mounts, configTarget);
   const mediaMount = getMountForTarget(item.mounts, "/Media");
   const plexLogsMount = getMountForTarget(item.mounts, "/plex_logs");
   const warnings = [...(item.issues || [])];
@@ -424,7 +425,7 @@ export async function buildImportPreview(settings, item, options = {}) {
     });
   }
 
-  const preservation = [preservationItem("Config", configMount, "/config", true)];
+  const preservation = [preservationItem("Config", configMount, configTarget, true)];
 
   if (target.volumes.includes("media") || mediaMount) {
     preservation.push(preservationItem("Media", mediaMount, "/Media", target.volumes.includes("media")));

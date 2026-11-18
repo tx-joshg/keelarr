@@ -487,6 +487,12 @@ export class HostProfileService {
     const settings = await this.saveSettings(candidateSettings);
     const generated = await this.writeStacks(settings, settings.selectedServiceIds);
 
+    for (const entry of generated) {
+      if (entry.configDir?.warning) {
+        logger.warn("host.config_dir_ownership", { serviceId: entry.serviceId, message: entry.configDir.warning });
+      }
+    }
+
     logger.info("host.setup_saved", {
       adapterId: settings.adapterType,
       deploy,

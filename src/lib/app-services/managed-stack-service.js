@@ -1091,7 +1091,13 @@ export class ManagedStackService {
     // from the catalog without visiting Settings.
     const settings = await this.ensureSelected(serviceId, context);
     const service = this.requireService(settings, serviceId);
-    await this.writeStacks(settings, [service.id]);
+    const written = await this.writeStacks(settings, [service.id]);
+
+    for (const entry of written || []) {
+      if (entry.configDir?.warning) {
+        this.scopedLogger(context).warn("service.config_dir_ownership", { serviceId: entry.serviceId, message: entry.configDir.warning });
+      }
+    }
     // backup: an install may be replacing an existing container, so capture
     // the rollback point first.
     const result = await this.deployOne(settings, service, this.scopedLogger(context), { backup: true });
