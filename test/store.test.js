@@ -148,3 +148,11 @@ test("a per-app auto-update opt-in survives a settings round-trip", () => {
   // And it is strict too.
   assert.equal(normalizeSettings({ serviceOverrides: { radarr: { autoUpdate: "true" } } }).serviceOverrides.radarr.autoUpdate, false);
 });
+
+test("an override keeps the specific address an adopted port is bound to", async () => {
+  const { normalizeSettings } = await import("../src/lib/store.js");
+  const settings = normalizeSettings({ serviceOverrides: { radarr: { port: 8080, hostIp: "192.168.1.10" }, sonarr: { port: 8989 } } });
+
+  assert.equal(settings.serviceOverrides.radarr.hostIp, "192.168.1.10");
+  assert.equal("hostIp" in settings.serviceOverrides.sonarr, false);
+});

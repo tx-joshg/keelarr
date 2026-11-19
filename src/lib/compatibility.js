@@ -79,7 +79,9 @@ export function resolvePorts(selectedServiceIds = [], serviceOverrides = {}) {
     .map((id) => ({
       serviceId: id,
       name: SERVICE_CATALOG[id].name,
-      port: Number(serviceOverrides?.[id]?.port || SERVICE_CATALOG[id].defaultPort)
+      port: Number(serviceOverrides?.[id]?.port || SERVICE_CATALOG[id].defaultPort),
+      // Null means every address, which is what a catalog stack publishes.
+      hostIp: serviceOverrides?.[id]?.hostIp || null
     }));
 }
 
@@ -105,8 +107,15 @@ const RULES = [
         byPort.set(entry.port, [...(byPort.get(entry.port) || []), entry]);
       }
 
+      // Two bindings of one port share a socket unless both name a specific,
+      // different address — an adopted Radarr on 192.168.1.10:8080 and Sonarr
+      // on 192.168.1.11:8080 coexist. Any wildcard binding claims the port on
+      // every address, so it collides with everything else on that port.
+      const clash = (entries) => entries.some((a, i) => entries.some((b, j) =>
+        i < j && (!a.hostIp || !b.hostIp || a.hostIp === b.hostIp)));
+
       return [...byPort.entries()]
-        .filter(([, entries]) => entries.length > 1)
+        .filter(([, entries]) => entries.length > 1 && clash(entries))
         .map(([port, entries]) => ({
           subjects: entries.map((entry) => entry.serviceId),
           summary: `${entries.map((entry) => entry.name).join(" and ")} are both set to port ${port}.`,

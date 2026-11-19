@@ -190,9 +190,9 @@ test("an unknown service id is ignored rather than crashing the evaluation", () 
 test("ports come from the override when there is one", () => {
   assert.deepEqual(
     resolvePorts(["radarr"], { radarr: { port: 17878 } }),
-    [{ serviceId: "radarr", name: "Radarr", port: 17878 }]
+    [{ serviceId: "radarr", name: "Radarr", port: 17878, hostIp: null }]
   );
-  assert.deepEqual(resolvePorts(["radarr"]), [{ serviceId: "radarr", name: "Radarr", port: 7878 }]);
+  assert.deepEqual(resolvePorts(["radarr"]), [{ serviceId: "radarr", name: "Radarr", port: 7878, hostIp: null }]);
 });
 
 test("media server detection ignores the tag and the registry", () => {
@@ -220,4 +220,28 @@ test("the refusal names the apps and what will happen", () => {
 
 test("nothing blocked summarizes to nothing", () => {
   assert.equal(summarizeBlocked([]), "");
+});
+
+test("one port bound to two different specific addresses is not a collision", () => {
+  const result = evaluateCompatibility({
+    selectedServiceIds: ["radarr", "sonarr"],
+    serviceOverrides: {
+      radarr: { port: 8080, hostIp: "192.168.1.10" },
+      sonarr: { port: 8080, hostIp: "192.168.1.11" }
+    }
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test("a wildcard binding still collides with an address-specific one on the same port", () => {
+  const result = evaluateCompatibility({
+    selectedServiceIds: ["radarr", "sonarr"],
+    serviceOverrides: {
+      radarr: { port: 8080 },
+      sonarr: { port: 8080, hostIp: "192.168.1.11" }
+    }
+  });
+
+  assert.equal(result.ok, false);
 });

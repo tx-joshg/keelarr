@@ -234,15 +234,26 @@ export async function inspectContainers(settings, containerNames, options = {}) 
       const container = (pod?.spec?.containers || [])[0] || {};
       const status = (pod?.status?.containerStatuses || [])[0] || {};
       const port = container.ports?.[0]?.containerPort || null;
-      const running = pod?.status?.phase === "Running";
+      // The container's own state, not the pod's phase: a pod in
+      // CrashLoopBackOff stays phase Running while its container sits in
+      // `waiting`, and reading the phase reported a crashing app as up.
+      const containerState = status.state || {};
+      const running = pod?.status?.phase === "Running" && Boolean(containerState.running);
+      const stateLabel = running
+        ? "running"
+        : containerState.waiting
+          ? (containerState.waiting.reason === "CrashLoopBackOff" ? "restarting" : "created")
+          : containerState.terminated
+            ? "exited"
+            : String(pod?.status?.phase || "unknown").toLowerCase();
 
       return {
         serviceId,
         Name: `/${serviceId}`,
         State: {
           Running: running,
-          Status: running ? "running" : String(pod?.status?.phase || "unknown").toLowerCase(),
-          StartedAt: status.state?.running?.startedAt || pod?.status?.startTime || null,
+          Status: stateLabel,
+          StartedAt: running ? containerState.running.startedAt || pod?.status?.startTime || null : null,
           // The readiness probe is the cluster's health check, so a running
           // container that is not yet ready is "starting", exactly as Docker
           // reports one whose healthcheck has not passed.

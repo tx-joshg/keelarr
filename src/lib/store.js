@@ -174,6 +174,9 @@ function sanitizeServiceOverrides(value) {
       mode: typeof item.mode === "string" ? item.mode : null,
       image: typeof item.image === "string" ? item.image : null,
       port: Number.isFinite(Number(item.port)) ? Number(item.port) : null,
+      // Only an adopted container bound to one specific address has this. Kept
+      // out of every other override so their shape does not change.
+      ...(typeof item.hostIp === "string" && item.hostIp ? { hostIp: item.hostIp } : {}),
       containerName: typeof item.containerName === "string" ? item.containerName : null,
       restartPolicy: typeof item.restartPolicy === "string" ? item.restartPolicy : null,
       networkMode: typeof item.networkMode === "string" ? item.networkMode : null,

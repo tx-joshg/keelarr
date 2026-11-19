@@ -10,6 +10,14 @@ import { appendActivity, loadSettings, normalizeSettings, saveSettings } from ".
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 
+const WILDCARD_HOST_IPS = new Set(["", "0.0.0.0", "::"]);
+
+function specificHostIp(item) {
+  const bound = (item?.ports || []).find((port) => port?.hostPort);
+  const hostIp = String(bound?.hostIp || "");
+  return WILDCARD_HOST_IPS.has(hostIp) ? null : hostIp;
+}
+
 export class ImportService {
   constructor({
     appendActivityImpl = appendActivity,
@@ -110,6 +118,10 @@ export class ImportService {
       mode: "imported-draft",
       image: preview.target.image,
       port: preview.target.port,
+      // The address the port is bound to, when it is a specific one. Two
+      // adopted apps may legitimately publish the same port on different
+      // addresses, and the collision rule needs this to tell them apart.
+      ...(specificHostIp(item) ? { hostIp: specificHostIp(item) } : {}),
       containerName: preview.target.containerName,
       restartPolicy: preview.target.restartPolicy,
       networkMode: preview.target.networkMode,

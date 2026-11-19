@@ -2796,12 +2796,22 @@ async function openWizard() {
 
   try {
     const view = await request("/api/setup/wizard");
+    // A running app that adoption refuses cannot be selected: installing it
+    // from the catalog would generate a stack over the very container the
+    // picker says it cannot take over. On a fresh install the defaults are
+    // pre-selected, so those have to be taken out rather than left ticked.
+    const refused = new Set((view.catalog || [])
+      .filter((row) => row.action === "adopt" && row.existing && !row.existing.adoptable)
+      .map((row) => row.id));
+    const initialSelection = (view.selectedServiceIds || []).filter((id) => !refused.has(id));
     ui.wizard = {
       open: true,
       loading: false,
       error: null,
       view,
-      selection: new Set(view.selectedServiceIds || []),
+      selection: new Set(initialSelection),
+      revision: 0,
+      compatibilityPending: false,
       // Conflicts are acknowledged per finding rather than all at once, so
       // agreeing to one does not quietly agree to another.
       acknowledged: new Set(),
@@ -2813,6 +2823,12 @@ async function openWizard() {
   }
 
   render();
+
+  // The view's compatibility was judged on the saved selection; if refused
+  // apps were taken out of it, judge the selection actually shown.
+  if (ui.wizard?.view && ui.wizard.selection.size !== (ui.wizard.view.selectedServiceIds || []).length) {
+    refreshWizardCompatibility().catch(showError);
+  }
 }
 
 function closeWizard() {
@@ -2839,6 +2855,14 @@ async function refreshWizardCompatibility() {
   }
 
   const selected = [...dialog.selection];
+  // Each refresh is numbered, and only the newest may land. Two quick toggles
+  // can answer out of order, and an older conflict-free answer arriving last
+  // would let Save through without the acknowledgement the current selection
+  // needs. Submission stays off until the newest answer is in.
+  const revision = (dialog.revision || 0) + 1;
+  dialog.revision = revision;
+  dialog.compatibilityPending = true;
+  render();
   const overrides = Object.fromEntries(
     dialog.view.catalog
       .filter((entry) => entry.port !== entry.defaultPort)
@@ -2846,7 +2870,7 @@ async function refreshWizardCompatibility() {
   );
 
   try {
-    dialog.compatibility = await request("/api/catalog/compatibility", {
+    const compatibility = await request("/api/catalog/compatibility", {
       method: "POST",
       body: JSON.stringify({
         selectedServiceIds: selected,
@@ -2863,12 +2887,25 @@ async function refreshWizardCompatibility() {
         ]
       })
     });
+
+    if (dialog.revision !== revision) {
+      return;
+    }
+
+    dialog.compatibility = compatibility;
+    dialog.compatibilityPending = false;
     // An acknowledgement belongs to the finding it was given for. Dropping the
     // ones that no longer apply stops a stale tick carrying over to a different
     // conflict the operator has not seen.
     const live = new Set((dialog.compatibility.conflicts || []).map((finding) => finding.id));
     dialog.acknowledged = new Set([...dialog.acknowledged].filter((id) => live.has(id)));
   } catch (error) {
+    if (dialog.revision !== revision) {
+      return;
+    }
+
+    // Left pending on purpose: a selection whose compatibility could not be
+    // judged is not one to submit. The next toggle asks again.
     dialog.error = error.message;
   }
 
@@ -2886,7 +2923,8 @@ function toggleWizardApp(id, wanted) {
   // An app already running that adoption has refused cannot be managed yet.
   // Offering the box and failing on submit would be a promise this screen is
   // not in a position to make.
-  if (row.action === "adopt" && row.existing && !row.existing.adoptable) {
+  // Taking one out is always allowed — leaving it ticked is the harm.
+  if (wanted && row.action === "adopt" && row.existing && !row.existing.adoptable) {
     return;
   }
 
@@ -2925,7 +2963,7 @@ function toggleWizardAcknowledgement(id, wanted) {
 function wizardCanSubmit() {
   const dialog = ui.wizard;
 
-  if (!dialog?.view || dialog.submitting) {
+  if (!dialog?.view || dialog.submitting || dialog.compatibilityPending) {
     return false;
   }
 
@@ -2964,7 +3002,12 @@ async function submitWizard() {
     const adoptionIds = new Set(adoptions.map((row) => row.id));
     // Everything except the adoptions, which add themselves to the selection as
     // a side effect of being adopted.
-    const installSelection = [...dialog.selection].filter((id) => !adoptionIds.has(id));
+    // Refused adoptions are excluded as well: generating a catalog stack for
+    // a container the picker could not adopt would install over it.
+    const installSelection = [...dialog.selection].filter((id) => {
+      const row = wizardRow(id);
+      return !adoptionIds.has(id) && !(row?.action === "adopt" && row.existing && !row.existing.adoptable);
+    });
 
     await request("/api/setup", {
       method: "POST",

@@ -658,3 +658,26 @@ test("an app deployed on Kubernetes counts as deployed for upgrades and update c
   // compose-editing pin and rollback paths away from a cluster app.
   assert.equal(await stack.serviceIsDeployed(service), false);
 });
+
+test("a crash-looping pod reads as restarting, not as a running app that is starting", async () => {
+  const { settings } = await kubeHarness({
+    pods: {
+      items: [{
+        metadata: { labels: { "app.kubernetes.io/name": "radarr", "app.kubernetes.io/managed-by": "keelarr" } },
+        spec: { containers: [{ image: "x", ports: [], env: [], volumeMounts: [] }] },
+        status: {
+          phase: "Running",
+          startTime: "2026-11-01T00:00:00Z",
+          containerStatuses: [{ ready: false, restartCount: 14, state: { waiting: { reason: "CrashLoopBackOff" } } }]
+        }
+      }]
+    }
+  });
+  const [inspect] = await kubeRuntime.inspectContainers(settings, ["radarr"]);
+
+  assert.equal(inspect.State.Running, false);
+  assert.equal(inspect.State.Status, "restarting");
+  assert.equal(inspect.State.Health, null);
+  assert.equal(inspect.State.StartedAt, null);
+  assert.equal(inspect.RestartCount, 14);
+});

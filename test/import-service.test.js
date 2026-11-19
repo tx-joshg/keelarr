@@ -136,3 +136,39 @@ test("adopting a container whose real port collides with a selected app is refus
   await assert.rejects(() => service.adoptImportAsDraft("sonarr1"), /port 7878/);
   assert.deepEqual(writes, []);
 });
+
+test("an adoption records the specific address its port is bound to", async () => {
+  const saved = [];
+  const item = {
+    containerId: "r1", containerName: "radarr", image: "lscr.io/linuxserver/radarr:latest",
+    serviceId: "radarr", serviceName: "Radarr", adoptable: true, recognized: true, mounts: [], envKeys: [],
+    ports: [{ hostIp: "192.168.1.10", hostPort: "8080", containerPort: "7878" }]
+  };
+  const service = new ImportService({
+    appendActivityImpl: async () => [],
+    buildImportPreviewImpl: async () => ({
+      supported: true,
+      adoptable: true,
+      target: { serviceId: "radarr", image: item.image, port: 8080, containerName: "radarr", stackDir: "/srv/stacks/radarr" },
+      draft: { envKeys: [] }
+    }),
+    buildImportReviewArtifactsImpl: () => ({ summary: {}, markdown: "" }),
+    buildImportDraftArtifactsImpl: () => ({}),
+    loadSettingsImpl: async () => ({
+      initialized: true,
+      selectedServiceIds: ["sonarr"],
+      serviceOverrides: { sonarr: { mode: "imported-draft", port: 8080, hostIp: "192.168.1.11" } },
+      services: {}
+    }),
+    normalizeSettingsImpl: (input) => input,
+    saveSettingsImpl: async (input) => {
+      saved.push(input);
+      return input;
+    },
+    scanDockerInventoryImpl: async () => ({ items: [item] }),
+    writeDraftFilesImpl: async () => ({})
+  });
+
+  await service.adoptImportAsDraft("r1");
+  assert.equal(saved.at(-1).serviceOverrides.radarr.hostIp, "192.168.1.10");
+});
