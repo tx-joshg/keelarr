@@ -460,3 +460,66 @@ test("buildDashboardState reports when a container started and when it was last 
   assert.equal(stopped.services[0].startedAt, null);
   assert.equal(stopped.services[0].lastUpgradedAt, "2026-09-01T03:04:05.000Z");
 });
+
+test("on Kubernetes the dashboard reads deployed pods rather than docker ps", async () => {
+  const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const { manifestPathFor } = await import("../src/lib/runtimes/index.js");
+  const dir = await mkdtemp(path.join(tmpdir(), "keelarr-kube-status-"));
+  const service = {
+    id: "radarr",
+    name: "Radarr",
+    image: "lscr.io/linuxserver/radarr:latest",
+    containerName: "radarr",
+    stackDir: path.join(dir, "radarr"),
+    composePath: path.join(dir, "radarr", "compose.yml"),
+    envPath: path.join(dir, "radarr", ".env"),
+    appUrl: "http://localhost:7878",
+    port: 7878,
+    managedMode: "catalog",
+    volumes: ["config", "media"]
+  };
+  await mkdir(path.dirname(manifestPathFor(service)), { recursive: true });
+  await writeFile(manifestPathFor(service), "kind: Deployment\n");
+
+  const state = await buildDashboardState({
+    initialized: true,
+    runtime: "kube",
+    selectedServiceIds: ["radarr"],
+    services: { radarr: service },
+    downloadsRoot: "/media/downloads",
+    mediaRoot: "/media",
+    plexLogsRoot: "",
+    hostUrl: "http://localhost"
+  }, {
+    readActivityImpl: async () => [],
+    readUpdateStateImpl: async () => ({ radarr: { status: "unknown" } }),
+    scanDockerInventoryImpl: async () => {
+      throw new Error("docker ps has nothing to say about a cluster");
+    },
+    inspectContainersImpl: async (settings, names) => names.includes("radarr")
+      ? [{
+          serviceId: "radarr",
+          Name: "/radarr",
+          State: { Running: true, Status: "running", StartedAt: "2026-11-18T12:00:00Z", Health: { Status: "healthy" } },
+          RestartCount: 1,
+          HostConfig: { NetworkMode: "keelarr", RestartPolicy: { Name: "unless-stopped" } },
+          Config: { Image: "lscr.io/linuxserver/radarr:5.1", Labels: {} },
+          NetworkSettings: { Networks: { keelarr: { IPAddress: "", Aliases: ["radarr"] } } }
+        }]
+      : [],
+    inspectNetworkDriversImpl: async (settings, names) => new Map(names.map((name) => [name, "bridge"])),
+    probeServiceImpl: async () => ({ reachable: true, latencyMs: 3, httpStatus: 200, error: null })
+  });
+
+  const [radarr] = state.services;
+  assert.equal(radarr.generated, true);
+  assert.equal(radarr.runtimeSource, "compose");
+  assert.equal(radarr.managementState, "managed");
+  assert.equal(radarr.runtimeStatus, "running");
+  assert.equal(radarr.healthStatus, "healthy");
+  assert.equal(radarr.observedImage, "lscr.io/linuxserver/radarr:5.1");
+  assert.equal(radarr.startedAt, "2026-11-18T12:00:00Z");
+  assert.equal(radarr.updateStatus, "unknown");
+});

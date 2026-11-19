@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 
-import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
+import { readComposeImage, setComposeImage } from "../generator.js";
 import {
   backupService,
   composeDown,
@@ -12,8 +12,12 @@ import {
   readConfigMountSource,
   readContainerImageIdByName,
   restartService,
-  restoreConfigSnapshot
-} from "../runtime.js";
+  restoreConfigSnapshot,
+  RUNTIME_KIND,
+  manifestPathFor,
+  runtimeKindFor,
+  writeStacks
+} from "../runtimes/index.js";
 import { SHARED_NETWORK, getServiceDefinition, isImportedMode } from "../service-catalog.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
 import { JobRegistry } from "../jobs.js";
@@ -23,7 +27,7 @@ import {
   installService,
   upgradeAllServices,
   upgradeService
-} from "../runtime.js";
+} from "../runtimes/index.js";
 import {
   appendActivity,
   loadSettings,
@@ -507,7 +511,7 @@ export class ManagedStackService {
       // First, because a stale "ready" from before the stack was removed
       // would otherwise put it in the plan. The check above skipped it
       // without writing a status, so the run asks the same question.
-      if (!(await this.serviceIsDeployed(service))) {
+      if (!(await this.serviceIsDeployed(service, settings))) {
         ctx.skip(service.id, "Not deployed by Keelarr, not touched.");
         skipped += 1;
         continue;
@@ -948,10 +952,23 @@ export class ManagedStackService {
     }
   }
 
-  /** A stack is deployable only once its compose file exists on disk. */
-  async serviceIsDeployed(service) {
+  /**
+   * A stack is deployable only once its generated file exists on disk: the
+   * compose file on Docker, the manifest on Kubernetes.
+   *
+   * `settings` is optional on purpose. Without it this asks the Compose
+   * question, which is what the pin-clearing and rollback paths want — both
+   * edit compose.yml, and on Kubernetes there is none to edit, so "not
+   * deployed" keeps them away. Upgrade and the update checks pass settings,
+   * because those must reach a deployed app on either runtime.
+   */
+  async serviceIsDeployed(service, settings = null) {
+    const generated = settings && runtimeKindFor(settings) === RUNTIME_KIND.KUBE
+      ? manifestPathFor(service)
+      : service.composePath;
+
     try {
-      await access(service.composePath);
+      await access(generated);
       return true;
     } catch {
       return false;
@@ -999,7 +1016,12 @@ export class ManagedStackService {
     // deployments when it was one deployment and eight no-ops — which is how
     // an operator comes to distrust the feed, or to fear a button that is
     // safer than it looks.
-    const unchanged = result.ok && !/Recreated|Created|Started/.test(`${result.stdout}\n${result.stderr}`);
+    // A runtime that knows can say so with `changed`; the Kubernetes runtime
+    // does, because `oc apply` reports "created"/"configured"/"unchanged" in
+    // its own words. Docker's Compose output is read as before.
+    const unchanged = result.ok && (typeof result.changed === "boolean"
+      ? !result.changed
+      : !/Recreated|Created|Started/.test(`${result.stdout}\n${result.stderr}`));
 
     await this.appendActivity({
       kind: "deploy",
@@ -1091,7 +1113,13 @@ export class ManagedStackService {
     // from the catalog without visiting Settings.
     const settings = await this.ensureSelected(serviceId, context);
     const service = this.requireService(settings, serviceId);
-    await this.writeStacks(settings, [service.id]);
+    const written = await this.writeStacks(settings, [service.id]);
+
+    for (const entry of written || []) {
+      if (entry.configDir?.warning) {
+        this.scopedLogger(context).warn("service.config_dir_ownership", { serviceId: entry.serviceId, message: entry.configDir.warning });
+      }
+    }
     // backup: an install may be replacing an existing container, so capture
     // the rollback point first.
     const result = await this.deployOne(settings, service, this.scopedLogger(context), { backup: true });
@@ -1218,7 +1246,7 @@ export class ManagedStackService {
     // the difference between waiting and wondering.
     const phase = (label) => onPhase?.(label);
 
-    if (!(await this.serviceIsDeployed(service))) {
+    if (!(await this.serviceIsDeployed(service, settings))) {
       return { serviceId: service.id, ok: true, skipped: true, reason: "not-deployed" };
     }
 
@@ -1749,7 +1777,7 @@ export class ManagedStackService {
 
       // A service that was never deployed has no compose file to pull against.
       // Reporting that as a failure makes a healthy stack look broken.
-      if (!(await this.serviceIsDeployed(service))) {
+      if (!(await this.serviceIsDeployed(service, settings))) {
         results.push({
           serviceId: service.id,
           ok: true,

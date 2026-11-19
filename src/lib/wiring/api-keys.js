@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { readContainerFile } from "../runtime.js";
+import { readContainerFile } from "../runtimes/index.js";
 
 /**
  * Where each app keeps its API key. Ombi and Tautulli are absent on purpose:
@@ -14,7 +14,9 @@ const KEY_SOURCES = {
   lidarr: { path: "/config/config.xml", format: "arr" },
   prowlarr: { path: "/config/config.xml", format: "arr" },
   sabnzbd: { path: "/config/sabnzbd.ini", format: "sabnzbd" },
-  bazarr: { path: "/config/config/config.yaml", format: "bazarr" }
+  bazarr: { path: "/config/config/config.yaml", format: "bazarr" },
+  // Seerr's config directory is /app/config, not /config — see the catalog entry.
+  seerr: { path: "/app/config/settings.json", format: "seerr" }
 };
 
 export function hasReadableApiKey(serviceId) {
@@ -111,6 +113,37 @@ export function parseBazarrApiKey(text) {
   return null;
 }
 
+
+/**
+ * Seerr's own key, from the `main` block of its settings document.
+ *
+ * Parsed as JSON rather than pattern-matched, because unlike every other key
+ * here it is **not** a 32-character hex string: Seerr generates base64 of a
+ * timestamp and a UUID, so it is longer, mixed-case, and can end in `=`. A
+ * hex-shaped regex of the kind used for the Arr apps finds nothing in it.
+ *
+ * The same file holds the `apiKey` of every Radarr and Sonarr server Seerr talks
+ * to, so the read is scoped to `main` for the same reason Bazarr's is scoped to
+ * its `auth:` block: a search by field name would return whichever came first.
+ */
+export function parseSeerrApiKey(text) {
+  let document;
+
+  try {
+    document = JSON.parse(String(text || ""));
+  } catch {
+    // Seerr writes this file on a timer and truncates it in place, so a
+    // half-written document is a real state rather than corruption. Returning
+    // null reports it as pending, which is the honest answer and resolves on the
+    // next read.
+    return null;
+  }
+
+  const key = document?.main?.apiKey;
+
+  return typeof key === "string" && key.trim() ? key.trim() : null;
+}
+
 /**
  * A short, non-reversible label for a key.
  *
@@ -165,11 +198,8 @@ export async function readApiKey(settings, service, options = {}) {
   }
 
   const parsed = source.format === "sabnzbd" ? parseSabnzbdConfig(text) : null;
-  const key = parsed
-    ? parsed.apiKey
-    : source.format === "bazarr"
-      ? parseBazarrApiKey(text)
-      : parseArrApiKey(text);
+  const PARSERS = { bazarr: parseBazarrApiKey, seerr: parseSeerrApiKey, arr: parseArrApiKey };
+  const key = parsed ? parsed.apiKey : (PARSERS[source.format] || parseArrApiKey)(text);
 
   if (!key) {
     return {

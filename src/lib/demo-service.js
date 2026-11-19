@@ -6,6 +6,8 @@ import {
 import { APP_NAME, APP_VERSION } from "./app-meta.js";
 import { normalizeSettings } from "./store.js";
 import { listServices } from "./service-catalog.js";
+import { buildWizardView } from "./setup-wizard.js";
+import { evaluateCompatibility } from "./compatibility.js";
 import { KeelarrError } from "./errors.js";
 import { JobRegistry, buildJobSnapshot } from "./jobs.js";
 import { CUTOVER_STEPS, REVERT_STEPS, rollbackNameFor } from "./app-services/cutover-service.js";
@@ -661,6 +663,21 @@ export class DemoKeelarrAppService {
 
   async browseDirectories(inputPath = "/") {
     return browseDemoDirectories(inputPath);
+  }
+
+  async prepareWizard() {
+    return buildWizardView({
+      settings: normalizeSettings(this.demo.settings),
+      inventory: await this.scanImportInventory()
+    });
+  }
+
+  async describeCompatibility(input = {}) {
+    return evaluateCompatibility({
+      selectedServiceIds: Array.isArray(input.selectedServiceIds) ? input.selectedServiceIds : [],
+      serviceOverrides: input.serviceOverrides && typeof input.serviceOverrides === "object" ? input.serviceOverrides : {},
+      discovered: Array.isArray(input.discovered) ? input.discovered : []
+    });
   }
 
   async previewImport(containerId) {

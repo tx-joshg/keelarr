@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 
 import { scanDockerInventory } from "./import-scanner.js";
 import { readActivity, readUpdateState } from "./store.js";
-import { composePs, inspectContainers } from "./runtime.js";
+import { RUNTIME_KIND, browserUrlFor, composePs, inspectContainers, manifestPathFor, runtimeKindFor } from "./runtimes/index.js";
 import { probeAppUrl } from "./health.js";
 import {
   LAN_CLIENT,
@@ -297,6 +297,57 @@ async function loadTopology(settings, items, { inspectContainersImpl, inspectNet
   return { controller, drivers, hostAddress: hostAddressFrom(settings) };
 }
 
+/**
+ * The dashboard's inventory on the Kubernetes runtime.
+ *
+ * `scanDockerInventory` reads `docker ps`, which on a cluster sees nothing —
+ * every deployed pod reported as absent. The runtime already translates pods
+ * into the `docker inspect` shape, so this turns those into the same inventory
+ * items the Docker scan produces, and everything downstream reads them as it
+ * always has.
+ *
+ * Every pod here carries Keelarr's managed-by label, so `managed` is true by
+ * construction: there is no adoption on this runtime, and nothing in the
+ * namespace that Keelarr did not apply.
+ */
+export async function scanKubeInventory(settings, { inspectContainersImpl = inspectContainers } = {}) {
+  const names = (settings.selectedServiceIds || [])
+    .map((id) => settings.services?.[id]?.id)
+    .filter(Boolean);
+  const inspects = await inspectContainersImpl(settings, names);
+
+  return {
+    items: (inspects || []).map((inspect) => ({
+      containerId: null,
+      containerName: inspect.serviceId,
+      image: inspect.Config?.Image || "",
+      imageId: null,
+      appVersion: null,
+      compose: null,
+      managed: true,
+      recognized: true,
+      serviceId: inspect.serviceId,
+      serviceName: getServiceDefinition(inspect.serviceId)?.name || inspect.serviceId,
+      matchedBy: "label",
+      status: inspect.State?.Status || "unknown",
+      healthStatus: inspect.State?.Health?.Status || null,
+      startedAt: inspect.State?.StartedAt || null,
+      restartCount: Number(inspect.RestartCount || 0),
+      restartPolicy: inspect.HostConfig?.RestartPolicy?.Name || null,
+      networkMode: inspect.HostConfig?.NetworkMode || "default",
+      networks: Object.entries(inspect.NetworkSettings?.Networks || {}).map(([name, network]) => ({
+        name,
+        address: network?.IPAddress || null
+      })),
+      ports: [],
+      mounts: [],
+      resourceUsage: null,
+      issues: [],
+      adoptable: false
+    }))
+  };
+}
+
 export async function buildDashboardState(settings, dependencies = {}) {
   const {
     composePsImpl = composePs,
@@ -308,14 +359,15 @@ export async function buildDashboardState(settings, dependencies = {}) {
     scanDockerInventoryImpl = scanDockerInventory
   } = dependencies;
 
+  const onKube = runtimeKindFor(settings) === RUNTIME_KIND.KUBE;
   const [activity, updateState, inventory] = await Promise.all([
     readActivityImpl(),
     readUpdateStateImpl(),
-    settings.initialized === true
-      ? scanDockerInventoryImpl(settings)
-      : Promise.resolve({
-          items: []
-        })
+    settings.initialized !== true
+      ? Promise.resolve({ items: [] })
+      : onKube
+        ? scanKubeInventory(settings, { inspectContainersImpl })
+        : scanDockerInventoryImpl(settings)
   ]);
   const shouldProbe = settings.initialized === true;
 
@@ -343,11 +395,19 @@ export async function buildDashboardState(settings, dependencies = {}) {
     const fromController = resolveLink(controller, endpoint, { hostAddress });
     const fromBrowser = resolveLink(LAN_CLIENT, endpoint, { hostAddress });
     const probeUrl = fromController.ok ? fromController.baseUrl : null;
-    const appUrl = fromBrowser.ok ? fromBrowser.baseUrl : service.appUrl;
+    // On Kubernetes the browser's way in is the Route or Ingress, never a
+    // published port; with no domain configured nothing is exposed, and the
+    // catalog's host:port is still the most honest placeholder there is.
+    const appUrl = onKube
+      ? browserUrlFor(settings, service) || service.appUrl
+      : fromBrowser.ok ? fromBrowser.baseUrl : service.appUrl;
 
     const [composeExists, envExists, probe] = await Promise.all([
-      fileExists(service.composePath),
-      fileExists(service.envPath),
+      // On Kubernetes the generated artifact is the manifest; there is no
+      // Compose file or .env, and looking for them would call every service
+      // "not generated".
+      fileExists(onKube ? manifestPathFor(service) : service.composePath),
+      onKube ? Promise.resolve(true) : fileExists(service.envPath),
       shouldProbe && shouldProbeService(settings, service, inventoryItem, probeUrl)
         ? probeServiceImpl({ ...service, appUrl: probeUrl })
         : Promise.resolve({
@@ -360,7 +420,12 @@ export async function buildDashboardState(settings, dependencies = {}) {
     ]);
     const generated = composeExists && envExists;
 
-    const composeManaged = generated && isComposeManagedBy(inventoryItem, service);
+    // `compose` here means "running under Keelarr's runtime" — the value the
+    // dashboard and update status already key on. A pod is Keelarr's by its
+    // label, which is what `managed` records.
+    const composeManaged = onKube
+      ? inventoryItem?.managed === true
+      : generated && isComposeManagedBy(inventoryItem, service);
     const composeStatus = { ok: true, data: [] };
     const runtime = null;
     const runtimeSource = composeManaged

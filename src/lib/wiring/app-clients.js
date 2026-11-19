@@ -399,3 +399,119 @@ export const arrApi = {
   createRootFolder: (serviceId, base, key, body) =>
     arrRequest(base, key, { method: "POST", path: api(serviceId, "rootfolder"), body, timeoutMs: 25_000 })
 };
+
+/**
+ * Seerr's API, which is settings-shaped like Bazarr's but collection-shaped
+ * underneath: one array of server entries per kind, patched as a whole.
+ *
+ * The header is `X-API-Key`, and the key is base64 rather than hex — see
+ * `parseSeerrApiKey`. Errors come back as `{ message }` rather than the Arr
+ * apps' array of per-field complaints, so the message is the useful part.
+ */
+async function seerrRequest(baseUrl, apiKey, path, { method = "GET", body = null, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  try {
+    const response = await fetch(`${String(baseUrl).replace(/\/+$/, "")}${path}`, {
+      method,
+      headers: {
+        "X-API-Key": apiKey,
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {})
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    const text = await response.text();
+    let payload = null;
+
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        return { ok: false, status: response.status, data: null, error: "Seerr rejected the API key." };
+      }
+
+      // Its own sentence where it has one. Seerr answers a failed connection
+      // test with 500 and "Failed to connect to Radarr", which says more than
+      // the status does — though not which part failed, so callers should not
+      // present it as a diagnosis.
+      return {
+        ok: false,
+        status: response.status,
+        data: null,
+        error: payload?.message || `Seerr answered ${response.status}.`
+      };
+    }
+
+    return { ok: true, status: response.status, data: payload, error: null };
+  } catch (error) {
+    const reason = error.name === "TimeoutError" ? `No answer within ${timeoutMs / 1000}s.` : error.message;
+    return { ok: false, status: null, data: null, error: reason };
+  }
+}
+
+/** Seerr calls Radarr and Sonarr servers its "DVR" settings; both share one shape. */
+const SEERR_DVR_KINDS = Object.freeze({ radarr: "radarr", sonarr: "sonarr" });
+
+export function seerrDvrKind(serviceId) {
+  return SEERR_DVR_KINDS[serviceId] || null;
+}
+
+/**
+ * Whether Seerr has finished its setup wizard.
+ *
+ * Unauthenticated on purpose — this is the endpoint Seerr's own container
+ * healthcheck uses, so it answers before an API key exists. That matters
+ * because a freshly installed Seerr has no key to read, and the difference
+ * between "not reachable" and "reachable but nobody has run the wizard" is the
+ * difference between a fault and a chore only the operator can do.
+ */
+export async function probeSeerr(baseUrl, { timeoutMs = 8_000, fetchImpl = fetch } = {}) {
+  try {
+    const response = await fetchImpl(`${String(baseUrl).replace(/\/+$/, "")}/api/v1/settings/public`, {
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    if (!response.ok) {
+      return { reachable: false, initialized: null, error: `Seerr answered ${response.status}.` };
+    }
+
+    const payload = await response.json();
+
+    return {
+      reachable: true,
+      initialized: typeof payload?.initialized === "boolean" ? payload.initialized : null,
+      error: null
+    };
+  } catch (error) {
+    const reason = error.name === "TimeoutError" ? `No answer within ${timeoutMs / 1000}s.` : error.message;
+    return { reachable: false, initialized: null, error: reason };
+  }
+}
+
+export const seerrApi = {
+  listServers: async (base, key, kind) => {
+    const result = await seerrRequest(base, key, `/api/v1/settings/${kind}`);
+    return result.ok
+      ? { ok: true, data: Array.isArray(result.data) ? result.data : [], error: null }
+      : result;
+  },
+
+  /**
+   * Tests a candidate server, and returns what Seerr learned while testing.
+   *
+   * This is the one place in the codebase where a test is load-bearing rather
+   * than merely cautious: Seerr will not accept a server without a quality
+   * profile id and a root folder, and the test response is where those come
+   * from. So the write genuinely cannot be built without testing first.
+   */
+  testServer: (base, key, kind, body) =>
+    seerrRequest(base, key, `/api/v1/settings/${kind}/test`, { method: "POST", body, timeoutMs: 45_000 }),
+
+  createServer: (base, key, kind, body) =>
+    seerrRequest(base, key, `/api/v1/settings/${kind}`, { method: "POST", body, timeoutMs: 25_000 })
+};

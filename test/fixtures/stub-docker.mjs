@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * A stand-in for the `docker` binary, used to exercise the real command
- * construction in src/lib/runtime.js without a Docker daemon.
+ * construction in src/lib/runtimes/docker-runtime.js without a Docker daemon.
  *
  * State lives in the JSON file named by STUB_DOCKER_STATE so each spawned
  * invocation sees the mutations made by the previous one, exactly as the real

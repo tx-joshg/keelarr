@@ -1,8 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 
-import { writeStacks } from "../generator.js";
-import { inspectContainers } from "../runtime.js";
+import { adaptValidationForRuntime, inspectContainers, writeStacks } from "../runtimes/index.js";
 import { findUnmountedRoots, renderControllerEnv, resolveControllerEnvPath } from "../host-mounts.js";
 import {
   applyDetectionSuggestions,
@@ -15,6 +14,7 @@ import {
   normalizeSettings,
   saveSettings
 } from "../store.js";
+import { assertSelectionCanRun } from "../compatibility.js";
 import { KeelarrError } from "../errors.js";
 import { defaultLogger } from "../logger.js";
 import { listDirectories } from "../path-browser.js";
@@ -38,6 +38,7 @@ export class HostProfileService {
     normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
     validateHostProfileImpl = validateHostProfile,
+    checkKubeCliImpl = null,
     writeFileImpl = writeFile,
     writeStacksImpl = writeStacks,
     hostDetectionTtlMs = 60_000
@@ -53,6 +54,7 @@ export class HostProfileService {
     this.normalizeSettings = normalizeSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.validateHostProfile = validateHostProfileImpl;
+    this.checkKubeCliImpl = checkKubeCliImpl;
     this.writeFile = writeFileImpl;
     this.writeStacks = writeStacksImpl;
     this.hostDetectionTtlMs = hostDetectionTtlMs;
@@ -187,11 +189,11 @@ export class HostProfileService {
       ...candidateSettings,
       initialized: draftSettings.initialized === true
     });
-    const validation = await this.validateHostProfile(effectiveSettings, {
+    const validation = await adaptValidationForRuntime(effectiveSettings, await this.validateHostProfile(effectiveSettings, {
       logger: logger.child({
         probe: "validate-host"
       })
-    });
+    }), this.checkKubeCliImpl ? { checkKubeCliImpl: this.checkKubeCliImpl } : {});
 
     return {
       ...detection,
@@ -271,6 +273,7 @@ export class HostProfileService {
       });
     }
 
+    assertSelectionCanRun(candidateSettings);
     const settings = await this.saveSettings(candidateSettings);
     const controllerEnv = await this.syncControllerEnv(settings, logger);
     logger.info("host.settings_saved", {
@@ -372,14 +375,23 @@ export class HostProfileService {
   async patchServiceOverride(serviceId, patch) {
     const settings = await this.loadSettings();
     const existing = settings.serviceOverrides?.[serviceId] || {};
-
-    return this.saveSettings({
+    const next = {
       ...settings,
       serviceOverrides: {
         ...(settings.serviceOverrides || {}),
         [serviceId]: { ...existing, ...patch }
       }
-    });
+    };
+
+    // Changing a port is the only way to produce a collision, so it is the one
+    // override worth checking. Deliberately *not* applied to the overrides
+    // cutover writes: those describe a container that already exists, and
+    // refusing to record reality would leave the dashboard lying about the host.
+    if (Object.hasOwn(patch, "port")) {
+      assertSelectionCanRun(next);
+    }
+
+    return this.saveSettings(next);
   }
 
   async readControllerDefinition(settings, logger) {
@@ -444,8 +456,15 @@ export class HostProfileService {
       });
     }
 
+    assertSelectionCanRun(candidateSettings);
     const settings = await this.saveSettings(candidateSettings);
     const generated = await this.writeStacks(settings, settings.selectedServiceIds);
+
+    for (const entry of generated) {
+      if (entry.configDir?.warning) {
+        logger.warn("host.config_dir_ownership", { serviceId: entry.serviceId, message: entry.configDir.warning });
+      }
+    }
 
     logger.info("host.setup_saved", {
       adapterId: settings.adapterType,

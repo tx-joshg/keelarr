@@ -1,6 +1,6 @@
 import { pathExists } from "./host-adapters/shared.js";
 import { runCommand } from "./command-runner.js";
-import { SERVICE_CATALOG } from "./service-catalog.js";
+import { SERVICE_CATALOG, configMountTarget } from "./service-catalog.js";
 
 const EXPECTED_MOUNT_TARGETS = {
   config: "/config",
@@ -227,8 +227,13 @@ export function matchSupportedService(inspect) {
   }
 
   const imageRepository = normalizeImageRepository(inspect.Config?.Image || "");
-  const definition = Object.values(SERVICE_CATALOG).find(
-    (candidate) => normalizeImageRepository(candidate.defaultImage) === imageRepository
+  // `altImages` covers an app the catalog tracks under a name it used to ship
+  // under. Recognising only `defaultImage` reported a plainly-known container as
+  // unsupported purely because the project had been renamed since it was pulled.
+  const definition = Object.values(SERVICE_CATALOG).find((candidate) =>
+    [candidate.defaultImage, ...(candidate.altImages || [])].some(
+      (image) => normalizeImageRepository(image) === imageRepository
+    )
   );
 
   if (!definition) {
@@ -255,7 +260,9 @@ export async function buildAdoptionIssues(serviceMatch, inspect, mounts) {
   }
 
   for (const volumeKey of serviceMatch.definition.volumes || []) {
-    const target = EXPECTED_MOUNT_TARGETS[volumeKey];
+    const target = volumeKey === "config"
+      ? configMountTarget(serviceMatch.serviceId)
+      : EXPECTED_MOUNT_TARGETS[volumeKey];
     const mount = mounts.find((candidate) => candidate.target === target);
     const level = volumeKey === "plex_logs" ? "warn" : "error";
 

@@ -214,3 +214,40 @@ export function reconcileRootFolder(existing = [], { mountPath, expectedPath }) 
     reason: `No root folder is configured inside ${mountPath}. Keelarr would add ${expectedPath}.`
   };
 }
+
+/**
+ * A Seerr Radarr/Sonarr server entry.
+ *
+ * Matched on hostname and port rather than on `name`, for the same reason the
+ * download client is: the name is a free-text field Seerr pre-fills from the
+ * app's own title and the operator is free to change.
+ *
+ * Only non-4K entries are candidates. Seerr keeps 4K servers in the same array
+ * distinguished by `is4k`, and they are a deliberate second configuration
+ * pointing at a *different* Radarr — so comparing against them would call a
+ * correctly-configured pair of servers drift and try to rewrite one.
+ */
+export function reconcileSeerrServer(existing = [], desired) {
+  const candidates = (existing || []).filter((server) => server?.is4k !== true);
+
+  return reconcile({
+    candidates,
+    describe: `${desired.appName} in Seerr`,
+    matches: (server) =>
+      String(server?.hostname) === String(desired.hostname) &&
+      Number(server?.port) === Number(desired.port),
+    describeChanges: (server) => {
+      const changes = [];
+
+      if (String(server?.hostname) !== String(desired.hostname)) {
+        changes.push({ field: "hostname", from: server?.hostname ?? null, to: desired.hostname });
+      }
+
+      if (Number(server?.port) !== Number(desired.port)) {
+        changes.push({ field: "port", from: server?.port ?? null, to: desired.port });
+      }
+
+      return changes;
+    }
+  });
+}

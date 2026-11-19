@@ -12,7 +12,7 @@ import {
   deriveUpdateStatusFromPullResult,
   normalizeComposePsData,
   normalizeImageId
-} from "../src/lib/runtime.js";
+} from "../src/lib/runtimes/index.js";
 
 test("normalizeComposePsData preserves array payloads", () => {
   const payload = [{ Name: "trailarr", State: "running" }];
@@ -110,7 +110,7 @@ test("explainDeployFailure translates Docker's opaque pull errors", () => {
 });
 
 test("config snapshot exclusions match either casing apps use", async () => {
-  const { CONFIG_SNAPSHOT_EXCLUDES } = await import("../src/lib/runtime.js");
+  const { CONFIG_SNAPSHOT_EXCLUDES } = await import("../src/lib/runtimes/index.js");
   const patterns = CONFIG_SNAPSHOT_EXCLUDES.join(" ");
 
   // Trailarr writes `backups` and `logs`; the Arr apps write `Backups` and

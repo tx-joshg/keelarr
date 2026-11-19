@@ -1,4 +1,4 @@
-import { runCommand } from "../command-runner.js";
+import { readNetworkDrivers } from "../runtimes/index.js";
 
 /**
  * How a container is attached to the network, which is what decides the address
@@ -76,6 +76,8 @@ export async function inspectNetworkDrivers(settings, names, options = {}) {
   let fresh = new Map();
 
   try {
+    // Through the runtime port: how a network is backed is a property of the
+    // runtime, and a cluster can answer it without shelling out to anything.
     fresh = await readNetworkDrivers(settings, missing, options);
   } catch {
     // An unreadable driver leaves the network unclassified, which resolves to a
@@ -90,35 +92,6 @@ export async function inspectNetworkDrivers(settings, names, options = {}) {
   return new Map(
     requested.filter((name) => driverCache.has(name)).map((name) => [name, driverCache.get(name)])
   );
-}
-
-async function readNetworkDrivers(settings, names, options = {}) {
-  const unique = [...new Set((names || []).filter(Boolean))];
-  const drivers = new Map();
-
-  if (unique.length === 0) {
-    return drivers;
-  }
-
-  const result = await runCommand(
-    settings.dockerBin,
-    ["network", "inspect", ...unique, "--format", "{{.Name}}|{{.Driver}}"],
-    options
-  );
-
-  if (!result.ok) {
-    return drivers;
-  }
-
-  for (const line of String(result.stdout || "").split("\n")) {
-    const [name, driver] = line.trim().split("|");
-
-    if (name && driver) {
-      drivers.set(name, driver);
-    }
-  }
-
-  return drivers;
 }
 
 function readContainerPort(inspect, fallbackPort) {

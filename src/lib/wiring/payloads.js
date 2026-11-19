@@ -213,3 +213,106 @@ export function describeValidation(payload) {
 
   return messages.length ? [...new Set(messages)].join("; ") : null;
 }
+
+/**
+ * The body Seerr wants for a Radarr or Sonarr server.
+ *
+ * Two of these fields cannot be invented, only discovered: `activeProfileId`
+ * and `activeDirectory`. Seerr rejects a server without them, and the only
+ * place they exist is the response to its own `/test` call — which is why this
+ * takes the test result rather than being buildable from settings alone.
+ *
+ * Choosing *which* profile is a taste decision with real consequences, and
+ * Keelarr does not normally make those. The compromise here is to mirror what
+ * Seerr's own UI does — pre-select the first profile the app reports — and to
+ * return the choice so the caller can state it in the report rather than let it
+ * happen quietly. Changing it afterwards is one dropdown in Seerr.
+ *
+ * `isDefault` is only ever claimed when nothing else holds it. Seerr clears
+ * every other default when it accepts one, so asserting it unconditionally
+ * would silently demote a server the operator had chosen.
+ */
+export function buildSeerrServerPayload(serviceId, {
+  appName,
+  hostname,
+  port,
+  apiKey,
+  useSsl = false,
+  testResult = {},
+  existingServers = [],
+  preferredDirectory = null
+}) {
+  const kind = serviceId === "radarr" ? "radarr" : serviceId === "sonarr" ? "sonarr" : null;
+
+  if (!kind) {
+    throw new KeelarrError(`${serviceId} is not an app Seerr can be pointed at.`, { statusCode: 422 });
+  }
+
+  const profiles = Array.isArray(testResult.profiles) ? testResult.profiles : [];
+  const rootFolders = Array.isArray(testResult.rootFolders) ? testResult.rootFolders : [];
+
+  if (profiles.length === 0 || rootFolders.length === 0) {
+    return {
+      payload: null,
+      chosen: null,
+      // Said as a chore rather than a fault: both are things Keelarr either has
+      // already arranged (the root folder) or cannot decide for you.
+      missing: profiles.length === 0
+        ? `${appName} has no quality profile yet, so Seerr has nothing to request against.`
+        : `${appName} has no root folder yet, so Seerr has nowhere to send what it requests.`
+    };
+  }
+
+  // Prefer the library folder Keelarr itself configured over whatever happens to
+  // be first, so Seerr and the Arr app agree about where media lands.
+  const directory = rootFolders.find((folder) => folder?.path === preferredDirectory)?.path
+    || rootFolders[0].path;
+  const profile = profiles[0];
+  const takesDefault = !existingServers.some((server) => server?.is4k !== true && server?.isDefault === true);
+
+  const common = {
+    name: appName,
+    hostname,
+    port: Number(port),
+    apiKey,
+    useSsl,
+    activeProfileId: profile.id,
+    activeProfileName: profile.name,
+    activeDirectory: directory,
+    tags: [],
+    is4k: false,
+    isDefault: takesDefault,
+    // Seerr pulls the app's existing library so it can show what is already
+    // available rather than offering to request it again.
+    syncEnabled: true,
+    preventSearch: false,
+    tagRequests: false,
+    overrideRule: []
+  };
+
+  const payload = kind === "radarr"
+    ? { ...common, minimumAvailability: "released" }
+    : {
+        ...common,
+        seriesType: "standard",
+        animeSeriesType: "standard",
+        enableSeasonFolders: true,
+        monitorNewItems: "all"
+      };
+
+  return {
+    payload,
+    chosen: { profileName: profile.name, directory, isDefault: takesDefault },
+    missing: null
+  };
+}
+
+/**
+ * The candidate body Seerr's `/test` expects.
+ *
+ * The same shape as a create, minus everything the test does not read. Kept
+ * separate so a test never carries a half-built server Seerr might store.
+ */
+export function buildSeerrTestPayload({ hostname, port, apiKey, useSsl = false }) {
+  return { hostname, port: Number(port), apiKey, useSsl, baseUrl: "" };
+}

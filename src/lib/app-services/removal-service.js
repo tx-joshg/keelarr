@@ -8,7 +8,7 @@ import {
   measurePath,
   readConfigMountSource,
   removeImage
-} from "../runtime.js";
+} from "../runtimes/index.js";
 import { appendActivity, loadSettings, readUpdateState, saveSettings, writeUpdateState } from "../store.js";
 import { JobRegistry } from "../jobs.js";
 import { KeelarrError } from "../errors.js";
