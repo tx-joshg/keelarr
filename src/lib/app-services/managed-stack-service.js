@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 
-import { readComposeImage, setComposeImage, writeStacks } from "../generator.js";
+import { readComposeImage, setComposeImage } from "../generator.js";
 import {
   backupService,
   composeDown,
@@ -12,7 +12,8 @@ import {
   readConfigMountSource,
   readContainerImageIdByName,
   restartService,
-  restoreConfigSnapshot
+  restoreConfigSnapshot,
+  writeStacks
 } from "../runtimes/index.js";
 import { SHARED_NETWORK, getServiceDefinition, isImportedMode } from "../service-catalog.js";
 import { HEALTH_OUTCOME, verifyServiceHealth } from "../health.js";
@@ -999,7 +1000,12 @@ export class ManagedStackService {
     // deployments when it was one deployment and eight no-ops — which is how
     // an operator comes to distrust the feed, or to fear a button that is
     // safer than it looks.
-    const unchanged = result.ok && !/Recreated|Created|Started/.test(`${result.stdout}\n${result.stderr}`);
+    // A runtime that knows can say so with `changed`; the Kubernetes runtime
+    // does, because `oc apply` reports "created"/"configured"/"unchanged" in
+    // its own words. Docker's Compose output is read as before.
+    const unchanged = result.ok && (typeof result.changed === "boolean"
+      ? !result.changed
+      : !/Recreated|Created|Started/.test(`${result.stdout}\n${result.stderr}`));
 
     await this.appendActivity({
       kind: "deploy",

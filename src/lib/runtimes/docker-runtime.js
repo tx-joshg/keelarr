@@ -11,6 +11,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promi
 import path from "node:path";
 import { DEFAULT_IDLE_TIMEOUT_MS, runCommand } from "../command-runner.js";
 import { configMountTarget } from "../service-catalog.js";
+import { writeStacks } from "../generator.js";
 
 function composeArgs(service, ...tail) {
   return [
@@ -1024,5 +1025,6 @@ export const dockerRuntime = {
   checkForUpdates,
   upgradeAllServices,
   readNetworkDrivers,
-  attachController
+  attachController,
+  writeStacks
 };

@@ -45,7 +45,7 @@ if (state.failCommand && rest.join(" ").startsWith(state.failCommand)) {
 }
 
 if (command === "apply") {
-  out("deployment.apps/radarr configured");
+  out(state.applyOutput ?? "deployment.apps/radarr configured");
 }
 
 if (command === "rollout") {

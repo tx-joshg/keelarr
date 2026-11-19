@@ -3342,6 +3342,20 @@ function settingsPayload(options = {}) {
     autoRevert: state.settings.autoRevert === true,
     autoUpdateEnabled: state.settings.autoUpdateEnabled === true,
     autoUpdateTime: autoUpdateSchedule().clock,
+    // The runtime and its cluster fields. Left out, the server merges the saved
+    // values back over this body, so choosing Kubernetes in the form had no
+    // effect at all. Sent on Docker too: they are inert there, and sending them
+    // is what lets someone switch back.
+    runtime: state.settings.runtime,
+    kubeFlavor: state.settings.kubeFlavor,
+    kubeBin: state.settings.kubeBin,
+    kubeNamespace: state.settings.kubeNamespace,
+    kubeMediaClaim: state.settings.kubeMediaClaim,
+    kubeStorageClass: state.settings.kubeStorageClass,
+    kubeConfigSize: state.settings.kubeConfigSize,
+    kubeDomain: state.settings.kubeDomain,
+    kubeIngressClass: state.settings.kubeIngressClass,
+    kubeTlsSecret: state.settings.kubeTlsSecret,
     // Deliberately no serviceOverrides: the server shallow-merges this body over
     // what it has, and a client copy would wipe the keys cutover writes.
     selectedServiceIds: selectedServiceIds(),

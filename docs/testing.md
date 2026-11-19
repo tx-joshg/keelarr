@@ -277,6 +277,25 @@ is unknown.
 | Deploy waits for the rollout | Automated | `apply` then `rollout status`; a failed rollout fails the deploy, however happily `apply` returned |
 | Stopping keeps data | Automated | `composeDown` deletes Deployment, Service and Route but never the claim |
 | Pods read as `docker inspect` | Automated | Translated so status, health and wiring keep one shape |
+| Upgrade replaces the pod | Automated | `apply`, then always `rollout restart`, then `rollout status`; an unchanged tag still gets a new pod, which pulls with `imagePullPolicy: Always` |
+| Dashboard reads the cluster | Automated | Pods become dashboard inventory, so a deployed app shows its state rather than "not deployed" |
+| Save And Generate writes manifests | Automated | On this runtime it writes `okd/manifests.yaml` per service, not Compose files |
+
+### Getting the CLI into the controller
+
+The published image carries the Docker CLI and nothing else. Shipping `oc` and
+`kubectl` to every Docker install would be a large download for a runtime that
+has never run, so the Kubernetes controller is a separate build target:
+
+```bash
+docker build --target kube -t keelarr:kube .
+```
+
+It adds `kubectl` and `oc` (with `gcompat`, since `oc` from the OpenShift
+mirror is linked against glibc). Mounting a binary of your own and setting its
+path in Settings works as well. Without either, every Kubernetes operation
+fails with a message saying the CLI is missing rather than an empty error.
+That build target has not itself been built in CI.
 
 ### What it refuses, on purpose
 

@@ -41,13 +41,35 @@ function ocArgs(settings, ...tail) {
   return ["-n", settings.kubeNamespace, ...tail];
 }
 
-function run(settings, args, options = {}) {
-  return runCommand(settings.kubeBin || "oc", ocArgs(settings, ...args), {
+/**
+ * Said instead of "spawn oc ENOENT" when the CLI is not there.
+ *
+ * The published controller image carries the Docker CLI and nothing else: the
+ * Kubernetes runtime is unproven, and shipping `oc` and `kubectl` to every
+ * Docker install would add a large download for a path almost nobody uses. So
+ * the binary is the operator's to supply — the `kube` build target in the
+ * Dockerfile, or a mounted binary — and a missing one has to say exactly that,
+ * on every operation, rather than surfacing as an empty deploy failure.
+ */
+export function missingCliMessage(bin) {
+  return `The Kubernetes CLI \`${bin}\` is not installed in the controller. The default Keelarr image ships only the Docker CLI; build the \`kube\` target (\`docker build --target kube .\`) or mount a \`${bin}\` binary and set its path in Settings. See docs/testing.md#the-kubernetes-runtime.`;
+}
+
+async function run(settings, args, options = {}) {
+  const bin = settings.kubeBin || "oc";
+  const result = await runCommand(bin, ocArgs(settings, ...args), {
     logger: options.logger,
     timeoutMs: options.timeoutMs,
     idleTimeoutMs: options.idleTimeoutMs,
     sensitive: options.sensitive === true
   });
+
+  if (!result.ok && /ENOENT/.test(String(result.error || result.stderr || ""))) {
+    const message = missingCliMessage(bin);
+    return { ...result, stderr: message, error: message, missingCli: true };
+  }
+
+  return result;
 }
 
 function parseJson(result, fallback) {
@@ -73,12 +95,46 @@ async function writeManifests(settings, service) {
 }
 
 /**
+ * The lifecycle result shape the Docker runtime returns, built from several
+ * `oc` calls.
+ *
+ * Callers read `stdout` and `stderr` — to show an operator why a deploy
+ * failed, and to tell a real deployment from a no-op. Returning a single
+ * `output` instead left every failure with empty details. `output` is kept
+ * alongside for the callers that already read it.
+ */
+function lifecycleResult(ok, results, extra = {}) {
+  const join = (key) => results.map((result) => String(result?.[key] || "").trim()).filter(Boolean).join("\n");
+  const stdout = join("stdout");
+  const stderr = join("stderr");
+
+  return { ok, stdout, stderr, output: `${stdout}\n${stderr}`.trim(), ...extra };
+}
+
+/**
+ * Whether `oc apply` changed anything.
+ *
+ * Compose says "Created"/"Recreated" when it does something and "Running" when
+ * it does not; `apply` says "created" or "configured" per object, and
+ * "unchanged" otherwise. Reported as a boolean so the caller does not have to
+ * know which CLI's vocabulary it is reading.
+ */
+function applyChanged(stdout = "") {
+  return /\b(created|configured)\b/.test(String(stdout));
+}
+
+/**
  * Applies a service's manifests and waits for the rollout.
  *
  * `rollout status` is the part that makes this honest. `apply` returns as soon
  * as the API server has stored the object, which is long before anything is
  * running — reporting success there would be reporting that a YAML file was
  * accepted, not that an app started.
+ *
+ * `restart` forces a new pod even when the manifest is unchanged. An upgrade
+ * usually keeps the same tag, and a Deployment only rolls when its pod
+ * template changes — so without it, an upgrade would wait on a rollout that
+ * had already finished and report success with the old image still running.
  */
 async function applyService(settings, service, options = {}) {
   const manifestPath = await writeManifests(settings, service);
@@ -88,7 +144,20 @@ async function applyService(settings, service, options = {}) {
   });
 
   if (!applied.ok) {
-    return { ok: false, manifestPath, output: applied.stderr || applied.stdout };
+    return lifecycleResult(false, [applied], { manifestPath, changed: false, phase: "apply" });
+  }
+
+  const steps = [applied];
+
+  if (options.restart) {
+    const restarted = await run(settings, ["rollout", "restart", `deployment/${service.id}`], {
+      logger: options.logger
+    });
+    steps.push(restarted);
+
+    if (!restarted.ok) {
+      return lifecycleResult(false, steps, { manifestPath, changed: applyChanged(applied.stdout), phase: "restart" });
+    }
   }
 
   const rollout = await run(
@@ -96,12 +165,13 @@ async function applyService(settings, service, options = {}) {
     ["rollout", "status", `deployment/${service.id}`, "--timeout=300s"],
     { logger: options.logger, timeoutMs: 320_000 }
   );
+  steps.push(rollout);
 
-  return {
-    ok: rollout.ok,
+  return lifecycleResult(rollout.ok, steps, {
     manifestPath,
-    output: `${applied.stdout}\n${rollout.stdout}${rollout.ok ? "" : `\n${rollout.stderr}`}`.trim()
-  };
+    changed: Boolean(options.restart) || applyChanged(applied.stdout),
+    ...(rollout.ok ? {} : { phase: "rollout" })
+  });
 }
 
 /**
@@ -152,7 +222,10 @@ export async function inspectContainers(settings, containerNames, options = {}) 
           Running: running,
           Status: running ? "running" : String(pod?.status?.phase || "unknown").toLowerCase(),
           StartedAt: status.state?.running?.startedAt || pod?.status?.startTime || null,
-          Health: null
+          // The readiness probe is the cluster's health check, so a running
+          // container that is not yet ready is "starting", exactly as Docker
+          // reports one whose healthcheck has not passed.
+          Health: running ? { Status: status.ready === true ? "healthy" : "starting" } : null
         },
         RestartCount: Number(status.restartCount || 0),
         HostConfig: { NetworkMode: "keelarr", RestartPolicy: { Name: "unless-stopped" } },
@@ -185,14 +258,32 @@ export const kubeRuntime = {
 
   // --- lifecycle ---
 
-  generateAndDeploy: async (settings, service, options = {}) => {
-    const result = await applyService(settings, service, options);
-    return { ok: result.ok, output: result.output, manifestPath: result.manifestPath };
-  },
+  generateAndDeploy: async (settings, service, options = {}) =>
+    applyService(settings, service, { ...options, restart: false }),
 
-  installService: async (settings, service, options = {}) => {
-    const result = await applyService(settings, service, options);
-    return { ok: result.ok, output: result.output, manifestPath: result.manifestPath };
+  installService: async (settings, service, options = {}) =>
+    applyService(settings, service, { ...options, restart: false }),
+
+  /**
+   * Writes each enabled service's manifests without applying them — what Save
+   * And Generate means here. On Docker that writes Compose files and stops;
+   * writing Compose files for a Kubernetes runtime would leave the operator
+   * nothing to review of what is about to be applied.
+   */
+  writeStacks: async (settings, serviceIds = settings.selectedServiceIds) => {
+    const writes = [];
+
+    for (const serviceId of serviceIds || []) {
+      const service = settings.services?.[serviceId];
+
+      if (!service?.enabled) {
+        continue;
+      }
+
+      writes.push({ serviceId: service.id, manifestPath: await writeManifests(settings, service) });
+    }
+
+    return writes;
   },
 
   restartService: async (settings, service, options = {}) => {
@@ -201,7 +292,7 @@ export const kubeRuntime = {
     });
 
     if (!restarted.ok) {
-      return { ok: false, output: restarted.stderr || restarted.stdout };
+      return lifecycleResult(false, [restarted]);
     }
 
     const rollout = await run(settings, ["rollout", "status", `deployment/${service.id}`, "--timeout=300s"], {
@@ -209,7 +300,7 @@ export const kubeRuntime = {
       timeoutMs: 320_000
     });
 
-    return { ok: rollout.ok, output: rollout.stdout || rollout.stderr };
+    return lifecycleResult(rollout.ok, [restarted, rollout]);
   },
 
   /**
@@ -236,7 +327,7 @@ export const kubeRuntime = {
       { logger: options.logger }
     );
 
-    return { ok: result.ok, output: result.stdout || result.stderr };
+    return lifecycleResult(result.ok, [result]);
   },
 
   composeDownRemovingVolumes: async (settings, service, options = {}) => {
@@ -252,26 +343,22 @@ export const kubeRuntime = {
       { logger: options.logger }
     );
 
-    return { ok: result.ok, output: result.stdout || result.stderr };
+    return lifecycleResult(result.ok, [result]);
   },
 
   /**
    * Upgrade is a rollout with the image re-resolved.
    *
-   * `rollout restart` rather than `set image`: the manifest already names the
-   * tag the operator chose, and a restart with `imagePullPolicy: Always` picks
-   * up whatever that tag now points at. Writing a digest in would pin the
-   * Deployment to something the manifest on disk no longer says.
+   * Apply first, so a tag the operator changed is written; then always
+   * `rollout restart`, because the usual upgrade keeps the same tag and a
+   * Deployment whose template has not changed does not roll. The restart
+   * stamps the template, the Recreate strategy replaces the pod, and
+   * `imagePullPolicy: Always` makes the new pod pull whatever the tag now
+   * points at. `set image` with a digest would pin the Deployment to something
+   * the manifest on disk no longer says.
    */
-  upgradeService: async (settings, service, options = {}) => {
-    const applied = await applyService(settings, service, options);
-
-    if (!applied.ok) {
-      return { ok: false, output: applied.output };
-    }
-
-    return { ok: true, output: applied.output };
-  },
+  upgradeService: async (settings, service, options = {}) =>
+    applyService(settings, service, { ...options, restart: true }),
 
   upgradeAllServices: async (settings, services, options = {}) => {
     const results = [];
@@ -291,13 +378,14 @@ export const kubeRuntime = {
    * found, and the controller has no registry credentials of its own. Guessing
    * from a tag would be worse than useless on `:latest`.
    */
-  checkForUpdates: async () => ({
-    ok: false,
-    status: "unknown",
-    reason:
-      "Keelarr cannot see what a registry holds from inside the cluster, so it cannot tell whether a newer image exists. Roll the Deployment and the cluster will pull the current tag.",
-    output: ""
-  }),
+  checkForUpdates: async () => {
+    const reason =
+      "Keelarr cannot see what a registry holds from inside the cluster, so it cannot tell whether a newer image exists. Roll the Deployment and the cluster will pull the current tag.";
+
+    // `updateStatus` is the field the managed-stack service records; `error`
+    // and `stderr` are what it shows when `ok` is false.
+    return { ok: false, updateStatus: "unknown", reason, error: reason, stdout: "", stderr: reason, output: "" };
+  },
 
   // --- reading state ---
 
@@ -471,15 +559,15 @@ export const kubeRuntime = {
 
   startContainer: async (settings, containerName, options = {}) =>
     run(settings, ["scale", `deployment/${containerName}`, "--replicas=1"], { logger: options.logger })
-      .then((result) => ({ ok: result.ok, output: result.stdout || result.stderr })),
+      .then((result) => lifecycleResult(result.ok, [result])),
 
   stopContainer: async (settings, containerName, options = {}) =>
     run(settings, ["scale", `deployment/${containerName}`, "--replicas=0"], { logger: options.logger })
-      .then((result) => ({ ok: result.ok, output: result.stdout || result.stderr })),
+      .then((result) => lifecycleResult(result.ok, [result])),
 
   removeContainer: async (settings, containerName, options = {}) =>
     run(settings, ["delete", "deployment", containerName, "--ignore-not-found"], { logger: options.logger })
-      .then((result) => ({ ok: result.ok, output: result.stdout || result.stderr })),
+      .then((result) => lifecycleResult(result.ok, [result])),
 
   removeImage: async () => ({
     ok: false,

@@ -1,8 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 
-import { writeStacks } from "../generator.js";
-import { inspectContainers } from "../runtimes/index.js";
+import { inspectContainers, writeStacks } from "../runtimes/index.js";
 import { findUnmountedRoots, renderControllerEnv, resolveControllerEnvPath } from "../host-mounts.js";
 import {
   applyDetectionSuggestions,

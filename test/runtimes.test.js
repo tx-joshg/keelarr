@@ -45,7 +45,8 @@ const CONTRACT = [
   "composePs", "ensureSharedNetwork", "generateAndDeploy", "installService",
   "upgradeService", "pullImage", "readImageId", "readContainerImageIdByName",
   "tagImage", "readContainerLogs", "readContainerOutcome", "runDetachedContainer",
-  "checkForUpdates", "upgradeAllServices", "readNetworkDrivers", "attachController"
+  "checkForUpdates", "upgradeAllServices", "readNetworkDrivers", "attachController",
+  "writeStacks"
 ];
 
 test("both runtimes implement every operation the port dispatches", () => {
@@ -412,7 +413,7 @@ test("update checking says it does not know rather than guessing", async () => {
   const result = await kubeRuntime.checkForUpdates(SETTINGS, radarr());
 
   assert.equal(result.ok, false);
-  assert.equal(result.status, "unknown");
+  assert.equal(result.updateStatus, "unknown");
   assert.match(result.reason, /cannot see what a registry holds/);
 });
 
@@ -502,4 +503,96 @@ test("there is nothing for the controller to attach to in a namespace", async ()
   const result = await kubeRuntime.attachController(SETTINGS, [{ network: "keelarr" }]);
 
   assert.deepEqual(result, { attached: [], skipped: [] });
+});
+
+// --- review fixes: result shape, upgrades, generation, the CLI ---
+
+test("lifecycle results carry stdout and stderr, the shape every caller reads", async () => {
+  const { settings, service } = await kubeHarness({
+    failCommand: "apply",
+    failMessage: "error: the namespace \"media\" does not exist"
+  });
+  const result = await kubeRuntime.generateAndDeploy(settings, service);
+
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /namespace "media" does not exist/);
+  assert.equal(typeof result.stdout, "string");
+});
+
+test("a first deploy reports a change, and an unchanged apply reports none", async () => {
+  const created = await kubeHarness({ applyOutput: "deployment.apps/radarr created" });
+  const first = await kubeRuntime.generateAndDeploy(created.settings, created.service);
+  assert.equal(first.changed, true);
+  assert.match(first.stdout, /created/);
+
+  const same = await kubeHarness({ applyOutput: "deployment.apps/radarr unchanged" });
+  const again = await kubeRuntime.generateAndDeploy(same.settings, same.service);
+  assert.equal(again.ok, true);
+  assert.equal(again.changed, false);
+});
+
+test("an upgrade on an unchanged tag still replaces the pod", async () => {
+  const { settings, service, log } = await kubeHarness({ applyOutput: "deployment.apps/radarr unchanged" });
+  const result = await kubeRuntime.upgradeService(settings, service);
+  const calls = await log();
+
+  assert.equal(result.ok, true);
+  assert.match(calls[0], /apply -f/);
+  assert.match(calls[1], /^-n media rollout restart deployment\/radarr$/);
+  assert.match(calls[2], /rollout status deployment\/radarr/);
+});
+
+test("a failed restart fails the upgrade before waiting on a rollout", async () => {
+  const { settings, service, log } = await kubeHarness({ failCommand: "rollout restart" });
+  const result = await kubeRuntime.upgradeService(settings, service);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.phase, "restart");
+  assert.equal((await log()).some((call) => call.includes("rollout status")), false);
+});
+
+test("pods always re-pull, so a restart on the same tag picks up a new image", () => {
+  const docs = YAML.parseAllDocuments(renderKubeManifests(SETTINGS, radarr())).map((doc) => doc.toJSON());
+  const deployment = docs.find((doc) => doc.kind === "Deployment");
+
+  assert.equal(deployment.spec.template.spec.containers[0].imagePullPolicy, "Always");
+});
+
+test("an update check records unknown under the field the caller reads", async () => {
+  const result = await kubeRuntime.checkForUpdates(SETTINGS, radarr());
+
+  assert.equal(result.updateStatus, "unknown");
+  assert.match(result.error, /cannot see what a registry holds/);
+});
+
+test("generating on Kubernetes writes manifests, not Compose files", async () => {
+  const { settings, service } = await kubeHarness();
+  const writes = await kubeRuntime.writeStacks({ ...settings, selectedServiceIds: ["radarr"] }, ["radarr"]);
+
+  assert.deepEqual(writes.map((entry) => entry.serviceId), ["radarr"]);
+  assert.match(await readFile(manifestPathFor(service), "utf8"), /kind: Deployment/);
+  await assert.rejects(readFile(service.composePath, "utf8"));
+});
+
+test("a missing CLI says so, instead of an empty failure", async () => {
+  const settings = normalizeSettings({ ...SETTINGS, kubeBin: "/definitely-not-keelarr/oc" });
+  const result = await kubeRuntime.restartService(settings, radarr());
+
+  assert.equal(result.ok, false);
+  assert.match(result.stderr, /is not installed in the controller/);
+  assert.match(result.stderr, /--target kube/);
+});
+
+test("a ready pod reads as healthy and a running one that is not ready as starting", async () => {
+  const pod = (ready) => ({
+    metadata: { labels: { "app.kubernetes.io/name": "radarr", "app.kubernetes.io/managed-by": "keelarr" } },
+    spec: { containers: [{ image: "x", ports: [], env: [], volumeMounts: [] }] },
+    status: { phase: "Running", containerStatuses: [{ ready, state: { running: {} } }] }
+  });
+
+  const ready = await kubeHarness({ pods: { items: [pod(true)] } });
+  assert.equal((await kubeRuntime.inspectContainers(ready.settings, ["radarr"]))[0].State.Health.Status, "healthy");
+
+  const starting = await kubeHarness({ pods: { items: [pod(false)] } });
+  assert.equal((await kubeRuntime.inspectContainers(starting.settings, ["radarr"]))[0].State.Health.Status, "starting");
 });

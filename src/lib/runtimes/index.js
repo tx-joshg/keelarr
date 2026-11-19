@@ -1,5 +1,5 @@
 import { dockerRuntime } from "./docker-runtime.js";
-import { kubeRuntime } from "./kube-runtime.js";
+import { kubeRuntime, manifestPathFor } from "./kube-runtime.js";
 
 /**
  * The runtime port.
@@ -39,6 +39,9 @@ export function runtimeFor(settings = {}) {
 export function runtimeKindFor(settings = {}) {
   return runtimeFor(settings).kind;
 }
+
+/** Where the Kubernetes runtime writes a service's manifests. */
+export { manifestPathFor };
 
 /**
  * Pure helpers and constants, which describe Compose and image semantics rather
@@ -92,4 +95,7 @@ export const runDetachedContainer = (settings, ...rest) => runtimeFor(settings).
 export const checkForUpdates = (settings, ...rest) => runtimeFor(settings).checkForUpdates(settings, ...rest);
 export const upgradeAllServices = (settings, ...rest) => runtimeFor(settings).upgradeAllServices(settings, ...rest);
 export const readNetworkDrivers = (settings, ...rest) => runtimeFor(settings).readNetworkDrivers(settings, ...rest);
+// Compose files on Docker, manifests on Kubernetes: what "generate" produces
+// is the runtime's to decide, which is why Save And Generate asks here.
+export const writeStacks = (settings, ...rest) => runtimeFor(settings).writeStacks(settings, ...rest);
 export const attachController = (settings, ...rest) => runtimeFor(settings).attachController(settings, ...rest);

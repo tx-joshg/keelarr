@@ -150,6 +150,11 @@ export function buildDeployment(settings, service) {
             {
               name: service.id,
               image: service.image,
+              // Always, not the tag-dependent default. An upgrade restarts the
+              // pod on the same tag and relies on the new pod pulling it again;
+              // IfNotPresent (the default for anything but :latest) would
+              // restart onto the image the node already had.
+              imagePullPolicy: "Always",
               ports: [{ containerPort: service.port, name: "http" }],
               env: buildEnv(settings, service),
               volumeMounts,
