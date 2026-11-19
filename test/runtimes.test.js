@@ -596,3 +596,65 @@ test("a ready pod reads as healthy and a running one that is not ready as starti
   const starting = await kubeHarness({ pods: { items: [pod(false)] } });
   assert.equal((await kubeRuntime.inspectContainers(starting.settings, ["radarr"]))[0].State.Health.Status, "starting");
 });
+
+// --- second review round ---
+
+test("on Kubernetes a missing Docker is not a validation error, but a missing cluster CLI is", async () => {
+  const { adaptValidationForRuntime } = await import("../src/lib/runtimes/index.js");
+  const dockerFailed = {
+    ok: false,
+    errors: ["Docker binary could not be executed: docker.", "Docker Compose could not be executed from docker.", "Stack root is required."],
+    warnings: [],
+    fieldResults: { dockerBin: { ok: false } }
+  };
+
+  const withCli = await adaptValidationForRuntime(SETTINGS, dockerFailed, {
+    checkKubeCliImpl: async () => ({ ok: true, bin: "oc", message: "oc runs." })
+  });
+  assert.deepEqual(withCli.errors, ["Stack root is required."]);
+  assert.equal(withCli.fieldResults.dockerBin, undefined);
+  assert.equal(withCli.fieldResults.kubeBin.ok, true);
+
+  const withoutCli = await adaptValidationForRuntime(SETTINGS, { ...dockerFailed, errors: dockerFailed.errors.slice(0, 2) }, {
+    checkKubeCliImpl: async () => ({ ok: false, bin: "oc", message: "oc is missing" })
+  });
+  assert.equal(withoutCli.ok, false);
+  assert.deepEqual(withoutCli.errors, ["oc is missing"]);
+});
+
+test("Docker validation is untouched when the runtime is Docker", async () => {
+  const { adaptValidationForRuntime } = await import("../src/lib/runtimes/index.js");
+  const validation = { ok: false, errors: ["Docker binary could not be executed: docker."] };
+
+  assert.equal(await adaptValidationForRuntime({ runtime: "docker" }, validation), validation);
+});
+
+test("Ombi's version reaches the pod resolved, not as a literal reference", async () => {
+  const { buildEnv } = await import("../src/lib/runtimes/kube-manifests.js");
+  const settings = normalizeSettings({ ...SETTINGS, ombiVersion: "4.47.1", selectedServiceIds: ["ombi"] });
+  const env = buildEnv(settings, buildServiceFromCatalog(settings, "ombi"));
+  const version = env.find((entry) => entry.name === "VERSION");
+
+  assert.equal(version?.value, "4.47.1");
+});
+
+test("a browser opens a cluster app at its Route or Ingress host", async () => {
+  const { browserUrlFor } = await import("../src/lib/runtimes/kube-manifests.js");
+
+  assert.equal(browserUrlFor({ ...SETTINGS, kubeDomain: "apps.example.net" }, radarr()), "https://radarr.apps.example.net");
+  assert.equal(browserUrlFor({ ...SETTINGS, kubeFlavor: "kubernetes", kubeDomain: "lan" }, radarr()), "http://radarr.lan");
+  assert.equal(browserUrlFor({ ...SETTINGS, kubeFlavor: "kubernetes", kubeDomain: "lan", kubeTlsSecret: "wild" }, radarr()), "https://radarr.lan");
+  assert.equal(browserUrlFor({ ...SETTINGS, kubeDomain: "" }, radarr()), null);
+});
+
+test("an app deployed on Kubernetes counts as deployed for upgrades and update checks", async () => {
+  const { ManagedStackService } = await import("../src/lib/app-services/managed-stack-service.js");
+  const { settings, service } = await kubeHarness();
+  await kubeRuntime.writeStacks({ ...settings, selectedServiceIds: ["radarr"] }, ["radarr"]);
+  const stack = new ManagedStackService({});
+
+  assert.equal(await stack.serviceIsDeployed(service, settings), true);
+  // Without settings it asks the Compose question, which keeps the
+  // compose-editing pin and rollback paths away from a cluster app.
+  assert.equal(await stack.serviceIsDeployed(service), false);
+});

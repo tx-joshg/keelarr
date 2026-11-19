@@ -13,6 +13,9 @@ import {
   readContainerImageIdByName,
   restartService,
   restoreConfigSnapshot,
+  RUNTIME_KIND,
+  manifestPathFor,
+  runtimeKindFor,
   writeStacks
 } from "../runtimes/index.js";
 import { SHARED_NETWORK, getServiceDefinition, isImportedMode } from "../service-catalog.js";
@@ -508,7 +511,7 @@ export class ManagedStackService {
       // First, because a stale "ready" from before the stack was removed
       // would otherwise put it in the plan. The check above skipped it
       // without writing a status, so the run asks the same question.
-      if (!(await this.serviceIsDeployed(service))) {
+      if (!(await this.serviceIsDeployed(service, settings))) {
         ctx.skip(service.id, "Not deployed by Keelarr, not touched.");
         skipped += 1;
         continue;
@@ -949,10 +952,23 @@ export class ManagedStackService {
     }
   }
 
-  /** A stack is deployable only once its compose file exists on disk. */
-  async serviceIsDeployed(service) {
+  /**
+   * A stack is deployable only once its generated file exists on disk: the
+   * compose file on Docker, the manifest on Kubernetes.
+   *
+   * `settings` is optional on purpose. Without it this asks the Compose
+   * question, which is what the pin-clearing and rollback paths want — both
+   * edit compose.yml, and on Kubernetes there is none to edit, so "not
+   * deployed" keeps them away. Upgrade and the update checks pass settings,
+   * because those must reach a deployed app on either runtime.
+   */
+  async serviceIsDeployed(service, settings = null) {
+    const generated = settings && runtimeKindFor(settings) === RUNTIME_KIND.KUBE
+      ? manifestPathFor(service)
+      : service.composePath;
+
     try {
-      await access(service.composePath);
+      await access(generated);
       return true;
     } catch {
       return false;
@@ -1230,7 +1246,7 @@ export class ManagedStackService {
     // the difference between waiting and wondering.
     const phase = (label) => onPhase?.(label);
 
-    if (!(await this.serviceIsDeployed(service))) {
+    if (!(await this.serviceIsDeployed(service, settings))) {
       return { serviceId: service.id, ok: true, skipped: true, reason: "not-deployed" };
     }
 
@@ -1761,7 +1777,7 @@ export class ManagedStackService {
 
       // A service that was never deployed has no compose file to pull against.
       // Reporting that as a failure makes a healthy stack look broken.
-      if (!(await this.serviceIsDeployed(service))) {
+      if (!(await this.serviceIsDeployed(service, settings))) {
         results.push({
           serviceId: service.id,
           ok: true,

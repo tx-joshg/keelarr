@@ -1,5 +1,5 @@
 import { dockerRuntime } from "./docker-runtime.js";
-import { kubeRuntime, manifestPathFor } from "./kube-runtime.js";
+import { checkKubeCli, kubeRuntime, manifestPathFor } from "./kube-runtime.js";
 
 /**
  * The runtime port.
@@ -40,8 +40,38 @@ export function runtimeKindFor(settings = {}) {
   return runtimeFor(settings).kind;
 }
 
+/**
+ * Re-judges a host validation for the runtime in use.
+ *
+ * Host validation was written for Docker, and it treats a Docker or Compose
+ * binary that will not run as an error. On Kubernetes neither is used, so
+ * those two errors are replaced by the one that matters there: whether the
+ * cluster CLI runs. Everything else — the stack root the manifests are written
+ * under, identity — is kept as it was.
+ */
+export async function adaptValidationForRuntime(settings, validation, options = {}) {
+  if (runtimeKindFor(settings) !== RUNTIME_KIND.KUBE || !validation) {
+    return validation;
+  }
+
+  const cli = await (options.checkKubeCliImpl || checkKubeCli)(settings, options);
+  const errors = (validation.errors || []).filter((message) => !/^Docker (binary|Compose) could not be executed/.test(message));
+
+  if (!cli.ok) {
+    errors.push(cli.message);
+  }
+
+  const fieldResults = { ...(validation.fieldResults || {}) };
+  delete fieldResults.dockerBin;
+  fieldResults.kubeBin = { ok: cli.ok, level: cli.ok ? "info" : "error", value: cli.bin, message: cli.message };
+
+  return { ...validation, ok: errors.length === 0, errors, fieldResults };
+}
+
 /** Where the Kubernetes runtime writes a service's manifests. */
 export { manifestPathFor };
+/** Where a browser opens an app on the Kubernetes runtime, if anywhere. */
+export { browserUrlFor } from "./kube-manifests.js";
 
 /**
  * Pure helpers and constants, which describe Compose and image semantics rather

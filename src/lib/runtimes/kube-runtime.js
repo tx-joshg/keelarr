@@ -55,6 +55,27 @@ export function missingCliMessage(bin) {
   return `The Kubernetes CLI \`${bin}\` is not installed in the controller. The default Keelarr image ships only the Docker CLI; build the \`kube\` target (\`docker build --target kube .\`) or mount a \`${bin}\` binary and set its path in Settings. See docs/testing.md#the-kubernetes-runtime.`;
 }
 
+/**
+ * Whether the configured CLI runs here. Host validation's Kubernetes check:
+ * client-only, so it answers without a reachable cluster or credentials.
+ */
+export async function checkKubeCli(settings, options = {}) {
+  const bin = settings.kubeBin || "oc";
+  const result = await runCommand(bin, ["version", "--client"], { logger: options.logger, timeoutMs: 15_000 });
+
+  if (result.ok) {
+    return { ok: true, bin, message: `${bin} runs.` };
+  }
+
+  return {
+    ok: false,
+    bin,
+    message: /ENOENT/.test(String(result.error || result.stderr || ""))
+      ? missingCliMessage(bin)
+      : `${bin} could not be run: ${(result.stderr || result.stdout || result.error || "").trim().split("\n").pop()}`
+  };
+}
+
 async function run(settings, args, options = {}) {
   const bin = settings.kubeBin || "oc";
   const result = await runCommand(bin, ocArgs(settings, ...args), {

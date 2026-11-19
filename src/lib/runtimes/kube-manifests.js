@@ -92,7 +92,10 @@ export function buildEnv(settings, service) {
     TZ: settings.tz,
     PORT: String(service.port),
     CONFIG_DIR: configMountTarget(service.id),
-    MEDIA_DIR: "/Media"
+    MEDIA_DIR: "/Media",
+    // Compose reads this from .env; there is no .env here, so it has to be
+    // resolved like the rest or Ombi receives the literal "${OMBI_VERSION}".
+    OMBI_VERSION: String(settings.ombiVersion || "latest")
   };
 
   return Object.entries(definition?.buildEnvironment?.(service) || {}).map(([name, raw]) => ({
@@ -214,6 +217,26 @@ export function hostnameFor(settings, service) {
  * assigned by the cluster, which works but produces addresses nobody can
  * predict — and these are addresses people bookmark.
  */
+/**
+ * The address a browser opens an app at, or null when nothing is exposed.
+ *
+ * Services here are ClusterIP-only, so `<hostUrl>:<port>` — the Docker
+ * answer — points at something this runtime never published. The Route or
+ * Ingress hostname is the only way in: HTTPS on OKD, where the router
+ * terminates TLS; on plain Kubernetes, HTTPS only when a certificate Secret is
+ * named, which is also exactly when the Ingress carries a tls block.
+ */
+export function browserUrlFor(settings, service) {
+  const host = hostnameFor(settings, service);
+
+  if (!host) {
+    return null;
+  }
+
+  const secure = settings.kubeFlavor !== "kubernetes" || Boolean(settings.kubeTlsSecret);
+  return `${secure ? "https" : "http"}://${host}`;
+}
+
 export function buildRoute(settings, service) {
   const host = hostnameFor(settings, service);
 

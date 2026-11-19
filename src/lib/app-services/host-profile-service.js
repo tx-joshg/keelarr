@@ -1,7 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 
-import { inspectContainers, writeStacks } from "../runtimes/index.js";
+import { adaptValidationForRuntime, inspectContainers, writeStacks } from "../runtimes/index.js";
 import { findUnmountedRoots, renderControllerEnv, resolveControllerEnvPath } from "../host-mounts.js";
 import {
   applyDetectionSuggestions,
@@ -38,6 +38,7 @@ export class HostProfileService {
     normalizeSettingsImpl = normalizeSettings,
     saveSettingsImpl = saveSettings,
     validateHostProfileImpl = validateHostProfile,
+    checkKubeCliImpl = null,
     writeFileImpl = writeFile,
     writeStacksImpl = writeStacks,
     hostDetectionTtlMs = 60_000
@@ -53,6 +54,7 @@ export class HostProfileService {
     this.normalizeSettings = normalizeSettingsImpl;
     this.saveSettings = saveSettingsImpl;
     this.validateHostProfile = validateHostProfileImpl;
+    this.checkKubeCliImpl = checkKubeCliImpl;
     this.writeFile = writeFileImpl;
     this.writeStacks = writeStacksImpl;
     this.hostDetectionTtlMs = hostDetectionTtlMs;
@@ -187,11 +189,11 @@ export class HostProfileService {
       ...candidateSettings,
       initialized: draftSettings.initialized === true
     });
-    const validation = await this.validateHostProfile(effectiveSettings, {
+    const validation = await adaptValidationForRuntime(effectiveSettings, await this.validateHostProfile(effectiveSettings, {
       logger: logger.child({
         probe: "validate-host"
       })
-    });
+    }), this.checkKubeCliImpl ? { checkKubeCliImpl: this.checkKubeCliImpl } : {});
 
     return {
       ...detection,

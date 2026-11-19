@@ -63,15 +63,45 @@ test("an unselected app already running on the host is an adoption, not an insta
   assert.equal(row.existing.adoptable, true);
 });
 
-test("an app both selected and running is already managed", () => {
+test("an app running in Keelarr's own Compose project is already managed", () => {
   const view = buildWizardView({
     settings: SETTINGS,
+    inventory: {
+      items: [{
+        containerId: "r1", name: "radarr", recognized: true, serviceId: "radarr", adoptable: true, issues: [],
+        compose: { project: "radarr", configFiles: null }
+      }]
+    }
+  });
+
+  assert.equal(view.catalog.find((entry) => entry.id === "radarr").action, "managed");
+});
+
+test("an app already adopted as a draft is managed, not offered for adoption again", () => {
+  const view = buildWizardView({
+    settings: { ...SETTINGS, serviceOverrides: { radarr: { mode: "imported-draft" } } },
     inventory: {
       items: [{ containerId: "r1", name: "radarr", recognized: true, serviceId: "radarr", adoptable: true, issues: [] }]
     }
   });
 
   assert.equal(view.catalog.find((entry) => entry.id === "radarr").action, "managed");
+});
+
+test("a default-selected app on a fresh install is adopted, not reinstalled over the running one", () => {
+  const view = buildWizardView({
+    settings: { initialized: false, selectedServiceIds: ["sonarr", "radarr"], serviceOverrides: {} },
+    inventory: {
+      items: [{
+        containerId: "s1", name: "sonarr", recognized: true, serviceId: "sonarr", adoptable: true, issues: [],
+        compose: { project: "mediastack", configFiles: "/srv/mediastack/compose.yml" }
+      }]
+    }
+  });
+  const row = view.catalog.find((entry) => entry.id === "sonarr");
+
+  assert.equal(row.selected, true);
+  assert.equal(row.action, "adopt");
 });
 
 test("a container adoption would refuse is reported as such rather than promised", () => {

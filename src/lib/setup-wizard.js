@@ -1,4 +1,4 @@
-import { SERVICE_ORDER, getServiceDefinition } from "./service-catalog.js";
+import { SERVICE_ORDER, getServiceDefinition, isImportedMode } from "./service-catalog.js";
 import { detectMediaServers, evaluateCompatibility } from "./compatibility.js";
 
 /**
@@ -23,6 +23,15 @@ export function buildWizardView({ settings, inventory }) {
     }
   }
 
+  // Whether Keelarr already runs this app's container — which is not the same
+  // as the app being ticked. A fresh install starts with the default apps
+  // selected, so reading selection as ownership called every existing Sonarr
+  // "managed" and generated a catalog stack over it instead of adopting it.
+  // Ownership is the container itself: a Compose project Keelarr named, or an
+  // adoption already recorded in the overrides.
+  const owns = (id, item) =>
+    isImportedMode(settings?.serviceOverrides?.[id]?.mode) || item?.compose?.project === id;
+
   // An app the picker would adopt keeps the port its container already
   // publishes — adoption saves exactly that. Judging it on the catalog default
   // instead would let a real collision through: a Sonarr published on 7878
@@ -34,7 +43,7 @@ export function buildWizardView({ settings, inventory }) {
   const effectiveOverrides = { ...(settings?.serviceOverrides || {}) };
 
   for (const [id, item] of running) {
-    const port = selected.includes(id) ? null : publishedPort(item);
+    const port = owns(id, item) ? null : publishedPort(item);
 
     if (port) {
       effectiveOverrides[id] = { ...(effectiveOverrides[id] || {}), port };
@@ -45,6 +54,7 @@ export function buildWizardView({ settings, inventory }) {
     const definition = getServiceDefinition(id);
     const existing = running.get(id) || null;
     const managed = selected.includes(id);
+    const owned = Boolean(existing) && owns(id, existing);
 
     return {
       id,
@@ -57,7 +67,7 @@ export function buildWizardView({ settings, inventory }) {
       // What ticking this box will actually do, which is the whole point of the
       // picker: "install this" and "take over the one you already run" are very
       // different promises, and the operator should know which they are making.
-      action: existing ? (managed ? "managed" : "adopt") : "install",
+      action: existing ? (owned ? "managed" : "adopt") : "install",
       existing: existing
         ? {
             // The scan calls this `containerId`; keep that name so the picker can

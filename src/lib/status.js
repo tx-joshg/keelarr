@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 
 import { scanDockerInventory } from "./import-scanner.js";
 import { readActivity, readUpdateState } from "./store.js";
-import { RUNTIME_KIND, composePs, inspectContainers, manifestPathFor, runtimeKindFor } from "./runtimes/index.js";
+import { RUNTIME_KIND, browserUrlFor, composePs, inspectContainers, manifestPathFor, runtimeKindFor } from "./runtimes/index.js";
 import { probeAppUrl } from "./health.js";
 import {
   LAN_CLIENT,
@@ -395,7 +395,12 @@ export async function buildDashboardState(settings, dependencies = {}) {
     const fromController = resolveLink(controller, endpoint, { hostAddress });
     const fromBrowser = resolveLink(LAN_CLIENT, endpoint, { hostAddress });
     const probeUrl = fromController.ok ? fromController.baseUrl : null;
-    const appUrl = fromBrowser.ok ? fromBrowser.baseUrl : service.appUrl;
+    // On Kubernetes the browser's way in is the Route or Ingress, never a
+    // published port; with no domain configured nothing is exposed, and the
+    // catalog's host:port is still the most honest placeholder there is.
+    const appUrl = onKube
+      ? browserUrlFor(settings, service) || service.appUrl
+      : fromBrowser.ok ? fromBrowser.baseUrl : service.appUrl;
 
     const [composeExists, envExists, probe] = await Promise.all([
       // On Kubernetes the generated artifact is the manifest; there is no
